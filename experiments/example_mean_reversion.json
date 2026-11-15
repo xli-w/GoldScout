@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "mean-reversion-regimes",
+  "description": "Mean reversion entry_std grid across mixed regimes; last window is a report-only holdout. Edit dates to match your needs.",
+  "capital": 100000,
+  "stress": [{"name": "double-costs", "slippage_multiplier": 2, "fee_multiplier": 2}],
+  "windows": [
+    {"name": "2023-h1", "start": "2023-01-03", "end": "2023-06-30"},
+    {"name": "2023-h2", "start": "2023-07-03", "end": "2023-12-29"},
+    {"name": "2024-h1", "start": "2024-01-02", "end": "2024-06-28"},
+    {"name": "2024-h2-holdout", "start": "2024-07-01", "end": "2024-12-31", "role": "holdout"}
+  ],
+  "strategies": [
+    {
+      "id": "mr-spy",
+      "type": "mean_reversion",
+      "symbols": ["SPY"],
+      "params": {"entry_std": {"SPY": 1.5}},
+      "grid": {"entry_std.SPY": [1.2, 1.5, 1.8, 2.1], "period": [15, 20, 30]}
+    }
+  ],
+  "selection": {"rank_by": "pooled_sharpe", "min_trades": 30, "min_positive_window_fraction": 0.5}
+}

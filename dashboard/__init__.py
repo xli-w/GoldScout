@@ -1,0 +1,1 @@
+"""Read-only dashboard contracts; no broker or operational storage imports."""

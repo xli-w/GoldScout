@@ -1,0 +1,160 @@
+{
+  "generated_at": "2026-11-13T15:00:00Z",
+  "meta": {
+    "generated_at": "2026-11-13T15:00:00Z", "source_mode": "demo", "database_id": "synthetic-ledger-1", "environment": "paper",
+    "ledger_revision": 42, "telemetry_run_id": "synthetic-run-1",
+    "ledger": {"observed_at": "2026-11-13T14:59:30Z", "freshness": "fresh", "max_age_seconds": 600},
+    "telemetry": {"observed_at": "2026-11-13T14:59:55Z", "freshness": "fresh", "max_age_seconds": 90},
+    "broker": {"observed_at": null, "freshness": "missing", "max_age_seconds": 90}
+  },
+  "scenarios": [
+    {
+      "name": "healthy_recorded", "meta_overrides": {},
+      "responses": {
+        "overview": {
+          "currency": "USD", "accounting_day": "2026-11-13", "recorded_equity": "100000.00",
+          "realized_pnl": "0.00", "unrealized_pnl": null,
+          "entries": "last_observed_allowed", "block_reasons": []
+        },
+        "positions": [{
+          "position_id": "synthetic-entry-spy", "symbol": "SPY", "strategy": "mean_reversion", "side": "long",
+          "quantity": "10", "entry_price": "100.00", "hard_stop": "98.00", "trailing_stop": null,
+          "broker_stop": "98.00", "protection": "last_verified", "protection_observed_at": "2026-11-13T14:59:30Z",
+          "pending_exit_order_id": null, "exit_pending": false
+        }],
+        "orders": {"items": [{"client_id":"synthetic-entry-client","broker_order_id":"synthetic-entry-order","position_id":"synthetic-entry-spy","symbol":"SPY","side":"buy","status":"filled","requested_quantity":"10","cumulative_filled_quantity":"10","observed_at":"2026-11-13T14:59:00Z"}], "next_cursor": null},
+        "events": {
+          "items": [{"sequence": 42, "kind": "state_committed", "observed_at": "2026-11-13T14:59:30Z", "symbol": null, "summary": "Synthetic committed position snapshot"}],
+          "next_after": 42, "has_more": false
+        },
+        "performance": {"currency": "USD", "daily": [], "exits": [], "corrections": [], "next_cursor": null},
+        "health": {
+          "runtime": "running", "last_monitor_completed_at": "2026-11-13T14:59:30Z", "persistence_fault": false,
+          "accounting_unresolved": false, "daily_halted": false, "unmanaged_symbols": [],
+          "activity_sync": {"checkpoint_at": "2026-11-13T14:55:00Z", "status": "last_observed_complete", "coverage": "bounded_overlap_not_full_history"},
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "partial_exit", "meta_overrides": {}, "original_quantity": "10",
+      "responses": {
+        "overview": {"currency": "USD", "accounting_day": "2026-11-13", "recorded_equity": "100000.00", "realized_pnl": "8.00", "unrealized_pnl": null, "entries": "blocked", "block_reasons": ["exit_pending", "protection_unverified"]},
+        "positions": [{
+          "position_id": "synthetic-entry-spy", "symbol": "SPY", "strategy": "mean_reversion", "side": "long",
+          "quantity": "6", "entry_price": "100.00", "hard_stop": "98.00", "trailing_stop": null,
+          "broker_stop": null, "protection": "unverified", "protection_observed_at": "2026-11-13T14:59:30Z",
+          "pending_exit_order_id": "synthetic-exit-order", "exit_pending": true
+        }],
+        "orders": {"items": [{
+          "client_id": "synthetic-exit-client", "broker_order_id": "synthetic-exit-order", "position_id": "synthetic-entry-spy",
+          "symbol": "SPY", "side": "sell", "status": "partially_filled", "requested_quantity": "10",
+          "cumulative_filled_quantity": "4", "observed_at": "2026-11-13T14:59:30Z"
+        }], "next_cursor": null},
+        "performance": {"currency": "USD", "daily": [], "exits": [{
+          "execution_id": "synthetic-entry-spy:1", "position_id": "synthetic-entry-spy", "symbol": "SPY", "quantity": "4",
+          "fill_at": "2026-11-13T14:59:00Z", "accounting_day": "2026-11-13", "exit_price": "102.00",
+          "price_verified": true, "gross_pnl": "8.00", "fees": "0.00", "fees_estimated": false, "net_pnl": "8.00"
+        }], "corrections": [], "next_cursor": null}
+      }
+    },
+    {
+      "name": "unknown_exit_price", "meta_overrides": {},
+      "responses": {
+        "overview": {"currency": "USD", "accounting_day": "2026-11-13", "recorded_equity": "100000.00", "realized_pnl": null, "unrealized_pnl": null, "entries": "blocked", "block_reasons": ["accounting_unresolved"]},
+        "performance": {"currency": "USD", "daily": [], "exits": [{
+          "execution_id": "synthetic-unknown:1", "position_id": "synthetic-unknown", "symbol": "SPY", "quantity": "4",
+          "fill_at": null, "accounting_day": "2026-11-12", "exit_price": null, "price_verified": false,
+          "gross_pnl": null, "fees": null, "fees_estimated": null, "net_pnl": null
+        }], "corrections": [], "next_cursor": null}
+      }
+    },
+    {
+      "name": "evidence_linked_correction", "meta_overrides": {},
+      "responses": {
+        "performance": {
+          "currency": "USD", "daily": [{"day": "2026-11-12", "recorded_equity": null, "realized_pnl": "7.50", "includes_corrections": true}],
+          "exits": [{
+            "execution_id": "synthetic-unknown:1", "position_id": "synthetic-unknown", "symbol": "SPY", "quantity": "4",
+            "fill_at": null, "accounting_day": "2026-11-12", "exit_price": null, "price_verified": false,
+            "gross_pnl": null, "fees": null, "fees_estimated": null, "net_pnl": null
+          }],
+          "corrections": [{"correction_id": "synthetic-correction-1", "execution_id": "synthetic-unknown:1", "activity_id": "synthetic-evidence-1", "exit_price": "102.00", "fees": "0.50", "reason": "Synthetic operator-verified price and total allocated fees"}],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "name": "estimated_crypto_fees", "meta_overrides": {},
+      "responses": {
+        "performance": {"currency": "USD", "daily": [], "exits": [{
+          "execution_id": "synthetic-btc:1", "position_id": "synthetic-btc", "symbol": "BTC/USD", "quantity": "0.001",
+          "fill_at": "2026-11-13T14:59:00Z", "accounting_day": "2026-11-13", "exit_price": "101000.00",
+          "price_verified": true, "gross_pnl": "1.00", "fees": "0.5025", "fees_estimated": true, "net_pnl": "0.4975"
+        }], "corrections": [], "next_cursor": null}
+      }
+    },
+    {
+      "name": "persistence_fault", "meta_overrides": {},
+      "responses": {
+        "overview": {"currency": "USD", "accounting_day": "2026-11-13", "recorded_equity": "100000.00", "realized_pnl": "0.00", "unrealized_pnl": null, "entries": "blocked", "block_reasons": ["persistence_fault", "accounting_unresolved", "daily_halted", "unmanaged_positions"]},
+        "health": {
+          "runtime": "faulted", "last_monitor_completed_at": "2026-11-13T14:59:30Z", "persistence_fault": true,
+          "accounting_unresolved": true, "daily_halted": true, "unmanaged_symbols": ["AAPL"],
+          "activity_sync": {"checkpoint_at": "2026-11-12T15:00:00Z", "status": "incomplete", "coverage": "bounded_overlap_not_full_history"},
+          "warnings": ["software_monitoring_stopped", "resting_stops_not_reverified", "activity_sync_incomplete"]
+        }
+      }
+    },
+    {
+      "name": "stale_telemetry",
+      "meta_overrides": {"telemetry": {"observed_at": "2026-11-13T14:00:00Z", "freshness": "stale", "max_age_seconds": 90}},
+      "responses": {
+        "overview": {"currency": "USD", "accounting_day": "2026-11-13", "recorded_equity": "100000.00", "realized_pnl": "0.00", "unrealized_pnl": null, "entries": "unknown", "block_reasons": []},
+        "positions": [{
+          "position_id": "synthetic-entry-spy", "symbol": "SPY", "strategy": "mean_reversion", "side": "long",
+          "quantity": "10", "entry_price": "100.00", "hard_stop": "98.00", "trailing_stop": null,
+          "broker_stop": "98.00", "protection": "last_verified", "protection_observed_at": "2026-11-13T14:00:00Z",
+          "pending_exit_order_id": null, "exit_pending": false
+        }],
+        "health": {
+          "runtime": "unknown", "last_monitor_completed_at": "2026-11-13T14:00:00Z", "persistence_fault": null,
+          "accounting_unresolved": false, "daily_halted": false, "unmanaged_symbols": [],
+          "activity_sync": {"checkpoint_at": null, "status": "unknown", "coverage": "bounded_overlap_not_full_history"},
+          "warnings": ["telemetry_stale", "protection_observation_stale"]
+        }
+      }
+    },
+    {
+      "name": "stopped_empty_account", "meta_overrides": {},
+      "responses": {
+        "overview": {"currency": "USD", "accounting_day": "2026-11-13", "recorded_equity": "100000.00", "realized_pnl": "0.00", "unrealized_pnl": null, "entries": "unknown", "block_reasons": []},
+        "positions": [],
+        "health": {
+          "runtime": "stopped", "last_monitor_completed_at": "2026-11-13T14:59:30Z", "persistence_fault": false,
+          "accounting_unresolved": false, "daily_halted": false, "unmanaged_symbols": [],
+          "activity_sync": {"checkpoint_at": null, "status": "unknown", "coverage": "bounded_overlap_not_full_history"},
+          "warnings": ["software_monitoring_stopped"]
+        }
+      }
+    },
+    {
+      "name": "ledger_missing",
+      "meta_overrides": {
+        "environment": "unknown", "database_id": null, "ledger_revision": null, "telemetry_run_id": null,
+        "ledger": {"observed_at": null, "freshness": "missing", "max_age_seconds": 600},
+        "telemetry": {"observed_at": null, "freshness": "missing", "max_age_seconds": 90}
+      },
+      "responses": {"error": {"code": "ledger_missing", "message": "Recorded account data is unavailable.", "retryable": true}}
+    },
+    {
+      "name": "ledger_invalid",
+      "meta_overrides": {
+        "environment": "unknown", "database_id": null, "ledger_revision": null, "telemetry_run_id": null,
+        "ledger": {"observed_at": null, "freshness": "invalid", "max_age_seconds": 600},
+        "telemetry": {"observed_at": null, "freshness": "missing", "max_age_seconds": 90}
+      },
+      "responses": {"error": {"code": "ledger_invalid", "message": "Recorded account data failed validation.", "retryable": false}}
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "pwsh -NoProfile -NonInteractive -File scripts/agent_guard.ps1",
+        "windows": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/agent_guard.ps1",
+        "timeout": 10
+      }
+    ]
+  }
+}

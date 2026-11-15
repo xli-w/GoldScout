@@ -1,0 +1,1 @@
+"""Broker-independent market intelligence; imports perform no IO."""
