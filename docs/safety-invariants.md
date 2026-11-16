@@ -42,9 +42,10 @@ These are development contracts, not a certification of live readiness. Current 
 
 - Product scope is designated substantial long-term investment capital, not
   household cash/emergency budgeting; see the [current mandate](investment-research-context.md).
-  The [core-plus-dynamic roadmap](decisions/0004-core-dynamic-portfolio-manager.md)
-  is planned, not an implemented accounting or execution contract. The
-  illustrative 80-90% / 10-20% split does not approve weights, risk or replenishment.
+  The [core-plus-dynamic direction](decisions/0004-core-dynamic-portfolio-manager.md)
+  has implemented role accounting and a limited local awareness projection, but
+  not an approved policy or execution contract. The illustrative 80-90% / 10-20%
+  split does not approve weights, risk or replenishment.
 - V2 core/dynamic/unassigned role balances are explicit replayed evidence,
   independent of account and asset class. They conserve aggregate cash and
   holdings; missing attribution stays unassigned. Role debits cannot consume

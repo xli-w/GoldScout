@@ -63,7 +63,11 @@ The dynamic sleeve is a controlled opportunity budget, not a requirement to
 keep every experiment invested. Zero deployed dynamic risk is valid until a
 candidate passes; rejected ideas must not be replaced merely to fill the budget.
 
-### Decision support and automation contract (planned)
+### Decision support and automation contract
+
+The following describes the target capability, not a claim that every feature is
+implemented. Current local portfolio awareness is limited to the read-only
+projection documented in the [automation guide](portfolio-automation.md).
 
 - Centralise only selected investment-capital accounts. Record balances, fills,
   actual interest and statement dates with provenance. Savings rate/AER, tiers,
@@ -78,10 +82,12 @@ candidate passes; rejected ideas must not be replaced merely to fill the budget.
   estimated total costs, uncertainty and alternatives including no trade.
   Dynamic value is judged against investing that same capital under core policy,
   not against zero-return cash or the core's gains.
-- Automate source collection, dated economic-calendar awareness, AI briefs,
+- Extend source collection, dated economic-calendar awareness, AI briefs,
   thesis tracking and experiment proposals using separate intelligence storage.
-  Verify coverage before extending today's US-focused feeds to UK/global
-  exposures. AI text cannot become an order, change targets or relax limits.
+  Existing public evidence can already be matched locally to configured
+  exposures; this does not start collection or AI. Verify coverage before
+  extending today's US-focused feeds to UK/global exposures. AI text cannot
+  become an order, change targets or relax limits.
 - Introduce revocable, versioned standing authority only after separate approved
   execution development: account/product allowlists, strategy/policy hashes,
   exposure/loss/turnover/cost limits, expiry, evidence freshness and suspension
@@ -698,7 +704,8 @@ following remain unsupported/unverified:
 - Historical source rights/vintages and full product/action/FX/cash-rate coverage.
 - Executed FX, non-GBP account balances, settlement-specific broker funding.
 - Distribution entitlement/payment reconciliation, automatic cash interest/tier/
-  term accrual, corrections and operational migrations.
+  term accrual, corrections beyond the immediately latest contribution,
+  withdrawal or interest amount, and operational migrations.
 - Money-weighted return, inflation, tax scenarios, matched savings/passive curves
   and dated look-through concentration.
 - Validated spread/slippage/quote/cost models for executable proposals.
@@ -713,20 +720,28 @@ following remain unsupported/unverified:
 
 ### Continuation order
 
-1. **Investment-capital usability and truth:** safe onboarding of existing selected
-   accounts/holdings, reconciliation and append-only corrections; manual bank
-   updates without fabricated returns/cost basis; history and cost/income
-   attribution. The current empty-inception contract remains until explicitly
-   implemented alternatives are tested. Do not import household cash by default.
-2. **Core/dynamic accounting and policy:** extend recorded role accounting with independent risk budgets,
-   evidenced transfers, combined concentration and review controls. Approve exact
-   allocation, loss/replenishment/profit rules and investable products before
-   funding experiments. Generic equity/bond/cash drift is not sufficient.
-3. **Automated observation and research:** integrate read-only intelligence,
-   scheduled portfolio briefs, exposure-aware calendar/watch alerts and research
-   records. Collection/provider activation remains opt-in and separately approved;
-   no private account data is sent to hosted AI. Operational automation can be
-   useful without waiting for a winning trading model.
+1. **Manual investment-capital management — implemented:** V1 supports
+   evidenced empty inception; V2 can record opening cash and long holdings,
+   subsequent activity, valuations, reconciliation observations and narrowly
+   bounded evidence-backed corrections. V2 role attribution and reports preserve
+   aggregate totals without inventing prior cost basis or lifetime return.
+   Remaining work is any explicitly scoped accounting extension such as
+   FX/action/entitlement support or verified imports. Do not import household
+   cash or infer unrecorded transactions.
+2. **Core/dynamic accounting — role attribution implemented; policy gated:**
+   core/dynamic/unassigned balances are independent of asset class and account,
+   with no cross-role debits or role-to-role transfers. Approve exact weights,
+   products, risk budgets and loss/replenishment/profit-transfer rules before
+   implementing policy-dependent proposals or funding experiments. Generic
+   equity/bond/cash drift is not sufficient.
+3. **Portfolio awareness — limited local projection implemented; provider sync
+   discovery only:** explicitly configured local exposure matching, existing
+   dated briefs/calendar alerts and review reminders are read-only and do not
+   activate collection or AI. Choose and verify a genuinely read-only provider,
+   account and permission scope before implementing or enabling any sync adapter.
+   No account data is sent to hosted AI. Further scheduled brief generation,
+   thesis/watch persistence and broader calendar coverage need separate design
+   and validation.
 4. **Evidence and simulator engineering, in parallel with useful tracking:** close
    product/account, cash-terms, persistent source rights/vintages, action/FX,
    cost/tax and frozen-protocol gates before product-performance runs. Synthetic
@@ -745,9 +760,12 @@ following remain unsupported/unverified:
    AI/calendar-derived trading features need their own prospective admission.
 
 This roadmap authorises no account access, orders, secret access, operational
-migrations or guard changes. If safe recovery is unavailable, retain export-only
-proposals and manual execution. No favourable report is approval to invest.
+migrations or guard changes. Until execution is separately approved and recovery
+is validated, proposals remain blocked and any investment decisions/execution
+remain outside the application. No favourable report is approval to invest.
 [Market intelligence](intelligence.md) remains advisory-only in the current
-runtime; its expanded portfolio role is planned, not silently enabled.
+runtime. Local awareness reads explicitly selected existing public evidence; it
+does not authorize AI-derived trading signals or change the intelligence
+service's opt-in collection and analysis controls.
 Preserve all earlier trials and consumed holdouts under the
 [context](investment-research-context.md) and [protocol](backtesting-protocol.md).

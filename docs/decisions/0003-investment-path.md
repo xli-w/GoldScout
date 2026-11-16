@@ -1,6 +1,7 @@
 # Decision: Separate long-term GBP investment path
 
-Status: accepted; first offline slice implemented, research/execution gated
+Status: accepted; v1 accounting and v2 manual/role accounting implemented,
+research and execution gated
 
 Date: 2026-11-15
 
@@ -8,8 +9,10 @@ Product direction updated on 2026-11-16 by the
 [core-plus-dynamic portfolio decision](0004-core-dynamic-portfolio-manager.md).
 It replaces the small-capital/passive-only product emphasis with substantial
 designated investment capital, automated intelligence and future capped dynamic
-management. The released accounting, export-only routes and execution safeguards
-below remain unchanged; standing-policy execution is a later gated capability.
+management. The original v1 accounting/review safeguards remain relevant to v1
+stores. V2 adds opening-account and role-aware accounting. Public investment
+proposals are currently blocked; standing-policy execution remains a later gated
+capability.
 
 ## Context
 
@@ -22,25 +25,26 @@ Public Trading 212 documentation explicitly warns of non-idempotent submissions.
 ## Decision
 
 Introduce a separate offline investment package and versioned investment store,
-with exact cash/quantity accounting, human-chosen sleeve allocation and export-only
-proposals. Start GBP-only and label unsupported FX, accrual, entitlement, historical
-research and broker execution explicitly. Preserve the existing trading ledger,
-state model, stops, settings, commands and recovery tests.
+with exact cash/quantity accounting and human-chosen policy boundaries. The
+original v1 planner/export design is not an available public proposal capability:
+proposal routes are blocked until approved role-aware policy exists. V2 supports
+evidence-backed opening records, core/dynamic/unassigned attribution, limited
+evidence-backed corrections and read-only local awareness. Start GBP-only and
+label unsupported FX, accrual, entitlement, historical research and broker
+execution explicitly. Preserve the existing trading ledger, state model, stops,
+settings, commands and recovery tests.
 
-Dashboard investment responses use a distinct schema and read-only route. Recorded
-investment, legacy and demo modes are explicit. No browser account/trading approval
-or mutation is added. Eventual execution requires a separate local CLI,
-task-specific operator approval and verified venue recovery semantics.
+Dashboard investment responses use a distinct schema. Reporting is read-only by
+default; explicitly enabled, authenticated v2 manual recording uses previews and
+revision-bound confirmation. No browser path approves or executes trades.
+Eventual execution requires a separate implementation, task-specific operator
+approval and verified venue recovery semantics.
 
-Rebalancing is contribution-first; monthly review and annual/five-point drift rules
-implement the investor's chosen policy, not an optimality claim. The first slice
-generated buys only. The current planner also suggests bounded sales at annual or
-drift reviews, without using hypothetical proceeds to fund purchases. Explicit
-revision-bound monthly and annual review acknowledgements are recorded offline;
-they never suppress a continuing five-point drift trigger or approve a trade.
-Unsupported purchase references are excluded, while independently supported
-purchases can produce a labelled partial correction. No AI/news, leverage,
-crypto or active forecasting dependency enters the core.
+Rebalancing was specified as contribution-first; revision-bound v1 monthly and
+annual review acknowledgements are recorded offline, but do not approve trades.
+The historical planner implementation is not an available public proposal or
+execution path. No AI/news, leverage, crypto or active forecasting dependency
+enters the core.
 
 ## Consequences
 

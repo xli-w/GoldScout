@@ -12,10 +12,12 @@ In VS Code, check the chat customization UI/diagnostics for the two agents, four
 
 The separate [investment path](investment.md) provides GBP-only recorded
 accounting. Proposals are blocked pending approved, implemented role-aware
-policy. Its store is not the
+policy; v2 records core/dynamic/unassigned attribution but does not implement
+those policy rules. Its store is not the
 legacy trading ledger. Use temporary profiles/events/stores for development;
-unsupported FX, entitlement, corrections, historical research and execution must
-remain explicit rather than inferred from the legacy engine.
+unsupported FX and entitlement, corrections beyond the narrow evidence-backed
+v2 cases, historical research and execution must remain explicit rather than
+inferred from the legacy engine.
 
 An explicitly initialised v2 investment store additionally supports
 operator-evidenced opening cash and long holdings via CLI, with a read-only

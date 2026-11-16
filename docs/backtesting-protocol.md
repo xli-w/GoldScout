@@ -9,9 +9,11 @@ and passive-core risk assumptions. The remainder retains the historical
 design and runner limitations; it does not authorise crypto, leverage, stop-sized
 passive holdings or the former six-month return aspiration in the new core.
 
-The first [investment release](investment.md) provides offline GBP accounting,
-recorded valuation and export-only contribution/allocation proposals. A separate
-synthetic-only mechanics harness tests a narrow buy-only portfolio clock,
+The separate [investment path](investment.md) provides offline GBP accounting,
+recorded valuation, v2 core/dynamic/unassigned attribution and a limited local
+read-only portfolio-awareness projection. Public v2 proposals are blocked until
+approved role-aware policy exists; no investment proposal export or broker
+adapter is available. A separate synthetic-only mechanics harness tests a narrow buy-only portfolio clock,
 including unitized cash-funded withdrawals without liquidation and explicit
 distribution receivables across ex-open/pay-close boundaries; it is not an
 integrated historical product-performance simulator, research authorisation or
@@ -92,8 +94,9 @@ with synthetic or unlicensed proxy data. No comparison guarantees profitability.
 - Selection, one genuinely unexposed locked report-only confirmation, prospective
   shadow observation and separately approved broker trials are distinct gates.
   No passing candidate means no holdout opening and no experimental deployment.
-  Manual execution/export-only operation remains valid if safe recovery cannot
-  be established. This documentation enables none of these operational steps.
+  Until safe recovery and execution approval exist, proposals remain blocked and
+  any investment decisions/execution stay outside the application. This
+  documentation enables none of these operational steps.
 
 ## Historical trading protocol and runner evidence
 

@@ -30,7 +30,11 @@ under revocable standing policy after venue/recovery validation. Human approval
 of policy should eventually replace repetitive approval of every compliant order.
 The system must not rewrite its own mandate, promote experiments, refill losses
 from the core or increase risk because of AI output. These are future requirements,
-not permissions implemented by the current export-only release.
+not permissions implemented by the current blocked-proposal release. The local
+awareness projection is implemented: it matches operator-configured exposures to
+existing public calendar and dated-brief evidence and displays configured
+reminders. It does not start collection or AI, send account data to AI, or
+influence trades.
 
 **Research priorities:** maintain a low-cost, low-turnover core; evaluate a small
 set of interpretable daily/weekly long-only dynamic hypotheses against keeping
@@ -56,15 +60,19 @@ exposed sample and consumed holdout. Retain the 60-candidate total ceiling,
 predeclaration, causal accounting, adverse costs and single-use report-only
 confirmation. Do not reset the search history because the mandate changed.
 
-The current release remains recorded GBP accounting and export-only proposals,
-with no core/dynamic schema, integrated historical simulator or broker adapter.
-The [investment guide](investment.md) defines the product roadmap; the
-[protocol](backtesting-protocol.md) defines research admission. Public-document
-research may inform design, but market-data acquisition/performance runs remain
-blocked at unmet product, source-rights, vintage, cash-terms, action/FX, cost/tax
-and frozen-protocol gates. No paid feed, authenticated broker data, account access,
-orders or operational-state work is authorised. This chat approved documentation
-and matching guidance changes only; executable strategies/defaults stay unchanged.
+The current separate GBP investment path supports v1 empty-inception and v2
+evidence-backed opening accounting. V2 records core/dynamic/unassigned roles
+independently of asset class and account, local read-only portfolio awareness,
+and narrow evidence-backed corrections; it does not implement approved role
+budgets, transfers, investment proposals, a historical product simulator or a
+broker adapter. Provider sync is discovery only. The [investment guide](investment.md)
+defines current capabilities and gates; the [protocol](backtesting-protocol.md)
+defines research admission. Public-document research may inform design, but
+market-data acquisition/performance runs remain blocked at unmet product,
+source-rights, vintage, cash-terms, action/FX, cost/tax and frozen-protocol gates.
+No paid feed, authenticated broker data, account access, orders or
+operational-state work is authorised. These implementations do not change
+legacy trading strategies/defaults or grant execution authority.
 
 ## Historical trading campaign (retained context)
 

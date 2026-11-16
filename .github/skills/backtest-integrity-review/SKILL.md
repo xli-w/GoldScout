@@ -32,7 +32,13 @@ Reviewer mode inspects evidence without execution. Output: timing contract, repr
 
 ## Current separate GBP investment path
 
-The `investment/` package implements **recorded accounting and export-only allocation proposals**, not a historical portfolio simulator. For its ledger/planner changes, also use [`investment-system-development`](../investment-system-development/SKILL.md); do not infer simulation capability from the existence of GBP accounting.
+The `investment/` package implements **recorded GBP accounting**, v2
+core/dynamic/unassigned attribution and a limited local awareness projection,
+not a historical portfolio simulator. Public investment proposals are blocked
+pending approved role-aware policy; no proposal export is available. For ledger
+or planner changes, also use
+[`investment-system-development`](../investment-system-development/SKILL.md);
+do not infer simulation capability from the existence of GBP accounting.
 
 The current question is substantial designated investment capital under an
 approved majority-core/capped-dynamic policy versus the same funding under a
@@ -47,4 +53,10 @@ Before any product-performance run, first read the current [investment mandate](
 
 For any causal portfolio clock, trace source effective time and `available_at` through valuation, decision, proposed fill, settlement and cash/quantity publication. A late-published mark cannot establish complete contemporaneous value at its effective clock. Contribution/withdrawal unitization must remain linked across a fully redeemed zero-equity interval; funding is not a drawdown. Distinguish invalid held-asset coverage (block portfolio valuation/proposal) from unsupported purchase references (exclude the affected purchase and clearly label any independently supported partial proposal).
 
-The current proposal implementation can suggest bounded sales at annual/drift reviews, but is export-only. Proposed sale proceeds do not fund purchases, and estimated notionals omit unverified future fees/settlement. Market intelligence is not an allowed signal source in existing runs. Future calendar/AI-derived dynamic features require separate explicit prospective approval, coverage/failure rules, dated receipt/validated-completion and model/prompt/input provenance; retrospective LLM analysis is not causal holdout evidence. Broker access, campaign runs, standing-policy execution and performance claims require separate gates/approval.
+The historical planner implementation is not an available public proposal path.
+Market intelligence is not an allowed signal source in existing runs. Future
+calendar/AI-derived dynamic features require separate explicit prospective
+approval, coverage/failure rules, dated receipt/validated-completion and
+model/prompt/input provenance; retrospective LLM analysis is not causal holdout
+evidence. Broker access, campaign runs, standing-policy execution and
+performance claims require separate gates/approval.

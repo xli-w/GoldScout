@@ -10,6 +10,7 @@ For strategy/portfolio research, read [investor context](../../../docs/investmen
 
 For changes under `investment/`, also use
 [`investment-system-development`](../investment-system-development/SKILL.md).
-Distinguish the implemented GBP-only recorded accounting/export-only proposal path
-from the planned continuous simulator and broker execution. Synthetic simulation
-tests are engineering evidence only; do not describe them as performance research.
+Distinguish implemented GBP-only recorded accounting, v2 role attribution and
+local awareness from blocked public proposals, the planned continuous simulator
+and broker execution. Synthetic simulation tests are engineering evidence only;
+do not describe them as performance research.

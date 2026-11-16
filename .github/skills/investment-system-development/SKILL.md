@@ -22,25 +22,34 @@ standing-policy execution are planned. The illustrative 80-90% / 10-20% split
 does not approve weights, loss budgets or replenishment. See the
 [portfolio decision](../../../docs/decisions/0004-core-dynamic-portfolio-manager.md).
 
-Core/dynamic role must be independent of equity/bond/cash and account location;
-today's schema has no role/risk isolation. For example, an equity overweight
-must not cause generic rebalancing to refill a losing dynamic equity strategy
-from the core. Approve transfer/loss/profit rules before implementing or funding
-that behaviour. Automation maximises useful observation and approved policy
-execution, not AI authority to rewrite policy. Keep runtime limits below explicit.
+Core/dynamic/unassigned role accounting is implemented in v2 independently of
+equity/bond/cash and account location. It attributes evidenced balances and
+prevents cross-role debits; it does not implement risk budgets, role transfers,
+loss/replenishment or profit-transfer policy. V1 asset-class targets do not
+enforce role isolation. For example, an equity overweight must not cause
+rebalancing to refill a losing dynamic equity strategy from the core. Approve
+actual targets, products and transfer/loss/profit rules before making
+policy-dependent proposals available. Automation maximises useful observation
+and approved policy execution, not AI authority to rewrite policy. Keep runtime
+limits below explicit.
 
 ## Current release boundary
 
 - `investment/` is separate from `bot/`, `config.py`, the trading ledger, and
   market intelligence. Keep that separation; never reuse an operational store.
-- The released contract is GBP-only and operator-recorded, with explicit empty
-  inception. Corrections, FX, automatic accrual/entitlement, MWR, inflation,
-  historical portfolio research, and broker execution are not implied capabilities.
-- Allocation proposals are export-only. Sales are bounded by recorded overweight
-  holdings and sleeve excess at annual/drift reviews; proposed proceeds cannot
-  fund buys. Dashboard routes remain read-only. Proposed notionals do not prove
-  fees, settlement, or executable funding. Do not add a broker path as a
-  convenience to an accounting change.
+- The released contract is GBP-only and operator-recorded. V1 starts at
+  explicitly evidenced empty inception; v2 supports evidenced opening cash and
+  long holdings without inventing prior transactions or cost basis. V2 supports
+  only narrow evidence-backed corrections to the immediately latest
+  contribution, withdrawal or interest event; this does not authorize guessed
+  history, FX, automatic accrual/entitlement, MWR, inflation, historical
+  portfolio research or broker execution.
+- Public v2 proposal routes are blocked until role-aware policy, approved
+  targets/products and loss/transfer rules exist; v2 has no proposal export.
+  Do not describe the separate v1 planner's historical export behavior as an
+  available portfolio proposal capability. Dashboard routes remain read-only
+  except explicitly enabled, authenticated v2 manual recording. Do not add a
+  broker path as a convenience to an accounting change.
 - Manual review acknowledgements bind a previously committed revision, require a
   complete fresh valuation, and never approve trades or suppress five-point drift.
   Monthly and annual clocks are separate; an annual review counts as monthly.
@@ -54,6 +63,11 @@ execution, not AI authority to rewrite policy. Keep runtime limits below explici
 - Human-selected targets and the fixed comparison set are not optimized by
   historical returns. Do not promise profit, safety, maximum drawdown, or a
   winning allocation.
+- The local portfolio-awareness projection can match configured exposures to
+  existing public calendar and brief evidence and show configured review
+  reminders. It does not start collection or AI, send account data to AI, alter
+  the journal, approve policy, or grant trading authority. Provider sync is
+  discovery only; no provider/account is selected or connected.
 - Future dynamic admission needs approved capital/risk/cost limits, matched
   all-core comparisons and prospective evidence. Neither a return result nor
   a research brief grants standing authority. News/LLM trading exclusions remain

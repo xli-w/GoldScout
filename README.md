@@ -49,9 +49,12 @@ accounting and explicit research/broker blockers.
 - Full FX, corporate-action entitlement/accrual, money-weighted/inflation returns,
   licensed historical comparisons and human-approved broker execution remain
   gated follow-ons. A valid import is not proof of investment suitability.
-- The roadmap prioritises investment-capital onboarding, growth attribution,
-  core/dynamic risk accounting and automated monitoring/research, then validated
-  execution. Future standing authority may automate approved contributions,
+- Manual opening, recording, reconciliation evidence, bounded corrections,
+  core/dynamic/unassigned attribution and a limited local awareness projection
+  are implemented. The roadmap prioritises investor-approved role policy,
+  verified read-only sync selection, further research automation and gated
+  evidence engineering before any separately approved execution. Future standing
+  authority may automate approved contributions,
   rebalancing and admitted dynamic strategies without approving every order;
   it must not allow AI to change policy, expand risk or refill experimental losses.
   No such authority exists in today's CLI or dashboard.
