@@ -354,6 +354,55 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(result["summary"]["ending_equity_gbp"], "900")
         self.assertEqual(result["summary"]["gain_gbp"], "0")
 
+    def test_synthetic_distribution_receivable_accrues_cash_interest_only_after_payment(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "10", "9"),
+            self.synthetic_bar("equity", 3, "9", "9"),
+            self.synthetic_bar("equity", 4, "9", "9"),
+        ]
+        rates = [
+            {"id": "zero-before-pay", "effective_at": bars[0]["open_at"],
+             "available_at": bars[0]["open_at"], "annual_rate": "0"},
+            {"id": "interest-after-pay", "effective_at": bars[3]["close_at"],
+             "available_at": bars[3]["close_at"], "annual_rate": "0.365"},
+        ]
+        distributions = [{
+            "id": "dividend-paid-later",
+            "product_id": "equity",
+            "ex_at": bars[2]["open_at"],
+            "pay_at": bars[3]["close_at"],
+            "available_at": bars[2]["open_at"],
+            "amount_per_unit_gbp": "1",
+        }]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars,
+            cash_rates=rates, distributions=distributions)
+
+        with localcontext() as context:
+            context.prec = 100
+            year_microseconds = Decimal(365 * 86400 * 1_000_000)
+            overnight = (Decimal(100) * Decimal("0.365")
+                         * Decimal(17 * 3600 * 1_000_000) / year_microseconds)
+            intraday = ((Decimal(100) + overnight) * Decimal("0.365")
+                        * Decimal(7 * 3600 * 1_000_000) / year_microseconds)
+            expected_interest = overnight + intraday
+            expected_cash = Decimal(100) + expected_interest
+
+        self.assertEqual(result["curve"][2]["cash_interest_gbp"], "0")
+        self.assertEqual(result["curve"][3]["cash_interest_gbp"], "0")
+        self.assertEqual(result["curve"][3]["distribution_receivables_gbp"], "0")
+        self.assertEqual(result["curve"][3]["cash_gbp"], "100")
+        self.assertEqual(
+            Decimal(result["curve"][4]["cash_interest_gbp"]), expected_interest,
+            msg=f"actual={result['curve'][4]['cash_interest_gbp']} expected={expected_interest}")
+        self.assertEqual(
+            Decimal(result["curve"][4]["cash_gbp"]), expected_cash,
+            msg=f"cash={result['curve'][4]['cash_gbp']} expected={expected_cash}")
+
     def test_synthetic_full_cash_withdrawal_and_refunding_preserve_unit_link(self):
         products = [{"id": "equity", "quantity_increment": "1",
                      "minimum_notional_gbp": "2000"}]
