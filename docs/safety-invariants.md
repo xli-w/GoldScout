@@ -67,6 +67,9 @@ These are development contracts, not a certification of live readiness. Current 
   Calculate any difference against recorded cash at that observation clock; preserve
   the dated discrepancy and evidence source. A statement observation cannot refresh
   valuation or resolve a mismatch, and late evidence cannot be used retrospectively.
+- V2 savings-terms updates are append-only display facts for included deposit
+  accounts. Preserve observed/available clocks; they never accrue interest or
+  change cash, valuation, performance, or product eligibility.
 - Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
 - Time-weighted unitization is flow-neutral and remains linked across complete withdrawals and later refunding. A zero-equity interval does not erase prior unit price/history or manufacture a drawdown from new capital.
 - External-deposit cash is part of recorded mandate value only when included by policy; it is never broker buying power. Scheduled contributions are not settled cash. Transfers between included accounts do not count as external investment performance flows.

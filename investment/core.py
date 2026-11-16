@@ -52,6 +52,34 @@ def fields(value, required):
         raise InvestmentError("Missing or unknown fields")
 
 
+def validate_savings_terms(terms, available_by):
+    fields(terms, ("annual_rate_pct", "rate_basis", "effective_from",
+                   "observed_at", "available_at", "source", "maturity_date",
+                   "notice_days"))
+    text(terms["source"])
+    try:
+        effective = date.fromisoformat(terms["effective_from"])
+        maturity = (date.fromisoformat(terms["maturity_date"])
+                    if terms["maturity_date"] is not None else None)
+    except (TypeError, ValueError) as exc:
+        raise InvestmentError("Invalid savings-terms date") from exc
+    observed, available = clock(terms["observed_at"]), clock(terms["available_at"])
+    if (effective.isoformat() != terms["effective_from"] or
+            maturity is not None and maturity.isoformat() != terms["maturity_date"] or
+            maturity is not None and maturity < effective or
+            observed > available or available > available_by):
+        raise InvestmentError("Invalid savings-terms evidence clock or date")
+    rate, basis = terms["annual_rate_pct"], terms["rate_basis"]
+    if rate is None:
+        if basis is not None:
+            raise InvestmentError("A rate basis requires a recorded rate")
+    elif (number(rate) > 100 or basis not in ("AER", "gross")):
+        raise InvestmentError("Invalid bounded savings rate or basis")
+    notice = terms["notice_days"]
+    if notice is not None and (type(notice) is not int or not 0 <= notice <= 3650):
+        raise InvestmentError("Invalid savings notice period")
+
+
 def fmt(value):
     if value is None:
         return None
@@ -85,35 +113,9 @@ def profile(value):
         if account["id"] in ids or account["binding"] in bindings:
             raise InvestmentError("Duplicate account identity/binding")
         if value["schema_version"] == 2 and account.get("terms") is not None:
-            terms = account["terms"]
-            fields(terms, ("annual_rate_pct", "rate_basis", "effective_from",
-                           "observed_at", "available_at", "source", "maturity_date",
-                           "notice_days"))
             if account["kind"] != "deposit":
                 raise InvestmentError("Savings terms require a deposit account")
-            text(terms["source"])
-            try:
-                effective = date.fromisoformat(terms["effective_from"])
-                maturity = (date.fromisoformat(terms["maturity_date"])
-                            if terms["maturity_date"] is not None else None)
-            except (TypeError, ValueError) as exc:
-                raise InvestmentError("Invalid savings-terms date") from exc
-            observed, available = clock(terms["observed_at"]), clock(terms["available_at"])
-            created = clock(value["created_at"])
-            if (effective.isoformat() != terms["effective_from"] or
-                    maturity is not None and maturity.isoformat() != terms["maturity_date"] or
-                    maturity is not None and maturity < effective or
-                    observed > available or available > created):
-                raise InvestmentError("Invalid savings-terms evidence clock or date")
-            rate, basis = terms["annual_rate_pct"], terms["rate_basis"]
-            if rate is None:
-                if basis is not None:
-                    raise InvestmentError("A rate basis requires a recorded rate")
-            elif (number(rate) > 100 or basis not in ("AER", "gross")):
-                raise InvestmentError("Invalid bounded savings rate or basis")
-            notice = terms["notice_days"]
-            if notice is not None and (type(notice) is not int or not 0 <= notice <= 3650):
-                raise InvestmentError("Invalid savings notice period")
+            validate_savings_terms(account["terms"], clock(value["created_at"]))
         ids.add(account["id"])
         bindings.add(account["binding"])
     ids = set()
@@ -213,6 +215,33 @@ def event(value, spec, now):
                 Decimal(value["balance_gbp"]) > Decimal("1e24")):
             raise InvestmentError("Invalid bounded observed cash balance")
         return value
+    if isinstance(value, dict) and value.get("type") == "savings_terms":
+        if spec["schema_version"] != 2:
+            raise InvestmentError("Savings-terms updates require an explicit version 2 store")
+        fields(value, ("id", "type", "timestamp", "available_at", "evidence",
+                       "account_id", "annual_rate_pct", "rate_basis", "effective_from",
+                       "source", "maturity_date", "notice_days"))
+        for key in ("id", "evidence", "account_id"):
+            text(value[key])
+        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        if timestamp < clock(spec["created_at"]) or available < timestamp or available > now:
+            raise InvestmentError("Invalid savings-terms update evidence clock")
+        accounts = {account["id"]: account for account in spec["accounts"]}
+        if (value["account_id"] not in accounts or
+                accounts[value["account_id"]]["kind"] != "deposit"):
+            raise InvestmentError("Savings-terms updates require an included deposit account")
+        terms = {
+            "annual_rate_pct": value["annual_rate_pct"],
+            "rate_basis": value["rate_basis"],
+            "effective_from": value["effective_from"],
+            "observed_at": value["timestamp"],
+            "available_at": value["available_at"],
+            "source": value["source"],
+            "maturity_date": value["maturity_date"],
+            "notice_days": value["notice_days"],
+        }
+        validate_savings_terms(terms, now)
+        return value
     if isinstance(value, dict) and value.get("type") == "cash_confirmation":
         fields(value, ("id", "type", "timestamp", "available_at", "evidence", "balances_gbp"))
         text(value["id"])
@@ -286,6 +315,10 @@ class Ledger:
         self.marks = {}
         self.cash_observations = {}
         self.cash_observation_history = {}
+        self.account_terms = {a["id"]: a.get("terms") for a in spec["accounts"]}
+        self.updated_account_terms = set()
+        self.terms_last_time = clock(spec["created_at"])
+        self.terms_latest_available_at = self.terms_last_time
         self.net = ZERO
         self.fees = ZERO
         self.revision = 0
@@ -369,8 +402,10 @@ class Ledger:
 
     def apply(self, value, now):
         saved = self.__dict__.copy()
-        for key in ("cash", "holdings", "marks", "ids", "cash_observations"):
+        for key in ("cash", "holdings", "marks", "ids", "cash_observations",
+                    "account_terms"):
             saved[key] = saved[key].copy()
+        saved["updated_account_terms"] = saved["updated_account_terms"].copy()
         saved["cash_observation_history"] = {
             account: observations.copy()
             for account, observations in self.cash_observation_history.items()
@@ -389,7 +424,10 @@ class Ledger:
                 raise InvestmentError("Conflicting duplicate event")
             return False
         timestamp = clock(value["timestamp"])
-        if timestamp < max(self.last_time, self.monthly_review_at or self.last_time):
+        order_time = max(self.last_time, self.monthly_review_at or self.last_time)
+        if self.spec["schema_version"] == 2:
+            order_time = max(order_time, self.terms_last_time)
+        if timestamp < order_time:
             raise InvestmentError("Events must be timestamp ordered; no corrections")
         kind = value["type"]
         if kind != "cash_observation" and any(
@@ -421,8 +459,32 @@ class Ledger:
             return True
         if self.spec["schema_version"] == 2 and not self.opened:
             raise InvestmentError("Explicit opening evidence is required before other events")
-        if kind in ("cash_confirmation", "review_acknowledgement") and self.latest_available_at > timestamp:
+        if kind in ("cash_confirmation", "review_acknowledgement") and max(
+                self.latest_available_at, self.terms_latest_available_at) > timestamp:
             raise InvestmentError("Prior evidence was not available at the attestation clock")
+        if kind == "savings_terms":
+            account = value["account_id"]
+            previous = self.account_terms.get(account)
+            if previous is not None and clock(previous["observed_at"]) >= timestamp:
+                raise InvestmentError("Savings-terms updates must follow prior account terms")
+            terms = {
+                "annual_rate_pct": value["annual_rate_pct"],
+                "rate_basis": value["rate_basis"],
+                "effective_from": value["effective_from"],
+                "observed_at": value["timestamp"],
+                "available_at": value["available_at"],
+                "source": value["source"],
+                "maturity_date": value["maturity_date"],
+                "notice_days": value["notice_days"],
+            }
+            self.account_terms[account] = terms
+            self.updated_account_terms.add(account)
+            self.terms_last_time = timestamp
+            self.terms_latest_available_at = max(
+                self.terms_latest_available_at, clock(value["available_at"]))
+            self.ids[value["id"]] = value.copy()
+            self.revision += 1
+            return True
         if kind == "cash_confirmation":
             if any(quantity > 0 for quantity in self.holdings.values()):
                 raise InvestmentError("Cash confirmation requires a cash-only portfolio")
@@ -558,6 +620,8 @@ def replay(spec, events, now=None, on_revision=None):
                         raise InvestmentError("Conflicting duplicate event")
                     continue
                 timestamp = clock(value.get("timestamp")) if isinstance(value, dict) else None
+                metadata_only = (isinstance(value, dict) and
+                                 value.get("type") == "savings_terms")
                 if isinstance(value, dict) and value.get("type") == "review_acknowledgement":
                     ledger.apply(value, now)
                     if on_revision is not None:
@@ -567,8 +631,9 @@ def replay(spec, events, now=None, on_revision=None):
                     ledger.checkpoint(previous)
                 ledger.apply(value, now)
                 if on_revision is not None:
-                    on_revision(ledger, timestamp)
-                previous = timestamp
+                    on_revision(ledger, previous if metadata_only else timestamp)
+                if not metadata_only:
+                    previous = timestamp
             if previous is not None:
                 ledger.checkpoint(previous)
             return ledger

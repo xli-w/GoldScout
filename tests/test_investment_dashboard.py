@@ -1,7 +1,7 @@
 import copy
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +11,8 @@ from investment.service import demo_events, demo_profile, demo_snapshot, snapsho
 from investment.store import acknowledge_review, import_events, initialize
 from test_dashboard_api import MemoryEventLoop
 from test_investment_opening import (NOW as OPENING_NOW, opening, profile,
-                                     cash_observation, savings_terms)
+                                     cash_observation, savings_terms,
+                                     savings_terms_event)
 
 
 class InvestmentDashboardTests(unittest.TestCase):
@@ -102,6 +103,28 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json(), expected)
             self.assertEqual(response.json()["accounts"][0]["terms"], savings_terms())
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_v2_savings_terms_update_is_exposed_read_only(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening()], self.now)
+        observed_at = OPENING_NOW + timedelta(days=1)
+        update = savings_terms_event(observed_at)
+        self.now = observed_at
+        import_events(self.path, [update], self.now)
+        expected = snapshot(self.path, self.now)
+        original = self.path.read_bytes()
+
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), expected)
+            bank = next(account for account in response.json()["accounts"]
+                        if account["id"] == "bank")
+            self.assertEqual(bank["terms"]["annual_rate_pct"], "3.75")
+            self.assertEqual(bank["cash_gbp"], "1000")
+            self.assertEqual(response.json()["equity_gbp"], "2000")
         self.assertEqual(self.path.read_bytes(), original)
 
     def test_v2_cash_observation_is_displayed_without_a_dashboard_write(self):

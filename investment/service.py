@@ -142,7 +142,7 @@ def opening_report(ledger, now, source_mode="recorded"):
             "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],
                           "cash_gbp": fmt(ledger.cash[a["id"]]) if ledger.opened else None,
-                          "terms": a.get("terms"),
+                          "terms": ledger.account_terms[a["id"]],
                           "cash_observation": ledger.cash_observations.get(a["id"])}
                          for a in ledger.spec["accounts"]],
             "holdings": holdings,

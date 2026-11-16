@@ -221,11 +221,37 @@ A v2 deposit account may include an optional profile `terms` object with
 (date), `observed_at`, `available_at`, `source`, and optional
 `maturity_date`/`notice_days`. Rate, source and dates are operator-entered facts
 bound to the explicit profile, not verified provider data. The read-only
-dashboard shows the reported basis and evidence clocks. Terms do not change
-cash, valuation or returns; rate changes, interest accrual and later term corrections are not implemented. Do not edit
-immutable profile evidence or reinitialise a portfolio merely to change terms;
-preserving an existing portfolio's opening evidence and event history remains
-an explicit offline operation, not an automatic migration.
+dashboard shows the reported basis and evidence clocks. Append a `savings_terms`
+event to record a later observation; the latest terms are displayed while the
+prior event remains in the journal. This is not a correction or deletion
+workflow. Terms do not change cash, valuation or returns, and do not accrue
+interest automatically. Do not edit immutable profile evidence or reinitialise
+a portfolio merely to change terms; preserving an existing portfolio's opening
+evidence and event history remains an explicit offline operation, not an
+automatic migration.
+
+A `savings_terms` event identifies an included deposit account and carries the
+same rate, basis, effective date, source, maturity and notice fields as the
+profile terms. Its `timestamp` is when the new terms were observed;
+`available_at` records when that evidence became available; `evidence` records
+the supporting notice/statement. For example:
+
+```json
+{
+  "id": "savings-rate-2026-11",
+  "type": "savings_terms",
+  "timestamp": "2026-11-16T12:00:00Z",
+  "available_at": "2026-11-16T12:00:00Z",
+  "evidence": "Provider rate-change notice",
+  "account_id": "savings",
+  "annual_rate_pct": "3.75",
+  "rate_basis": "AER",
+  "effective_from": "2026-12-01",
+  "source": "Operator-entered bank notice",
+  "maturity_date": null,
+  "notice_days": null
+}
+```
 
 ### Version 1 recorded input formats
 

@@ -12,7 +12,7 @@ from unittest.mock import patch
 from investment import InvestmentError
 from investment import store
 from investment.core import iso
-from investment.service import proposal_export, review_status, snapshot
+from investment.service import demo_profile, proposal_export, review_status, snapshot
 from investment.store import import_events, initialize, read
 
 
@@ -73,6 +73,18 @@ def cash_observation(timestamp=NOW, available_at=None, account="bank", balance="
         "available_at": iso(available_at), "evidence": "synthetic statement evidence",
         "source": "synthetic bank statement", "account_id": account,
         "balance_gbp": balance,
+    }
+
+
+def savings_terms_event(timestamp, available_at=None, account="bank",
+                        identifier="bank-terms-update"):
+    available_at = timestamp if available_at is None else available_at
+    return {
+        "id": identifier, "type": "savings_terms", "timestamp": iso(timestamp),
+        "available_at": iso(available_at), "evidence": "synthetic rate notice",
+        "account_id": account, "annual_rate_pct": "3.75", "rate_basis": "AER",
+        "effective_from": "2026-02-01", "source": "synthetic bank notice",
+        "maturity_date": "2027-02-01", "notice_days": 30,
     }
 
 
@@ -251,6 +263,39 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(import_events(self.database, [opening()], NOW), 1)
         self.assertEqual(snapshot(self.database, NOW)["equity_gbp"], "2000")
 
+    def test_failed_savings_terms_commit_preserves_prior_report_and_can_retry(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        connect = store._connect
+        denied = []
+
+        def deny_commit(database, readonly):
+            connection = connect(database, readonly)
+
+            def authorize(action, arg1, arg2, database_name, trigger):
+                if action == sqlite3.SQLITE_TRANSACTION and arg1 == "COMMIT":
+                    denied.append(True)
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
+            return connection
+
+        observed_at = NOW + timedelta(days=1)
+        update = savings_terms_event(observed_at)
+        with patch("investment.store._connect", side_effect=deny_commit):
+            with self.assertRaises(InvestmentError):
+                import_events(self.database, [update], observed_at)
+        self.assertEqual(denied, [True])
+        self.assertEqual(read(self.database, observed_at).revision, 1)
+        bank = next(account for account in snapshot(self.database, observed_at)["accounts"]
+                    if account["id"] == "bank")
+        self.assertIsNone(bank["terms"])
+        self.assertEqual(import_events(self.database, [update], observed_at), 2)
+        bank = next(account for account in snapshot(self.database, observed_at)["accounts"]
+                    if account["id"] == "bank")
+        self.assertEqual(bank["terms"]["annual_rate_pct"], "3.75")
+
     def test_v2_store_rejects_mismatched_version_and_schema_tampering(self):
         initialize(self.database, profile(), NOW)
         with closing(sqlite3.connect(self.database)) as connection:
@@ -349,6 +394,84 @@ class InvestmentOpeningTests(unittest.TestCase):
         result = snapshot(self.database, NOW)
         self.assertEqual(result["accounts"][0]["terms"]["effective_from"], "2026-02-01")
         self.assertEqual(result["equity_gbp"], "2000")
+
+    def test_savings_terms_update_validation_and_journal_clocks(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        observed_at = NOW + timedelta(days=1)
+        available_at = observed_at + timedelta(days=1)
+        mutations = ("broker", "basis_without_rate", "bad_date", "future_available", "extra")
+        for mutation in mutations:
+            update = savings_terms_event(
+                observed_at, identifier="invalid-terms-" + mutation)
+            if mutation == "broker":
+                update["account_id"] = "broker"
+            elif mutation == "basis_without_rate":
+                update["annual_rate_pct"] = None
+            elif mutation == "bad_date":
+                update["effective_from"] = "2026-2-1"
+            elif mutation == "future_available":
+                update["available_at"] = iso(available_at + timedelta(days=1))
+            else:
+                update["unverified_rate"] = "1"
+            with self.subTest(mutation=mutation), self.assertRaises(InvestmentError):
+                import_events(self.database, [update], available_at)
+            self.assertEqual(read(self.database, available_at).revision, 1)
+
+        update = savings_terms_event(observed_at, available_at)
+        import_events(self.database, [update], available_at)
+        earlier_transaction = event(
+            "before-terms", "interest", NOW + timedelta(hours=12),
+            "bank", amount_gbp="1")
+        with self.assertRaisesRegex(InvestmentError, "timestamp ordered"):
+            import_events(self.database, [earlier_transaction], available_at)
+
+        earlier_confirmation = {
+            "id": "before-terms-available", "type": "cash_confirmation",
+            "timestamp": iso(observed_at + timedelta(hours=12)),
+            "available_at": iso(observed_at + timedelta(hours=12)),
+            "evidence": "synthetic confirmation",
+            "balances_gbp": {"bank": "1000", "broker": "100"},
+        }
+        with self.assertRaisesRegex(InvestmentError, "Prior evidence was not available"):
+            import_events(self.database, [earlier_confirmation], available_at)
+
+    def test_savings_terms_update_is_version_2_only(self):
+        spec = demo_profile(NOW)
+        deposit = next(account for account in spec["accounts"]
+                       if account["kind"] == "deposit")
+        initialize(self.database, spec, NOW)
+        update = savings_terms_event(NOW, account=deposit["id"])
+        with self.assertRaisesRegex(InvestmentError, "version 2 store"):
+            import_events(self.database, [update], NOW)
+        self.assertEqual(read(self.database, NOW).revision, 0)
+
+    def test_savings_terms_event_updates_display_only_facts_without_changing_valuation(self):
+        spec = profile()
+        spec["accounts"][0]["terms"] = savings_terms()
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [opening()], NOW)
+        observed_at = NOW + timedelta(days=1)
+        available_at = observed_at + timedelta(hours=1)
+        update = savings_terms_event(observed_at, available_at)
+
+        self.assertEqual(import_events(self.database, [update], available_at), 2)
+        result = snapshot(self.database, available_at)
+        bank = next(account for account in result["accounts"] if account["id"] == "bank")
+        self.assertEqual(bank["terms"], {
+            "annual_rate_pct": "3.75", "rate_basis": "AER",
+            "effective_from": "2026-02-01", "observed_at": iso(observed_at),
+            "available_at": iso(available_at), "source": "synthetic bank notice",
+            "maturity_date": "2027-02-01", "notice_days": 30,
+        })
+        self.assertEqual(bank["cash_gbp"], "1000")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["equity_gbp"], "2000")
+        self.assertEqual(result["as_of"], iso(NOW))
+        self.assertEqual(result["baseline_as_of"], iso(NOW))
+        self.assertEqual(result["twr_pct"], "0")
+        self.assertEqual(import_events(self.database, [update], available_at), 2)
+        self.assertEqual(snapshot(self.database, available_at)["revision"], 2)
 
     def test_cash_observation_reports_difference_without_adjusting_recorded_balance(self):
         initialize(self.database, profile(), NOW)

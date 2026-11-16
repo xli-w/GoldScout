@@ -34,6 +34,9 @@ accounting and explicit research/broker blockers.
   balances and long holdings without fabricating past purchases; its reports
   label lifetime gains unavailable and its policies/proposals are not implemented.
   CLI imports are displayed in the local read-only investment dashboard.
+  Cash observations preserve discrepancies without changing balances, and
+  evidence-dated savings-term updates change only the displayed terms; neither
+  action accrues interest or refreshes portfolio valuation.
 - Full FX, corporate-action entitlement/accrual, money-weighted/inflation returns,
   licensed historical comparisons and human-approved broker execution remain
   gated follow-ons. A valid import is not proof of investment suitability.

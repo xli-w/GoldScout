@@ -19,9 +19,11 @@ remain explicit rather than inferred from the legacy engine.
 An explicitly initialised v2 investment store additionally supports
 operator-evidenced opening cash and long holdings via CLI, with a read-only
 dashboard view and non-mutating cash observations that expose discrepancies.
-It has no policy or proposal export. V1 stores remain separate
-and are not automatically migrated. V2 performance begins only at an evidenced complete
-common-clock baseline, not an invented pre-inception transaction or return.
+Savings-account terms can be updated by appending evidence-dated CLI events;
+these facts do not accrue interest or affect valuations. V2 has no policy or
+proposal export. V1 stores remain separate and are not automatically migrated.
+V2 performance begins only at an evidenced complete common-clock baseline, not
+an invented pre-inception transaction or return.
 
 The [current mandate](investment-research-context.md) is a substantial-capital
 core-plus-dynamic portfolio manager, excluding household cash/emergency budgeting.

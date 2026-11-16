@@ -104,6 +104,13 @@ def state_digest(ledger):
                 account: observation
                 for account, observation in sorted(ledger.cash_observations.items())
             }
+        if ledger.updated_account_terms:
+            value["account_terms"] = {
+                account: ledger.account_terms[account]
+                for account in sorted(ledger.updated_account_terms)
+            }
+            value["terms_last_time"] = iso(ledger.terms_last_time)
+            value["terms_latest_available_at"] = iso(ledger.terms_latest_available_at)
     return digest(canonical(value))
 
 
