@@ -6,6 +6,11 @@ description: "Use when changing SQLite schemas, migrations, transactional accoun
 
 Read [accounting contracts](../../../docs/safety-invariants.md). Anchor at the transaction/schema owner in `bot/ledger.py` and its callers in portfolio/audit.
 
+The GBP investment journal in `investment/store.py` is a separate store and
+authority, not a migration or extension of `bot/ledger.py`. For changes to that
+store, read `investment-system-development` as well and test its explicit-init,
+append-only/replay, and no-reader-repair contract in temporary databases.
+
 1. Identify the schema transition or transaction boundary, source-of-truth state, event revision, and idempotency keys.
 2. Construct an old-schema or recovery fixture in a temporary database. Never open or copy the operational ledger for testing.
 3. Verify upgrade/repeat/restart preserves original payloads, account binding, append-only evidence, and replay/snapshot consistency. Future/invalid schemas must be refused.

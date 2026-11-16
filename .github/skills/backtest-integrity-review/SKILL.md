@@ -25,3 +25,13 @@ For strategy comparisons or suitability claims, first read [investor context](..
 6. Stop at capability gaps or obtain explicit scope narrowing. For example, `prepare` without `--allow-network` only prints coverage; adding the flag fetches Alpaca data and is prohibited for this campaign. The separate `bot.campaign_data` importer and read-only normalized daily view are approved offline ingestion/readiness tools; neither feeds a combined GBP portfolio simulator. The current CLI still does not implement that simulator.
 
 Reviewer mode inspects evidence without execution. Output: timing contract, reproduction/check results, bias/coverage findings, and assumptions. Never claim profitability, live readiness, or significance unsupported by the experiment design.
+
+## Current separate GBP investment path
+
+The `investment/` package implements **recorded accounting and export-only allocation proposals**, not a historical portfolio simulator. For its ledger/planner changes, also use [`investment-system-development`](../investment-system-development/SKILL.md); do not infer simulation capability from the existence of GBP accounting.
+
+Before any product-performance run, first read the current [investment mandate](../../../docs/investment-research-context.md), [protocol](../../../docs/backtesting-protocol.md), and [investment guide](../../../docs/investment.md). Stop at unresolved exact product/account eligibility, persistent data rights/vintages, eligible cash terms, total-return/action and point-in-time FX coverage, comparable costs/tax, or the predeclared candidate/selection rules. Never fill gaps with synthetic or unlicensed history. Synthetic fixtures may test simulator mechanics only; label them as engineering tests, not return evidence.
+
+For any causal portfolio clock, trace source effective time and `available_at` through valuation, decision, proposed fill, settlement and cash/quantity publication. A late-published mark cannot establish complete contemporaneous value at its effective clock. Contribution/withdrawal unitization must remain linked across a fully redeemed zero-equity interval; funding is not a drawdown. Distinguish invalid held-asset coverage (block portfolio valuation/proposal) from unsupported purchase references (exclude the affected purchase and clearly label any independently supported partial proposal).
+
+The current proposal implementation is buy-only. Do not review or document it as sell rebalancing or as executable funding: estimated notionals omit unverified future fees/settlement. Market intelligence is not an allowed signal source. Broker access, campaign runs, and performance claims require separate gates/approval.

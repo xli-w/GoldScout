@@ -14,6 +14,8 @@ description: "Use when implementing, fixing, or validating trading bot changes; 
 
 For research/spec changes, use `backtest-integrity-review` and the [campaign protocol](../../../docs/backtesting-protocol.md) when applicable; a CLI smoke test cannot verify GBP portfolio suitability. For intelligence work, read the [scoped guidance](../../instructions/market-intelligence.instructions.md): validate opt-in feed/provider behavior, analysis controls, storage and observer order-call parity with synthetic fixtures; distinguish them from proposed extensions and unverified live behavior. Use the test map rather than assuming older backtest tests cover experiment or intelligence contracts.
 
+For `investment/**`, additionally use [`investment-system-development`](../investment-system-development/SKILL.md) and the [investment guide](../../../docs/investment.md). Run only temporary, offline fixtures. GBP-only accounting success does not establish licensed historical research, suitability, product access, execution semantics, or profitability.
+
 Documentation-only alignment needs customization validation and diff/link checks, not a performance run or full trading regression. Run tooling regressions if discovery metadata changes; guard changes additionally need policy tests, full offline regression and independent review. Static success does not prove VS Code discovery or handoff activation.
 
 Output: changed behavior and files, hypothesis/reproduction, exact interpreter and executed checks/results, independent review status, and remaining risks. Explicitly state that offline validation made no broker calls; do not infer paper/live readiness.

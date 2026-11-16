@@ -4,6 +4,7 @@ import builtins
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import io
 import importlib
 import json
@@ -17,6 +18,7 @@ from unittest.mock import patch
 from investment import InvestmentError
 from investment.__main__ import main
 from investment.core import iso, replay
+from investment.simulation import simulate_synthetic_fixture
 from investment.service import (demo_events, demo_profile, demo_snapshot, proposal_export,
                                 report, snapshot)
 from investment.store import import_events, initialize, load_json, read
@@ -42,6 +44,153 @@ class InvestmentTests(unittest.TestCase):
     def init_demo(self):
         initialize(self.database, self.spec, NOW)
         import_events(self.database, demo_events(NOW), NOW)
+
+    def synthetic_bar(self, product_id, session_number, open_price, close_price):
+        day = NOW + timedelta(days=session_number)
+        open_at = day.replace(hour=9)
+        close_at = day.replace(hour=16)
+        return {
+            "product_id": product_id,
+            "session_id": "session-" + str(session_number),
+            "open_at": iso(open_at),
+            "open_available_at": iso(open_at),
+            "open_gbp": open_price,
+            "close_at": iso(close_at),
+            "close_available_at": iso(close_at),
+            "close_gbp": close_price,
+        }
+
+    def test_synthetic_simulator_uses_next_open_and_flow_neutral_contributions(self):
+        products = [
+            {"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"},
+            {"id": "bond", "quantity_increment": "1", "minimum_notional_gbp": "1"},
+        ]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("bond", 0, "20", "20"),
+            self.synthetic_bar("equity", 1, "10", "11"),
+            self.synthetic_bar("bond", 1, "20", "20"),
+            self.synthetic_bar("equity", 2, "11", "12.1"),
+            self.synthetic_bar("bond", 2, "20", "19"),
+        ]
+        contribution_at = iso((NOW + timedelta(days=1)).replace(hour=16))
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "80", "bond": "20"}, bars,
+            [{"id": "later-funding", "timestamp": contribution_at,
+              "available_at": contribution_at, "amount_gbp": "100"}])
+
+        self.assertTrue(result["synthetic_only"])
+        self.assertFalse(result["supports_product_performance_claims"])
+        self.assertEqual(result["curve"][0]["cash_gbp"], "1000")
+        self.assertEqual(result["curve"][0]["fills"], [])
+        self.assertEqual(
+            [(fill["product_id"], fill["quantity"]) for fill in result["curve"][1]["fills"]],
+            [("bond", "10"), ("equity", "80")])
+        self.assertEqual(
+            result["curve"][1]["fills"][0]["execution_at"],
+            bars[2]["open_at"])
+        self.assertEqual(result["curve"][1]["unit_value"], "1.08")
+        self.assertEqual(result["curve"][1]["equity_gbp"], "1180")
+        self.assertEqual(
+            [(fill["product_id"], fill["quantity"]) for fill in result["curve"][2]["fills"]],
+            [("bond", "1"), ("equity", "5")])
+        self.assertEqual(result["summary"]["ending_equity_gbp"], "1262.5")
+        self.assertEqual(result["summary"]["net_contributions_gbp"], "1100")
+        self.assertEqual(result["summary"]["holdings"], [
+            {"product_id": "bond", "quantity": "11"},
+            {"product_id": "equity", "quantity": "85"},
+        ])
+        self.assertGreater(Decimal(result["summary"]["twr_pct"]), Decimal("15"))
+        self.assertLess(Decimal(result["summary"]["twr_pct"]), Decimal("16"))
+
+    def test_synthetic_simulator_costs_and_quantity_increment_conserve_cash(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+        ]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars, variable_cost_bps="100")
+
+        self.assertEqual(result["curve"][1]["fills"][0]["quantity"], "99")
+        self.assertEqual(result["curve"][1]["fills"][0]["fee_gbp"], "9.9")
+        self.assertEqual(result["summary"]["cash_gbp"], "0.1")
+        self.assertEqual(result["summary"]["ending_equity_gbp"], "990.1")
+        self.assertEqual(result["summary"]["twr_pct"], "-0.99")
+        self.assertEqual(result["summary"]["fees_gbp"], "9.9")
+
+    def test_synthetic_simulator_reports_minimum_notional_skips(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1001"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+        ]
+        result = simulate_synthetic_fixture("1000", products, {"equity": "100"}, bars)
+
+        self.assertEqual(result["curve"][1]["fills"], [])
+        self.assertEqual(result["curve"][1]["unfilled_allocations"], [{
+            "product_id": "equity",
+            "budget_gbp": "1000",
+            "reason": "below_minimum_notional",
+        }])
+        self.assertEqual(result["summary"]["cash_gbp"], "1000")
+
+    def test_synthetic_simulator_drawdown_survives_a_contribution(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "8"),
+            self.synthetic_bar("equity", 2, "8", "9"),
+        ]
+        contribution_at = iso((NOW + timedelta(days=1)).replace(hour=16))
+        result = simulate_synthetic_fixture(
+            "100", products, {"equity": "100"}, bars,
+            [{"id": "fund-during-drawdown", "timestamp": contribution_at,
+              "available_at": contribution_at, "amount_gbp": "100"}])
+
+        self.assertEqual(result["curve"][1]["unit_value"], "0.8")
+        self.assertEqual(result["curve"][1]["equity_gbp"], "180")
+        self.assertEqual(result["curve"][1]["drawdown_pct"], "20")
+        self.assertEqual(result["summary"]["max_drawdown_pct"], "20")
+
+    def test_synthetic_simulator_rejects_future_prices_incomplete_sessions_and_late_flows(self):
+        products = [
+            {"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"},
+            {"id": "bond", "quantity_increment": "1", "minimum_notional_gbp": "1"},
+        ]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("bond", 0, "20", "20"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("bond", 1, "20", "20"),
+        ]
+        bad_close = deepcopy(bars)
+        bad_close[0]["close_available_at"] = iso(
+            NOW.replace(hour=16) + timedelta(minutes=1))
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
+                                       bad_close)
+
+        bad_open = deepcopy(bars)
+        bad_open[0]["open_available_at"] = iso(
+            NOW.replace(hour=9) + timedelta(minutes=1))
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
+                                       bad_open)
+
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
+                                       bars[:-1])
+
+        late_flow = [{"id": "late", "timestamp": iso(NOW.replace(hour=16)),
+                      "available_at": iso(NOW.replace(hour=17)), "amount_gbp": "100"}]
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
+                                       bars, late_flow)
+
 
     def test_pure_demo_contract_no_files_or_broker_imports(self):
         original_import = builtins.__import__

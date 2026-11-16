@@ -9,9 +9,18 @@ design and runner limitations; it does not authorise crypto, leverage, stop-size
 passive holdings or the former six-month return aspiration in the new core.
 
 The first [investment release](investment.md) provides offline GBP accounting,
-recorded valuation and export-only contribution/allocation proposals. It is not
-a historical portfolio simulator, research authorisation or broker adapter.
-Existing minute experiments still cannot answer this new portfolio question.
+recorded valuation and export-only contribution/allocation proposals. A separate
+synthetic-only mechanics harness now tests a narrow buy-only portfolio clock; it
+is not an integrated historical product-performance simulator, research
+authorisation or broker adapter. Existing minute experiments still cannot answer
+this new portfolio question.
+
+Continuation order: complete the external product/account, licensed-history and
+vintage, cash-terms, action/FX, cost/tax and frozen-protocol feasibility gates
+before product-performance work. Synthetic-only simulator engineering and
+regressions are permissible as engineering evidence, but are not return research
+and do not satisfy any external gate. If any gate remains unmet, stop before
+loading product histories or producing comparative returns.
 
 Before any portfolio performance comparison:
 
@@ -135,9 +144,10 @@ From the repository root, `python -m bot.experiments prepare .\experiment.json` 
 
 1. **Importer integrity:** retain focused regressions for a handled write failure and simultaneous identical imports. They verify staging cleanup and atomic publication, but do not simulate abrupt process termination or establish cross-process filesystem behavior.
 2. **Feasibility evidence:** before building product-specific checks, identify the intended eligible products, public/user-supplied licensed sources, and applicable terms for the selected GBP cash comparator. These are external facts; stop if they cannot be substantiated.
-3. **Data-readiness audit:** the separate importer offers scoped `readiness` checks for XLON daily GBP units, sessions and declared bar/cash-rate availability, plus a read-only `normalize` view. The separate `fx-readiness` audit checks declared FX publication and maximum age only at supplied clocks; `fx-view` returns the complete selected observations at those clocks or rejects the view. Generic synthetic fixtures validate these engineering contracts; they do not prove complete event clocks or historical vintages, provide executable FX prices, enable simulation, or close external gates. See the [GBP](campaign-dataset.md#scoped-gbp-daily-readiness-audit) and [FX](campaign-dataset.md#complete-fx-observation-view) contracts. Price-basis truth/action reconciliation, foreign-currency conversion and full accounting remain unsupported/unverified; never fill gaps or infer source facts.
-4. **Accounting contract:** a pure synthetic fill helper now checks ordered GBP-normalized long-only fill events, cash conservation and quantity conservation. It is not a portfolio valuation/accounting system: cash accrual, market marks/equity, distributions/actions, FX, product increments, risk, performance and costs beyond supplied fill fees remain unsupported. Any further accounting implementation must retain explicit action entitlement/payment and cash-rate conventions; no feasibility or performance claim follows from the helper.
-5. **Campaign integration:** only after those prerequisites are independently validated, assess integration and enforcement of the registered candidate budget, adverse-cost selection, and closed-unless-selected holdout. This order does not authorize a campaign run.
+3. **Data-readiness audit:** the separate importer offers scoped `readiness` checks for XLON daily GBP units, sessions and declared bar/cash-rate availability, plus a read-only `normalize` view. The separate `fx-readiness` audit checks declared FX publication and maximum age only at supplied clocks; `fx-view` returns the complete selected observations at those clocks or rejects the view. Generic synthetic fixtures validate these engineering contracts; they do not prove complete event clocks or historical vintages, provide executable FX prices, or close external gates. See the [GBP](campaign-dataset.md#scoped-gbp-daily-readiness-audit) and [FX](campaign-dataset.md#complete-fx-observation-view) contracts. Price-basis truth/action reconciliation and foreign-currency conversion remain unsupported/unverified; never fill gaps or infer source facts.
+4. **Synthetic simulator mechanics:** `investment.simulation.simulate_synthetic_fixture` checks synchronized GBP observations, event-time availability, next-session-open buy-only fills, positive contribution unitization, quantity/minimum handling, and an explicit proportional cost assumption. It is not connected to the campaign importer or any product history, and does not verify caller-supplied input provenance. It omits sales/withdrawals, actions/distributions, cash accrual, FX, taxes, inflation, fixed fees, spreads, slippage and real calendar/execution behavior. Its output is engineering-only and cannot support product returns or close a feasibility gate.
+5. **Accounting contract:** the separate pure fill helper checks ordered GBP-normalized long-only fill events, cash conservation and quantity conservation. It is not a portfolio valuation/accounting system; cash accrual, market marks/equity, distributions/actions, FX, risk, performance and costs beyond supplied fill fees remain unsupported. Any further accounting implementation must retain explicit action entitlement/payment and cash-rate conventions; no feasibility or performance claim follows from the helper.
+6. **Campaign integration:** only after those prerequisites are independently validated, assess integration and enforcement of the registered candidate budget, adverse-cost selection, and closed-unless-selected holdout. This order does not authorize a campaign run.
 
 ### Current public-feasibility screen (2026-11-15)
 
@@ -261,13 +271,14 @@ The existing [`bot.experiments`](../bot/experiments/) runner supports strict JSO
 
 - `prepare --allow-network` fetches through the Alpaca history client. That authenticated/broker data path is outside this campaign's approved boundary.
 - The `bot.campaign_data` CLI validates/snapshots user-supplied daily/weekly product OHLCV, declared price basis and source-specific provenance, explicitly directed GBP-per-unit FX, effective-dated GBP cash rates, and point-in-time corporate-action records. A separate read-only `readiness` profile checks scoped XLON daily GBP units, full requested sessions and declared bar/cash-rate availability without changing importer v1. Readiness reports examples; `normalize` can return a complete declared-as-of GBP daily view. `fx-readiness` checks declared publication and freshness at supplied clocks; `fx-view` returns their complete selected observations without conversion. Neither verifies historical vintages, complete transaction clocks, source facts or executable FX. Units and their evidence are never inferred. A pure synthetic fill helper checks GBP cash and quantity conservation, but does not calculate equity or returns. Synthetic inputs and missing external evidence remain unresolved; adjusted prices, recorded actions, foreign-currency accounting and weekly-only execution are unsupported. The USD minute runner still does not accept or consume these datasets. Source facts, total returns/eligibility, FX transaction-time coverage, costs/tax, cash accrual and combined GBP portfolio accounting remain unverified/unimplemented.
+- The separate `investment.simulation` module is a synthetic-only mechanics harness, not a consumer of the campaign importer. It uses synchronized synthetic GBP opens/closes, buy-only contribution allocation, and an assumed proportional variable cost; it does not implement the complete accounting, data, benchmark, action, cash-interest, tax, or execution model required for product research.
 - Each strategy entry is simulated on flat independent windows. There is no simultaneous combined multi-strategy portfolio/account allocation with one GBP cash ledger, cross-asset risk budget, and continuous compounded equity curve.
 - The runner is USD-capital based and does not model GBP accounting/FX conversion, UK product access, ISA or other wrapper eligibility, investor-specific taxes, product-level charges, or the selected cash comparator.
 - Current implementation limits differ from this campaign's limits: up to 125 trials per strategy and 500 total are allowed by the spec, while this protocol is stricter at 60 total. Selection settings and research risk profiles must be explicit; do not rely on defaults or mutate live configuration to imitate them.
 - Cost stresses are evaluated for finalists/baselines, not every candidate during selection. This does not implement the campaign's requirement for adverse-cost evidence before final confirmation.
 - The runner reserves holdouts before simulation and can evaluate a fixed baseline on holdout when no candidate passes selection. This campaign instead says not to open the holdout if selection fails; the current CLI does not enforce that additional gate.
 
-**Therefore, no performance run can yet answer the agreed GBP portfolio question using the current runner alone.** The campaign-data tools provide ingestion, validation and offline views only; they do not close any outstanding GBP feasibility gate or authorize campaign runs. Further approved data/simulator capabilities or an explicitly narrowed question are required. No backtest or campaign run is authorized by this protocol update.
+**Therefore, no performance run can yet answer the agreed GBP portfolio question using the current runner alone.** The campaign-data tools provide ingestion, validation and offline views only; they do not close any outstanding GBP feasibility gate or authorize campaign runs. Further approved data and integrated simulator capabilities or an explicitly narrowed question are required. No backtest or campaign run is authorized by this protocol update.
 
 ## References and operating guidance
 

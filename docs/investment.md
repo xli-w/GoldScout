@@ -20,9 +20,9 @@ protection eligibility must be verified separately.
 The investor chooses the target allocation. Compare a small fixed set such as
 100% savings, 100% global equities, 80/20 and 60/40 equity/cash, 80/20 and 60/40
 equity/bonds, and 80/10/10 equity/bonds/cash. These are research recipes, not
-proven optima or product recommendations. Keep NatWest's verified current-account
-counterfactual for context, but use a genuinely eligible interest-bearing GBP
-savings alternative in the primary comparison.
+proven optima or product recommendations. Retain NatWest's published 0% current-
+account counterfactual for context, but verify applicable terms; use a genuinely
+eligible interest-bearing GBP savings alternative in the primary comparison.
 
 ## First offline release
 
@@ -139,6 +139,24 @@ No tight ATR stops are imposed on the new passive core. This is not a change to
 legacy stops or a guarantee against losses. Market drawdowns, missing evidence
 and operational failures are different concerns.
 
+### Synthetic simulator mechanics (engineering only)
+
+`investment.simulation.simulate_synthetic_fixture` is a pure, non-CLI test
+harness intended only for caller-supplied synthetic fixtures; it does not verify
+their provenance. It requires synchronized GBP open/close observations whose
+availability equals the event time. It models fixed human-selected product
+weights, positive contributions at a close, buy-only allocation at the next
+session open, quantity increments, minimum notionals, an explicit proportional
+cost assumption, cash conservation, and a flow-neutral unitized curve.
+
+This validates mechanics, not actual returns. The harness is not connected to
+the campaign dataset, investment store, dashboard, broker, or product research.
+Its synthetic label is not evidence that an input's provenance is synthetic.
+It does not model sales/withdrawals, corporate actions, distributions, cash
+interest, FX, taxes, inflation, fixed fees, spreads, slippage, venue calendars,
+or real execution. Its output is explicitly marked as synthetic-only and
+unsupported for product-performance claims. External research gates remain open.
+
 ### Read-only dashboard
 
 Build the existing frontend using the [dashboard setup](dashboard.md), then:
@@ -192,8 +210,9 @@ into an allegedly executable series. A public chart/CSV is not a research licenc
 
 ## Explicit follow-on gates
 
-This release is not the continuous historical GBP research simulator or a broker
-execution adapter. The following remain unsupported/unverified:
+This release includes only a synthetic mechanics harness, not a continuous
+historical GBP product-performance simulator or a broker execution adapter. The
+following remain unsupported/unverified:
 
 - Historical source rights/vintages and full product/action/FX/cash-rate coverage.
 - Executed FX, non-GBP account balances, settlement-specific broker funding.
@@ -204,6 +223,23 @@ execution adapter. The following remain unsupported/unverified:
 - Validated spread/slippage/quote/cost models for executable proposals.
 - Exact venue permissions and uniquely evidenced ambiguous-order recovery.
 - Licensed historical portfolio comparisons and the optional active challenger.
+
+### Continuation order
+
+The bounded recorded-accounting release is complete. The next portfolio-research
+phase is **feasibility and simulator engineering**, not a return run: first close
+the product/account, cash-terms, historical-data-rights/vintage, action/FX,
+cost/tax, and selection-protocol gates in the
+[research protocol](backtesting-protocol.md). Synthetic-only tests may validate a
+future continuous simulator's event ordering and conservation, but cannot close
+those external gates or support a portfolio-performance conclusion. Stop if a
+required source or permission is unavailable; retain the useful tracking workflow.
+
+Broker execution is a separate later phase. It requires exact venue/product/
+settlement evidence, durable per-proposal human approval, and uniquely evidenced
+recovery from ambiguous submissions. This plan does not authorize account access,
+orders, credentials, operational migrations, or changes to safety hooks/policies.
+The optional trend challenger follows passive comparison and remains nonessential.
 
 No favourable report is approval to invest. A separately enabled local execution
 CLI would require per-proposal human approval, durable intent, confirmed partial

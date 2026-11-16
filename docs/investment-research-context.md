@@ -24,10 +24,13 @@ history. The 60-candidate ceiling, predeclaration, adverse costs, causal account
 and single-use report-only holdout remain controls for future research. A changed
 mandate cannot erase previously exposed samples.
 
-The current engineering release is offline GBP tracking and export-only proposals,
-not a historical performance campaign. The no-later-flow GBP 1,000 comparison
-remains a primary future research scenario; optional contribution scenarios must
-be separately labelled and matched across benchmarks. Before active research,
+The current engineering release is offline GBP tracking and buy-only export-only
+proposals, not a historical performance campaign or full sell rebalancer. The
+next research phase starts with external feasibility and synthetic-only simulator
+engineering; it must not produce product-performance results until the gates in
+the protocol are met. The no-later-flow GBP 1,000 comparison remains a primary
+future research scenario; optional contribution scenarios must be separately
+labelled and matched across benchmarks. Before active research,
 approve exact improvement/uncertainty criteria relative to passive alternatives;
 never choose thresholds after seeing results. Trading/account access and
 changes to safety policies require separate explicit approval.

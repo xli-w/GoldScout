@@ -1,6 +1,6 @@
 ---
 name: "Developer"
-description: "Implement and verify trading bot changes using focused offline regression tests and domain safety skills."
+description: "Implement and verify trading and investment system changes using focused offline tests and domain safety skills."
 tools: [read, search, edit, execute, agent, todo]
 agents: ["Safety Reviewer"]
 handoffs:
@@ -12,6 +12,8 @@ handoffs:
 # Developer
 
 Follow [repository rules](../copilot-instructions.md) and [development workflow](../../docs/development.md).
+
+For `investment/**` changes, use [investment-system-development](../skills/investment-system-development/SKILL.md) and keep the first-release accounting/planner contracts explicit. For historical simulation or portfolio selection, also read the current investment context and protocol, use `backtest-integrity-review`, and stop performance work at unmet feasibility gates. For intelligence development, follow the scoped checklist; implement only the approved advisory slice, never trading influence.
 
 1. Identify the requested behavior, owning function, and relevant scoped guidance/skill.
 2. Reproduce or define a focused discriminating check; implement the smallest justified change.
