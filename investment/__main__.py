@@ -6,8 +6,9 @@ import sys
 
 from . import InvestmentError
 from .core import clock, replay
-from .service import demo_events, demo_profile, demo_snapshot, proposal_export, report, snapshot
-from .store import import_events, initialize, load_json
+from .service import (demo_events, demo_profile, demo_snapshot, proposal_export, report,
+                      review_status, snapshot)
+from .store import acknowledge_review, import_events, initialize, load_json
 
 
 def main(argv=None, stdout=None, stderr=None, now=None):
@@ -26,6 +27,14 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     for name in ("report", "propose", "export"):
         command = commands.add_parser(name, help="read-only stdout JSON; never executes")
         command.add_argument("--database", required=True)
+    status = commands.add_parser("review-status", help="read-only review clocks and valuation status")
+    status.add_argument("--database", required=True)
+    acknowledge = commands.add_parser("acknowledge-review", help="record a manual review, not an order approval")
+    acknowledge.add_argument("--database", required=True)
+    acknowledge.add_argument("--kind", choices=("monthly", "annual"), required=True)
+    acknowledge.add_argument("--reviewed-revision", type=int, required=True)
+    acknowledge.add_argument("--id", required=True, help="unique, reusable acknowledgement ID")
+    acknowledge.add_argument("--evidence", required=True, help="brief manual review evidence")
     args = parser.parse_args(argv)
     try:
         now = clock(now)
@@ -40,6 +49,13 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             value = snapshot(args.database, now)
         elif args.command == "report":
             value = snapshot(args.database, now)
+        elif args.command == "review-status":
+            value = review_status(args.database, now)
+        elif args.command == "acknowledge-review":
+            acknowledgement = acknowledge_review(args.database, args.id, args.kind,
+                                                  args.reviewed_revision, args.evidence, now)
+            value = {"acknowledgement": acknowledgement,
+                     "review_status": review_status(args.database, now)}
         else:
             value = proposal_export(args.database, now)
         print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout)

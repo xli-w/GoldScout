@@ -15,7 +15,8 @@ accounting and explicit research/broker blockers.
 - Contribution-first planning, monthly review and annual/five-percentage-point
   drift reviews aim to limit unnecessary turnover. Export-only sales can be
   suggested at annual/drift reviews; proposed proceeds do not fund purchases.
-  Review acknowledgements are deferred. No trade is valid.
+  Separate monthly/annual reviews can be acknowledged in the offline CLI;
+  persistent five-point drift remains a trigger. No trade is a valid outcome.
 - GBP contributions are separated from investment gains. External savings are
   not broker buying power; manual inputs are not broker verification.
 - The read-only dashboard includes `/investment` and `/investment-guide`.

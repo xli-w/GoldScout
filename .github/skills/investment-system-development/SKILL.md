@@ -25,6 +25,14 @@ historical simulation/selection, also use
   fund buys. Dashboard routes remain read-only. Proposed notionals do not prove
   fees, settlement, or executable funding. Do not add a broker path as a
   convenience to an accounting change.
+- Manual review acknowledgements are revision-bound, require a complete fresh
+  valuation, and never approve trades or suppress five-point drift. Monthly and
+  annual clocks are separate; an annual review counts as monthly. Preserve cash,
+  holdings, valuation and performance clocks when replaying an acknowledgement.
+- Cash-only confirmations refresh the valuation clock only with exact matching
+  balances for all included accounts. Both kinds of attestation require all prior
+  journal evidence to be available at their clock. They do not prove settlement,
+  custody or unrecorded transactions, and a mismatch is not a correction.
 - Human-selected targets and the fixed comparison set are not optimized by
   historical returns. Do not promise profit, safety, maximum drawdown, or a
   winning allocation.

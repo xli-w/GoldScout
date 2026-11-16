@@ -48,12 +48,14 @@ python -m investment import --events .\events.json --database .\investment.sqlit
 python -m investment report --database .\investment.sqlite3
 python -m investment propose --database .\investment.sqlite3
 python -m investment export --database .\investment.sqlite3
+python -m investment review-status --database .\investment.sqlite3
 ```
 
 `propose` and `export` print the same bound, execution-disabled proposal envelope
 to stdout; they do not write an order or change the database. A human may save
-that output locally. Profile/event paths must contain operator-prepared JSON,
-not broker credentials or operational exports from the legacy engine.
+that output locally. `review-status` is also read-only. Profile/event paths must
+contain operator-prepared JSON, not broker credentials or operational exports
+from the legacy engine.
 Never select the trading/intelligence ledger as investment storage. Store creation
 is explicit; reporting a missing/invalid store does not initialise or repair it.
 
@@ -84,7 +86,7 @@ integer `proposal_ttl_seconds` (1-604,800) and `monthly_contribution_gbp`
 (decimal text; planning metadata only). Product selection may be incomplete for
 tracking, but a missing targeted product blocks funded purchase proposals.
 
-Event input is a JSON array. Every event contains `id`, `type`, `timestamp`,
+Event input is a JSON array. Every account event contains `id`, `type`, `timestamp`,
 `available_at`, `account_id`, `currency` and nonempty `evidence`. Both clocks must
 be timezone-aware; use UTC timestamps such as `"2026-11-15T12:00:00Z"` and record
 when evidence actually became available, not when it would have been convenient.
@@ -101,8 +103,18 @@ is rejected.
 | `dividend` | `product_id`, `amount_gbp` |
 | `mark` | `product_id`, `price_gbp` |
 
-Monetary values, quantities and ratios use plain decimal strings, not JSON
-numbers or exponent notation (at most 15 integer and 8 fractional digits).
+`review_acknowledgement` and `cash_confirmation` are portfolio-wide journal
+records, not account events. A review has `id`, `type`, `timestamp`,
+`available_at`, `evidence`, `review_kind`, `reviewed_revision` and
+`valuation_as_of`; the CLI creates it. A cash confirmation has `id`, `type`,
+`timestamp`, `available_at`, `evidence` and `balances_gbp`. For both records,
+`available_at` must equal `timestamp`. They are not broker statements or proof
+of a trade.
+
+Account-event monetary values, quantities and ratios use plain decimal strings,
+not JSON numbers or exponent notation (at most 15 integer and 8 fractional digits).
+Cash-confirmation balances accept up to 25 integer and 16 fractional digits to
+preserve the exact recorded result of multiplying quantities and prices.
 Funding, quantities, prices and split ratios must be positive; fees may be zero.
 Unknown fields/types and negative cash or short holdings are refused.
 Initial holdings/cash are not profile fields: start empty and import evidenced
@@ -125,8 +137,8 @@ in account/product ID order; this is not tax optimisation. Proposed sale
 proceeds never fund buys in the same proposal. Record actual proceeds before
 considering another purchase and independently verify settlement. Retained
 cash/partial correction and no trade are legitimate outcomes. Review clocks are
-relative to profile inception; persistent reminders have no acknowledgement/reset
-workflow yet. Scheduled contributions are metadata, not spendable cash.
+initially relative to profile inception. Scheduled contributions are metadata,
+not spendable cash.
 
 An external deposit account cannot fund a broker purchase without an actual,
 recorded internal transfer. A transfer suggestion is not an instruction to a bank.
@@ -142,6 +154,75 @@ are estimates based on recorded holdings and marks, not broker-verified
 availability. Future fees, slippage, settlement and venue permissions are not
 verified; a funded proposal is not proof of executable funding. A human must
 recheck those conditions and prices.
+
+### Acknowledging a review
+
+After personally reviewing the current recorded portfolio, obtain the current
+revision and review status with `review-status`. Then record the review in the
+offline CLI, replacing `5` with that exact revision and choosing a unique ID:
+
+```powershell
+python -m investment acknowledge-review --database .\investment.sqlite3 --kind monthly --reviewed-revision 5 --id review-2026-11 --evidence "Manual portfolio review completed"
+```
+
+Choose `annual` instead of `monthly` only when an annual review was actually
+performed. A monthly acknowledgement clears the monthly calendar reminder until
+the next UTC calendar month but does not reset the annual clock. An annual
+acknowledgement resets the annual clock for one year and also counts as the
+monthly review. An anniversary of 29 February falls on 28 February in a
+non-leap year. A drift of at least five percentage points continues to trigger
+review and eligible sales even after acknowledgement.
+
+Acknowledgement is refused unless the reviewed revision is unchanged and the
+recorded common-clock valuation is complete and strictly younger than the
+policy's maximum mark age. The check is repeated while appending the journal
+event, so a concurrent change is refused. Every prior journal event must also
+have been available by the acknowledgement clock. `review-status` reports drift as
+unavailable when valuation is stale or incomplete, or portfolio value is zero.
+Fresh recorded evidence is not independent proof of current broker balances,
+settlement or prices.
+
+Acknowledgements do not change balances, holdings, valuation clocks or returns,
+and do not approve or execute trades. They advance the append-only revision;
+older software that does not understand the new event cannot read that journal.
+Import any earlier-dated account evidence before acknowledging: later journal
+entries cannot predate the acknowledgement. Repeating the same ID, kind,
+reviewed revision and evidence returns the original acknowledgement, including
+after an output failure; reusing the ID for different evidence is refused.
+The dashboard stays read-only and review status/acknowledgement are CLI-only.
+
+### Cash-only valuation confirmation
+
+When there are no holdings, an operator can import a `cash_confirmation` event
+using the ordinary `import` command to refresh the recorded valuation clock
+without changing any money. `balances_gbp` must name **every** included account,
+including zero balances, and every value must exactly match the recorded cash.
+Discrepancies, missing accounts, holdings, delayed evidence and unsupported
+decimal values are refused; this is not a correction or a reconciliation.
+
+For example, after replacing the IDs, amounts, clocks and evidence with actual
+operator-verified facts, a cash-only event file could contain:
+
+```json
+[
+  {
+    "id": "cash-check-example",
+    "type": "cash_confirmation",
+    "timestamp": "2026-11-15T12:00:00Z",
+    "available_at": "2026-11-15T12:00:00Z",
+    "evidence": "Contemporaneous manually checked evidence for both accounts",
+    "balances_gbp": {"broker": "800.00", "savings": "200.00"}
+  }
+]
+```
+
+The common UTC clock must genuinely describe when all the evidenced balances
+were valid and available, and every prior journal event must have been available
+by that clock; do not invent current observations. The confirmation
+is a manual attestation, not independent proof of account balances, protection,
+settlement or undisclosed transactions. If a balance differs, stop rather than
+guessing a correction. With holdings, fresh common-clock price marks remain
+necessary; this cash-only confirmation cannot refresh them.
 
 No tight ATR stops are imposed on the new passive core. This is not a change to
 legacy stops or a guarantee against losses. Market drawdowns, missing evidence

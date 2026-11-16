@@ -3,8 +3,8 @@
 from decimal import Decimal, localcontext
 from datetime import timedelta
 
-from .core import ZERO, clock, fmt, iso, number, replay
-from .planner import plan
+from .core import MAX_EVENTS, ZERO, clock, fmt, iso, number, replay
+from .planner import plan, review_schedule
 from .store import canonical, digest, read
 
 
@@ -22,8 +22,8 @@ LIMITATIONS = [
     "estimated; a human must recheck funding, costs, product suitability and prices.",
     "Broker cash covers estimated purchase notionals only; unknown fees and settlement mean "
     "full funding/executability remains unverified. Scheduled contributions are not spendable cash.",
-    "Monthly reviews use profile inception; review acknowledgements are deferred. "
-    "Proposed sales do not fund purchases; actual settlement is not verified.",
+    "Review acknowledgements are manual records, not trade approvals. Five-point drift "
+    "remains a trigger; proposed sales do not fund purchases or prove settlement.",
 ]
 
 
@@ -56,7 +56,7 @@ def report(ledger, now, source_mode="recorded"):
         if equity is None:
             warnings.append("Incomplete valuation: all nonzero holdings need common-clock marks "
                             "at or after the latest event; equity/gain unavailable.")
-        elif now - as_of > timedelta(seconds=ledger.spec["policy"]["max_mark_age_seconds"]):
+        elif now - as_of >= timedelta(seconds=ledger.spec["policy"]["max_mark_age_seconds"]):
             warnings.append("Stale valuation shown explicitly as-of; proposal blocked.")
         performance = ledger.performance_valid and ledger.units > 0 and equity is not None
         if not performance:
@@ -82,6 +82,30 @@ def report(ledger, now, source_mode="recorded"):
 def snapshot(database, now=None):
     now = clock(now)
     return report(read(database, now), now)
+
+
+def review_status(database, now=None):
+    now = clock(now)
+    ledger = read(database, now)
+    result = report(ledger, now)
+    schedule = review_schedule(ledger, now, result["allocation"])
+    valuation_status = ledger.valuation_status(now)
+    if valuation_status != "fresh":
+        schedule["drift_due"] = None
+    blocked = None
+    if valuation_status != "fresh":
+        blocked = "A complete, fresh recorded valuation is required."
+    elif ledger.revision >= MAX_EVENTS:
+        blocked = "Investment event count has reached its limit."
+    return {
+        "schema_version": 1, "portfolio_id": result["portfolio_id"],
+        "revision": ledger.revision, "generated_at": iso(now),
+        "valuation_as_of": result["as_of"], "valuation_status": valuation_status,
+        "last_monthly_review_at": iso(ledger.monthly_review_at) if ledger.monthly_review_at else None,
+        "last_annual_review_at": iso(ledger.annual_review_at) if ledger.annual_review_at else None,
+        **schedule, "acknowledgement_available": blocked is None,
+        "acknowledgement_blocked_reason": blocked,
+    }
 
 
 def demo_profile(now):

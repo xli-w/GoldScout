@@ -6,6 +6,24 @@ from decimal import Decimal, ROUND_FLOOR
 from .core import ZERO, clock, fmt, iso, number
 
 
+def review_schedule(ledger, now, allocation):
+    created = clock(ledger.spec["created_at"])
+    monthly_anchor = ledger.monthly_review_at or created
+    annual_anchor = ledger.annual_review_at or created
+    monthly = (now.year, now.month) > (monthly_anchor.year, monthly_anchor.month)
+    if annual_anchor.year == 9999:
+        annual = False
+    else:
+        try:
+            anniversary = annual_anchor.replace(year=annual_anchor.year + 1)
+        except ValueError:
+            anniversary = annual_anchor.replace(year=annual_anchor.year + 1, day=28)
+        annual = now >= anniversary
+    drifts = [Decimal(a["drift_pp"]) for a in allocation if a["drift_pp"] is not None]
+    return {"monthly_due": monthly, "annual_due": annual,
+            "drift_due": any(abs(drift) >= 5 for drift in drifts) if drifts else None}
+
+
 def plan(ledger, now, equity, as_of, allocation):
     policy = ledger.spec["policy"]
     base = {"status": "blocked", "reason": "", "expires_at": None, "orders": [],
@@ -18,13 +36,9 @@ def plan(ledger, now, equity, as_of, allocation):
     expires = min(now + timedelta(seconds=policy["proposal_ttl_seconds"]), as_of + maximum)
     if expires <= now:
         return dict(base, reason="Marks expire now; fresh evidence required")
-    created = clock(ledger.spec["created_at"])
-    monthly = (now.year, now.month) > (created.year, created.month)
-    annual = now >= created.replace(year=created.year + 1) if not (
-        created.month == 2 and created.day == 29) else (
-            now >= created.replace(year=created.year + 1, day=28))
-    drift = any(abs(Decimal(a["drift_pp"])) >= 5 for a in allocation
-                if a["drift_pp"] is not None)
+    schedule = review_schedule(ledger, now, allocation)
+    monthly, annual, drift = (schedule["monthly_due"], schedule["annual_due"],
+                              schedule["drift_due"])
     base.update(status="no_trade", expires_at=iso(expires),
                 reason="Within human targets; no funded incremental purchase")
     if equity <= 0:

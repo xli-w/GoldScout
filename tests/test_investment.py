@@ -20,8 +20,8 @@ from investment.__main__ import main
 from investment.core import iso, replay
 from investment.simulation import simulate_synthetic_fixture
 from investment.service import (demo_events, demo_profile, demo_snapshot, proposal_export,
-                                report, snapshot)
-from investment.store import import_events, initialize, load_json, read
+                                report, review_status, snapshot)
+from investment.store import acknowledge_review, import_events, initialize, load_json, read
 from investment import store
 
 
@@ -1204,6 +1204,406 @@ class InvestmentTests(unittest.TestCase):
             ev("larger", "contribution", amount_gbp="100")]
         rejected = report(replay(minimum, minimum_values, NOW), NOW)
         self.assertEqual(rejected["proposal"]["status"], "no_trade")
+
+    def test_annual_review_acknowledgement_resets_calendar_trigger(self):
+        self.init_demo()
+        annual = NOW.replace(year=2027)
+        import_events(self.database, [
+            ev("annual-mark", "mark", at=annual, product_id="equity", price_gbp="11")
+        ], annual)
+        before = snapshot(self.database, annual)
+        self.assertEqual(before["proposal"]["orders"][0]["side"], "sell")
+        acknowledgement = {
+            "id": "annual-review", "type": "review_acknowledgement",
+            "timestamp": iso(annual), "available_at": iso(annual),
+            "evidence": "synthetic manual review", "review_kind": "annual",
+            "reviewed_revision": before["revision"], "valuation_as_of": before["as_of"],
+        }
+        import_events(self.database, [acknowledgement], annual)
+        after = snapshot(self.database, annual)
+        self.assertEqual(after["proposal"]["orders"], [])
+        self.assertEqual(after["revision"], before["revision"] + 1)
+        for field in ("as_of", "equity_gbp", "gain_gbp", "twr_pct", "max_drawdown_pct"):
+            self.assertEqual(after[field], before[field])
+
+    def test_monthly_and_annual_review_clocks_are_independent(self):
+        self.init_demo()
+        monthly = NOW.replace(month=2)
+        import_events(self.database, [
+            ev("feb-mark", "mark", at=monthly, product_id="equity", price_gbp="10"),
+            ev("feb-contribution", "contribution", at=monthly, amount_gbp="40"),
+        ], monthly)
+        status = review_status(self.database, monthly)
+        self.assertTrue(status["monthly_due"])
+        self.assertFalse(status["annual_due"])
+        self.assertFalse(status["drift_due"])
+        self.assertEqual(snapshot(self.database, monthly)["proposal"]["orders"][0]["quantity"], "3")
+        acknowledge_review(self.database, "feb-review", "monthly", status["revision"],
+                           "reviewed synthetic allocation", monthly)
+        status = review_status(self.database, monthly)
+        self.assertFalse(status["monthly_due"])
+        self.assertIsNone(status["last_annual_review_at"])
+        self.assertEqual(snapshot(self.database, monthly)["proposal"]["orders"], [])
+
+        next_month = NOW.replace(month=3)
+        import_events(self.database, [
+            ev("mar-mark", "mark", at=next_month, product_id="equity", price_gbp="10")
+        ], next_month)
+        self.assertTrue(review_status(self.database, next_month)["monthly_due"])
+        annual = NOW.replace(year=2027)
+        import_events(self.database, [
+            ev("year-mark", "mark", at=annual, product_id="equity", price_gbp="10")
+        ], annual)
+        status = review_status(self.database, annual)
+        self.assertTrue(status["annual_due"])
+        acknowledge_review(self.database, "year-review", "annual", status["revision"],
+                           "reviewed synthetic annual allocation", annual)
+        status = review_status(self.database, annual)
+        self.assertFalse(status["annual_due"])
+        self.assertFalse(status["monthly_due"])
+        self.assertEqual(status["last_annual_review_at"], iso(annual))
+        self.assertEqual(status["last_monthly_review_at"], iso(annual))
+
+        later = annual.replace(month=2)
+        import_events(self.database, [
+            ev("next-feb-mark", "mark", at=later, product_id="equity", price_gbp="10")
+        ], later)
+        acknowledge_review(self.database, "next-feb-review", "monthly",
+                           review_status(self.database, later)["revision"],
+                           "reviewed next month", later)
+        anniversary = annual.replace(year=2028)
+        self.assertFalse(review_status(self.database, anniversary - timedelta(microseconds=1))
+                         ["annual_due"])
+        self.assertTrue(review_status(self.database, anniversary)["annual_due"])
+
+    def test_acknowledgement_never_suppresses_five_point_drift(self):
+        spec = deepcopy(self.spec)
+        spec["policy"]["targets"] = {"equity": "75", "bond": "0", "cash": "25"}
+        initialize(self.database, spec, NOW)
+        import_events(self.database, demo_events(NOW), NOW)
+        review_time = NOW + timedelta(hours=1)
+        before = snapshot(self.database, review_time)
+        self.assertEqual(before["proposal"]["orders"][0]["quantity"], "5")
+        self.assertTrue(review_status(self.database, review_time)["drift_due"])
+        acknowledge_review(self.database, "drift-review", "annual", before["revision"],
+                           "reviewed but did not trade", review_time)
+        after = snapshot(self.database, review_time)
+        status = review_status(self.database, review_time)
+        self.assertTrue(status["drift_due"])
+        self.assertFalse(status["monthly_due"])
+        self.assertFalse(status["annual_due"])
+        self.assertEqual(after["proposal"]["orders"], before["proposal"]["orders"])
+        self.assertFalse(after["proposal"]["execution_enabled"])
+
+    def test_review_acknowledgement_requires_fresh_complete_unchanged_evidence(self):
+        self.init_demo()
+        just_fresh = NOW + timedelta(days=1) - timedelta(microseconds=1)
+        expiry = NOW + timedelta(days=1)
+        self.assertTrue(review_status(self.database, just_fresh)["acknowledgement_available"])
+        stale = review_status(self.database, expiry)
+        self.assertEqual(stale["valuation_status"], "stale")
+        self.assertIsNone(stale["drift_due"])
+        self.assertFalse(stale["acknowledgement_available"])
+        original = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "complete, fresh"):
+            acknowledge_review(self.database, "stale-review", "monthly", 4, "test", expiry)
+        with self.assertRaisesRegex(InvestmentError, "revision changed"):
+            acknowledge_review(self.database, "wrong-revision", "monthly", 3, "test", NOW)
+        self.assertEqual(self.database.read_bytes(), original)
+
+        incomplete_path = Path(self.temporary.name) / "incomplete.sqlite3"
+        initialize(incomplete_path, self.spec, NOW)
+        import_events(incomplete_path, [
+            ev("fund-incomplete", "contribution", amount_gbp="100"),
+            ev("unmarked-buy", "buy", product_id="equity", quantity="10",
+               price_gbp="10", fee_gbp="0"),
+        ], NOW)
+        incomplete = review_status(incomplete_path, NOW)
+        self.assertEqual(incomplete["valuation_status"], "incomplete")
+        self.assertIsNone(incomplete["drift_due"])
+        with self.assertRaisesRegex(InvestmentError, "complete, fresh"):
+            acknowledge_review(incomplete_path, "incomplete-review", "monthly", 2, "test", NOW)
+        self.assertEqual(read(incomplete_path, NOW).revision, 2)
+
+    def test_cash_only_confirmation_refreshes_review_without_changing_money(self):
+        spec = deepcopy(self.spec)
+        spec["products"] = []
+        spec["policy"]["targets"] = {"equity": "0", "bond": "0", "cash": "100"}
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [
+            ev("broker-funds", "contribution", amount_gbp="800"),
+            ev("bank-funds", "contribution", account="savings", amount_gbp="200"),
+        ], NOW)
+        review_time = NOW + timedelta(days=400)
+        before = snapshot(self.database, review_time)
+        self.assertEqual(review_status(self.database, review_time)["valuation_status"], "stale")
+        confirmation = {
+            "id": "cash-confirmation", "type": "cash_confirmation",
+            "timestamp": iso(review_time), "available_at": iso(review_time),
+            "evidence": "synthetic contemporaneous cash evidence",
+            "balances_gbp": {"broker": "800.00", "savings": "200"},
+        }
+        import_events(self.database, [confirmation], review_time)
+        after = snapshot(self.database, review_time)
+        self.assertEqual(after["as_of"], iso(review_time))
+        for field in ("accounts", "equity_gbp", "net_contributions_gbp", "gain_gbp",
+                      "twr_pct", "max_drawdown_pct"):
+            self.assertEqual(after[field], before[field])
+        self.assertTrue(review_status(self.database, review_time)["acknowledgement_available"])
+        acknowledge_review(self.database, "cash-annual-review", "annual", after["revision"],
+                           "synthetic cash review", review_time)
+        self.assertFalse(review_status(self.database, review_time)["annual_due"])
+
+    def test_cash_confirmation_rejects_missing_discrepant_or_late_evidence(self):
+        spec = deepcopy(self.spec)
+        spec["products"] = []
+        spec["policy"]["targets"] = {"equity": "0", "bond": "0", "cash": "100"}
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [
+            ev("broker-funds", "contribution", amount_gbp="800"),
+            ev("bank-funds", "contribution", account="savings", amount_gbp="200"),
+        ], NOW)
+        later = NOW + timedelta(days=2)
+        confirmation = {
+            "id": "cash-check", "type": "cash_confirmation", "timestamp": iso(later),
+            "available_at": iso(later), "evidence": "synthetic",
+            "balances_gbp": {"broker": "800", "savings": "200"},
+        }
+        cases = [
+            {"balances_gbp": {"broker": "800"}},
+            {"balances_gbp": {"broker": "800", "savings": "199.99"}},
+            {"balances_gbp": {"broker": "800", "savings": "NaN"}},
+            {"balances_gbp": {"broker": "800", "savings": "-1"}},
+            {"balances_gbp": {"broker": "800", "savings": 200}},
+            {"available_at": iso(later + timedelta(seconds=1))},
+            {"account_id": "broker"},
+        ]
+        original = self.database.read_bytes()
+        for change in cases:
+            with self.subTest(change=change), self.assertRaises(InvestmentError):
+                import_events(self.database, [dict(confirmation, **change)], later + timedelta(seconds=1))
+            self.assertEqual(self.database.read_bytes(), original)
+        import_events(self.database, [confirmation], later)
+        self.assertEqual(import_events(self.database, [confirmation], later), 3)
+        conflicting = dict(confirmation, balances_gbp={"broker": "800", "savings": "201"})
+        with self.assertRaisesRegex(InvestmentError, "Conflicting duplicate"):
+            import_events(self.database, [conflicting], later)
+        ledger = replay(spec, [
+            ev("broker-funds", "contribution", amount_gbp="800"),
+            ev("bank-funds", "contribution", account="savings", amount_gbp="200"),
+            confirmation,
+        ], later)
+        confirmation["balances_gbp"]["savings"] = "201"
+        with self.assertRaisesRegex(InvestmentError, "Conflicting duplicate"):
+            ledger.apply(confirmation, later)
+
+        held_path = Path(self.temporary.name) / "held.sqlite3"
+        initialize(held_path, self.spec, NOW)
+        import_events(held_path, demo_events(NOW), NOW)
+        held_confirmation = dict(confirmation, balances_gbp={"broker": "0", "savings": "200"})
+        with self.assertRaisesRegex(InvestmentError, "cash-only"):
+            import_events(held_path, [held_confirmation], later)
+        self.assertEqual(read(held_path, later).revision, 4)
+
+    def test_cash_confirmation_preserves_exact_recorded_fill_precision(self):
+        spec = deepcopy(self.spec)
+        spec["products"][0]["quantity_increment"] = "0.00000001"
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [
+            ev("fund-small", "contribution", amount_gbp="1"),
+            ev("tiny-buy", "buy", product_id="equity", quantity="0.00000001",
+               price_gbp="0.00000001", fee_gbp="0"),
+            ev("tiny-sell", "sell", product_id="equity", quantity="0.00000001",
+               price_gbp="0.00000002", fee_gbp="0"),
+        ], NOW)
+        self.assertEqual(snapshot(self.database, NOW)["accounts"][0]["cash_gbp"],
+                         "1.0000000000000001")
+        later = NOW + timedelta(days=2)
+        import_events(self.database, [{
+            "id": "precise-confirmation", "type": "cash_confirmation",
+            "timestamp": iso(later), "available_at": iso(later), "evidence": "synthetic",
+            "balances_gbp": {"broker": "1.0000000000000001", "savings": "0"},
+        }], later)
+        result = snapshot(self.database, later)
+        self.assertEqual(result["accounts"][0]["cash_gbp"], "1.0000000000000001")
+        self.assertEqual(result["as_of"], iso(later))
+
+    def test_failed_cash_confirmation_commit_does_not_refresh_valuation(self):
+        spec = deepcopy(self.spec)
+        spec["products"] = []
+        spec["policy"]["targets"] = {"equity": "0", "bond": "0", "cash": "100"}
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [
+            ev("fund", "contribution", amount_gbp="100"),
+        ], NOW)
+        later = NOW + timedelta(days=2)
+        confirmation = {
+            "id": "cash-check", "type": "cash_confirmation", "timestamp": iso(later),
+            "available_at": iso(later), "evidence": "synthetic",
+            "balances_gbp": {"broker": "100", "savings": "0"},
+        }
+        actual_digest = store.state_digest
+
+        def fail_commit_record(ledger):
+            if ledger.revision == 2:
+                raise sqlite3.OperationalError("Injected commit record failure")
+            return actual_digest(ledger)
+
+        with patch("investment.store.state_digest", side_effect=fail_commit_record):
+            with self.assertRaises(InvestmentError):
+                import_events(self.database, [confirmation], later)
+        self.assertEqual(snapshot(self.database, later)["as_of"], iso(NOW))
+        self.assertEqual(read(self.database, later).revision, 1)
+        self.assertEqual(review_status(self.database, later)["valuation_status"], "stale")
+        import_events(self.database, [confirmation], later)
+        self.assertEqual(snapshot(self.database, later)["as_of"], iso(later))
+
+    def test_review_and_cash_confirmation_cannot_use_late_prior_evidence(self):
+        initialize(self.database, self.spec, NOW)
+        known_later = NOW + timedelta(hours=3)
+        current = NOW + timedelta(hours=4)
+        funding = ev("delayed-funding", "contribution", amount_gbp="100")
+        funding["available_at"] = iso(known_later)
+        import_events(self.database, [funding], current)
+        premature = NOW + timedelta(hours=1)
+        confirmation = {
+            "id": "early-cash", "type": "cash_confirmation", "timestamp": iso(premature),
+            "available_at": iso(premature), "evidence": "synthetic",
+            "balances_gbp": {"broker": "100", "savings": "0"},
+        }
+        review = {
+            "id": "early-review", "type": "review_acknowledgement",
+            "timestamp": iso(premature), "available_at": iso(premature), "evidence": "synthetic",
+            "review_kind": "monthly", "reviewed_revision": 1, "valuation_as_of": iso(NOW),
+        }
+        for value in (confirmation, review):
+            with self.subTest(kind=value["type"]), self.assertRaises(InvestmentError):
+                import_events(self.database, [value], current)
+            self.assertEqual(read(self.database, current).revision, 1)
+        confirmation.update(id="current-cash", timestamp=iso(current), available_at=iso(current))
+        import_events(self.database, [confirmation], current)
+        acknowledge_review(self.database, "current-review", "monthly", 2, "synthetic", current)
+        self.assertEqual(review_status(self.database, current)["revision"], 3)
+
+    def test_review_retry_is_idempotent_and_preserves_accounting_clocks(self):
+        self.init_demo()
+        reviewed = NOW + timedelta(hours=1)
+        before = snapshot(self.database, reviewed)
+        receipt = acknowledge_review(self.database, "manual-review", "monthly", 4,
+                                     "synthetic review evidence", reviewed)
+        after = snapshot(self.database, reviewed)
+        for field in ("as_of", "equity_gbp", "gain_gbp", "twr_pct", "max_drawdown_pct"):
+            self.assertEqual(after[field], before[field])
+        self.assertEqual(receipt["valuation_as_of"], iso(NOW))
+        retry = acknowledge_review(self.database, "manual-review", "monthly", 4,
+                                   "synthetic review evidence", reviewed + timedelta(hours=1))
+        self.assertEqual(retry, receipt)
+        self.assertEqual(read(self.database, reviewed + timedelta(hours=1)).revision, 5)
+        with self.assertRaisesRegex(InvestmentError, "Conflicting duplicate"):
+            acknowledge_review(self.database, "manual-review", "annual", 4,
+                               "synthetic review evidence", reviewed)
+        with self.assertRaisesRegex(InvestmentError, "timestamp ordered"):
+            import_events(self.database, [
+                ev("backdated", "contribution", at=NOW + timedelta(minutes=30), amount_gbp="1")
+            ], reviewed)
+        self.assertEqual(read(self.database, reviewed).revision, 5)
+        later = NOW + timedelta(hours=2)
+        financial_events = [
+            ev("later-mark", "mark", at=later, product_id="equity", price_gbp="12.5"),
+            ev("later-flow", "contribution", at=later, amount_gbp="600"),
+        ]
+        import_events(self.database, financial_events, later)
+        with_review = snapshot(self.database, later)
+        without_review = report(replay(self.spec, demo_events(NOW) + financial_events, later), later)
+        for field in ("as_of", "equity_gbp", "gain_gbp", "twr_pct", "max_drawdown_pct"):
+            self.assertEqual(with_review[field], without_review[field])
+
+    def test_imported_review_cannot_bypass_revision_or_valuation_checks(self):
+        self.init_demo()
+        review = {
+            "id": "manual-review", "type": "review_acknowledgement",
+            "timestamp": iso(NOW), "available_at": iso(NOW), "evidence": "synthetic",
+            "review_kind": "monthly", "reviewed_revision": 4, "valuation_as_of": iso(NOW),
+        }
+        for change in ({"reviewed_revision": 3}, {"reviewed_revision": True},
+                       {"valuation_as_of": iso(NOW - timedelta(seconds=1))},
+                       {"available_at": iso(NOW + timedelta(seconds=1))},
+                       {"review_kind": "drift"}, {"account_id": "broker"}):
+            with self.subTest(change=change), self.assertRaises(InvestmentError):
+                import_events(self.database, [dict(review, **change)], NOW)
+            self.assertEqual(read(self.database, NOW).revision, 4)
+
+    def test_review_anniversary_for_leap_day_is_february_28(self):
+        leap_day = datetime(2024, 2, 29, 12, tzinfo=timezone.utc)
+        initialize(self.database, demo_profile(leap_day), leap_day)
+        import_events(self.database, demo_events(leap_day), leap_day)
+        acknowledge_review(self.database, "leap-review", "annual", 4, "synthetic", leap_day)
+        anniversary = datetime(2025, 2, 28, 12, tzinfo=timezone.utc)
+        self.assertFalse(review_status(self.database, anniversary - timedelta(microseconds=1))
+                         ["annual_due"])
+        self.assertTrue(review_status(self.database, anniversary)["annual_due"])
+
+    def test_review_revision_race_and_failed_commit_do_not_record_acknowledgement(self):
+        self.init_demo()
+        review_time = NOW + timedelta(hours=1)
+        actual_import = store.import_events
+
+        def concurrent_import(database, values, now):
+            actual_import(database, [
+                ev("concurrent", "contribution", at=review_time, amount_gbp="1")
+            ], now)
+            return actual_import(database, values, now)
+
+        with patch("investment.store.import_events", side_effect=concurrent_import):
+            with self.assertRaisesRegex(InvestmentError, "revision changed"):
+                acknowledge_review(self.database, "raced-review", "monthly", 4, "test", review_time)
+        ledger = read(self.database, review_time)
+        self.assertEqual(ledger.revision, 5)
+        self.assertNotIn("raced-review", ledger.ids)
+
+        import_events(self.database, [
+            ev("fresh-after-race", "mark", at=review_time, product_id="equity", price_gbp="10")
+        ], review_time)
+        actual_connect = store._connect
+
+        def deny_commit(database, readonly):
+            connection = actual_connect(database, readonly)
+            if not readonly:
+                def authorizer(action, arg1, arg2, database_name, trigger):
+                    if action == sqlite3.SQLITE_TRANSACTION and arg1 == "COMMIT":
+                        return sqlite3.SQLITE_DENY
+                    return sqlite3.SQLITE_OK
+                connection.set_authorizer(authorizer)
+            return connection
+
+        with patch("investment.store._connect", side_effect=deny_commit):
+            with self.assertRaises(InvestmentError):
+                acknowledge_review(self.database, "commit-review", "monthly", 6, "test", review_time)
+        self.assertEqual(read(self.database, review_time).revision, 6)
+        self.assertIsNone(review_status(self.database, review_time)["last_monthly_review_at"])
+        acknowledge_review(self.database, "commit-review", "monthly", 6, "test", review_time)
+        self.assertEqual(read(self.database, review_time).revision, 7)
+
+    def test_review_cli_uses_explicit_revision_and_retries_after_output_failure(self):
+        self.init_demo()
+        status_output = io.StringIO()
+        self.assertEqual(main(["review-status", "--database", str(self.database)],
+                              stdout=status_output, now=NOW), 0)
+        self.assertEqual(json.loads(status_output.getvalue())["revision"], 4)
+        arguments = ["acknowledge-review", "--database", str(self.database), "--kind", "monthly",
+                     "--reviewed-revision", "4", "--id", "cli-review",
+                     "--evidence", "synthetic manual review"]
+        broken = io.StringIO()
+        with patch.object(broken, "write", side_effect=OSError("Injected output failure")):
+            with self.assertRaises(OSError):
+                main(arguments, stdout=broken, now=NOW)
+        self.assertEqual(read(self.database, NOW).revision, 5)
+        output = io.StringIO()
+        self.assertEqual(main(arguments, stdout=output, now=NOW + timedelta(minutes=1)), 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["acknowledgement"]["timestamp"], iso(NOW))
+        self.assertEqual(result["review_status"]["revision"], 5)
+        self.assertFalse(result["review_status"]["monthly_due"])
 
     def test_sell_rebalance_waits_for_recorded_proceeds_before_buying(self):
         spec = deepcopy(self.spec)

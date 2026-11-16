@@ -9,6 +9,7 @@ from . import InvestmentError
 MAX_EVENTS = 10000
 MAX_TEXT = 200
 DECIMAL = re.compile(r"(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,8})?\Z")
+RECORDED_BALANCE = re.compile(r"(?:0|[1-9][0-9]{0,24})(?:\.[0-9]{1,16})?\Z")
 ZERO = Decimal(0)
 
 
@@ -124,6 +125,34 @@ EVENT_FIELDS = {
 
 
 def event(value, spec, now):
+    if isinstance(value, dict) and value.get("type") == "cash_confirmation":
+        fields(value, ("id", "type", "timestamp", "available_at", "evidence", "balances_gbp"))
+        text(value["id"])
+        text(value["evidence"])
+        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
+            raise InvestmentError("Cash confirmation requires a contemporaneous evidence clock")
+        balances = value["balances_gbp"]
+        if not isinstance(balances, dict) or set(balances) != {a["id"] for a in spec["accounts"]}:
+            raise InvestmentError("Cash confirmation requires every included account")
+        if any(not isinstance(amount, str) or not RECORDED_BALANCE.fullmatch(amount)
+               for amount in balances.values()):
+            raise InvestmentError("Invalid exact recorded cash balance")
+        return value
+    if isinstance(value, dict) and value.get("type") == "review_acknowledgement":
+        fields(value, ("id", "type", "timestamp", "available_at", "evidence",
+                       "review_kind", "reviewed_revision", "valuation_as_of"))
+        text(value["id"])
+        text(value["evidence"])
+        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        if (timestamp < clock(spec["created_at"]) or available != timestamp or available > now or
+                clock(value["valuation_as_of"]) > timestamp):
+            raise InvestmentError("Invalid review or valuation clock")
+        if value["review_kind"] not in ("monthly", "annual"):
+            raise InvestmentError("Review kind must be monthly or annual")
+        if type(value["reviewed_revision"]) is not int or not 0 <= value["reviewed_revision"] < MAX_EVENTS:
+            raise InvestmentError("Invalid reviewed revision")
+        return value
     if not isinstance(value, dict) or value.get("type") not in EVENT_FIELDS:
         raise InvestmentError("Unsupported operation; corrections, FX and other actions refused")
     fields(value, ("id", "type", "account_id", "timestamp", "available_at", "currency",
@@ -175,6 +204,10 @@ class Ledger:
         self.peak = Decimal(1)
         self.unit_price = Decimal(1)
         self.drawdown = ZERO
+        self.monthly_review_at = None
+        self.annual_review_at = None
+        self.latest_available_at = self.last_time
+        self.has_portfolio_attestation = False
 
     def valuation(self, timestamp=None):
         total = sum(self.cash.values(), ZERO)
@@ -197,6 +230,15 @@ class Ledger:
         if as_of < self.last_time:
             return None, None
         return total, as_of
+
+    def valuation_status(self, timestamp):
+        total, as_of = self.valuation()
+        if total is None or as_of is None:
+            return "incomplete"
+        maximum = timedelta(seconds=self.spec["policy"]["max_mark_age_seconds"])
+        if as_of > timestamp or timestamp - as_of >= maximum:
+            return "stale"
+        return "fresh"
 
     def checkpoint(self, timestamp):
         total, _ = self.valuation(timestamp)
@@ -230,9 +272,39 @@ class Ledger:
                 raise InvestmentError("Conflicting duplicate event")
             return False
         timestamp = clock(value["timestamp"])
-        if timestamp < self.last_time:
+        if timestamp < max(self.last_time, self.monthly_review_at or self.last_time):
             raise InvestmentError("Events must be timestamp ordered; no corrections")
-        account, kind = value["account_id"], value["type"]
+        kind = value["type"]
+        if kind in ("cash_confirmation", "review_acknowledgement") and self.latest_available_at > timestamp:
+            raise InvestmentError("Prior evidence was not available at the attestation clock")
+        if kind == "cash_confirmation":
+            if any(quantity > 0 for quantity in self.holdings.values()):
+                raise InvestmentError("Cash confirmation requires a cash-only portfolio")
+            if any(Decimal(value["balances_gbp"][account]) != balance
+                   for account, balance in self.cash.items()):
+                raise InvestmentError("Cash confirmation disagrees with recorded balances")
+            self.ids[value["id"]] = dict(value, balances_gbp=value["balances_gbp"].copy())
+            self.revision += 1
+            self.last_time = timestamp
+            self.latest_available_at = timestamp
+            self.has_portfolio_attestation = True
+            return True
+        if kind == "review_acknowledgement":
+            _, as_of = self.valuation()
+            if value["reviewed_revision"] != self.revision:
+                raise InvestmentError("Reviewed revision changed; review the current snapshot")
+            if (self.valuation_status(timestamp) != "fresh" or
+                    as_of != clock(value["valuation_as_of"])):
+                raise InvestmentError("Review requires the same complete, fresh recorded valuation")
+            self.monthly_review_at = timestamp
+            if value["review_kind"] == "annual":
+                self.annual_review_at = timestamp
+            self.ids[value["id"]] = value.copy()
+            self.revision += 1
+            self.latest_available_at = timestamp
+            self.has_portfolio_attestation = True
+            return True
+        account = value["account_id"]
         key = (account, value.get("product_id"))
         amount = number(value["amount_gbp"]) if "amount_gbp" in value else ZERO
         before, _ = self.valuation(timestamp)
@@ -285,6 +357,7 @@ class Ledger:
         self.ids[value["id"]] = value.copy()
         self.revision += 1
         self.last_time = timestamp
+        self.latest_available_at = max(self.latest_available_at, clock(value["available_at"]))
         if kind != "mark":
             total, _ = self.valuation(timestamp)
             self.observe(total)
@@ -309,6 +382,9 @@ def replay(spec, events, now=None):
                         raise InvestmentError("Conflicting duplicate event")
                     continue
                 timestamp = clock(value.get("timestamp")) if isinstance(value, dict) else None
+                if isinstance(value, dict) and value.get("type") == "review_acknowledgement":
+                    ledger.apply(value, now)
+                    continue
                 if previous is not None and timestamp != previous:
                     ledger.checkpoint(previous)
                 ledger.apply(value, now)

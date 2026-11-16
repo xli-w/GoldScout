@@ -8,7 +8,7 @@ from unittest.mock import patch
 from dashboard.app import create_app
 from fastapi.testclient import TestClient
 from investment.service import demo_events, demo_profile, demo_snapshot, snapshot
-from investment.store import import_events, initialize
+from investment.store import acknowledge_review, import_events, initialize
 from test_dashboard_api import MemoryEventLoop
 
 
@@ -73,6 +73,23 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual([(order["side"], order["quantity"])
                               for order in proposal["orders"]], [("sell", "20")])
             self.assertFalse(proposal["execution_enabled"])
+            self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
+                                         headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_acknowledgement_is_visible_but_dashboard_remains_read_only(self):
+        initialize(self.path, demo_profile(self.now), self.now)
+        import_events(self.path, demo_events(self.now), self.now)
+        acknowledge_review(self.path, "review", "monthly", 4, "synthetic review", self.now)
+        expected = snapshot(self.path, self.now)
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), expected)
+            self.assertEqual(response.json()["revision"], 5)
+            self.assertTrue(any("not trade approvals" in item
+                                for item in response.json()["limitations"]))
             self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
                                          headers={"Origin": "http://127.0.0.1"}).status_code, 405)
         self.assertEqual(self.path.read_bytes(), original)

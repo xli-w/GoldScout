@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 
 from . import InvestmentError
-from .core import MAX_EVENTS, clock, fmt, iso, profile, replay
+from .core import MAX_EVENTS, clock, fmt, iso, profile, replay, text
 
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_DATABASE_BYTES = 32 * 1024 * 1024
@@ -74,6 +74,13 @@ def state_digest(ledger):
         "unit_price": fmt(ledger.unit_price), "peak": fmt(ledger.peak),
         "drawdown": fmt(ledger.drawdown), "performance_valid": ledger.performance_valid,
     }
+    if ledger.monthly_review_at is not None:
+        value["reviews"] = {
+            "monthly": iso(ledger.monthly_review_at),
+            "annual": iso(ledger.annual_review_at) if ledger.annual_review_at else None,
+        }
+    if ledger.has_portfolio_attestation:
+        value["latest_available_at"] = iso(ledger.latest_available_at)
     return digest(canonical(value))
 
 
@@ -230,3 +237,34 @@ def import_events(database, values, now=None):
                 return ledger.revision
     except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
         raise InvestmentError("Investment import failed; transaction rolled back") from exc
+
+
+def acknowledge_review(database, identifier, kind, reviewed_revision, evidence, now=None):
+    """Append a revision-bound manual review; never execute or approve an order."""
+    now = clock(now)
+    text(identifier)
+    text(evidence)
+    if kind not in ("monthly", "annual"):
+        raise InvestmentError("Review kind must be monthly or annual")
+    if type(reviewed_revision) is not int or not 0 <= reviewed_revision < MAX_EVENTS:
+        raise InvestmentError("Invalid reviewed revision")
+    ledger = read(database, now)
+    previous = ledger.ids.get(identifier)
+    if previous is not None:
+        if (previous["type"] == "review_acknowledgement" and
+                previous["review_kind"] == kind and
+                previous["reviewed_revision"] == reviewed_revision and
+                previous["evidence"] == evidence):
+            return previous.copy()
+        raise InvestmentError("Conflicting duplicate event")
+    if ledger.revision != reviewed_revision:
+        raise InvestmentError("Reviewed revision changed; review the current snapshot")
+    if ledger.valuation_status(now) != "fresh":
+        raise InvestmentError("Review requires a complete, fresh recorded valuation")
+    _, as_of = ledger.valuation()
+    value = {"id": identifier, "type": "review_acknowledgement",
+             "timestamp": iso(now), "available_at": iso(now), "evidence": evidence,
+             "review_kind": kind, "reviewed_revision": reviewed_revision,
+             "valuation_as_of": iso(as_of)}
+    import_events(database, [value], now)
+    return value

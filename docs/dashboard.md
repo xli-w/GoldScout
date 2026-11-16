@@ -6,6 +6,8 @@ The separate [investment path](investment.md) adds `/investment` and
 `/investment-guide`, showing GBP contributions, recorded valuations, sleeve drift
 and export-only allocation proposals. The legacy USD trading screens below remain
 available and unchanged in authority. Neither set of account views places orders.
+Review status and acknowledgement are available only in the offline investment
+CLI; the dashboard neither records reviews nor approves trades.
 
 Use `python -m dashboard --demo` for synthetic investment and legacy previews.
 Use `python -m dashboard --investment-database .\investment.sqlite3` only for an

@@ -27,6 +27,8 @@ test("investment guide remains usable when recorded investment data is unavailab
   await expect(page.getByRole("heading", { name: "Ownership, not short-term prediction" })).toBeVisible();
   await expect(page.getByText(/Losses can be large, prolonged or permanent/)).toBeVisible();
   await expect(page.getByText(/Proposed sale proceeds never fund purchases/)).toBeVisible();
+  await expect(page.getByText(/Review acknowledgements are recorded through the offline CLI/)).toBeVisible();
+  await expect(page.getByText(/five-point drift remains a trigger/)).toBeVisible();
 });
 
 test("investment view displays a non-executable sell proposal", async ({ page }) => {

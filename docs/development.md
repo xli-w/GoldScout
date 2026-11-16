@@ -15,6 +15,8 @@ accounting and export-only buy/sell allocation proposals. Its store is not the
 legacy trading ledger. Use temporary profiles/events/stores for development;
 unsupported FX, entitlement, corrections, historical research and execution must
 remain explicit rather than inferred from the legacy engine.
+Manual review acknowledgements require an unchanged revision and fresh valuation;
+cash-only confirmations must match every recorded account without moving money.
 
 Use [`investment-system-development`](../.github/skills/investment-system-development/SKILL.md)
 for changes under `investment/`; use the research skill as well for simulator
