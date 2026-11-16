@@ -76,6 +76,14 @@ These are development contracts, not a certification of live readiness. Current 
   valuation or resolve a mismatch, and late evidence cannot be used retrospectively.
   Preserve the full bounded observation history in read-only reports; a newer
   matching observation must not hide an older difference or alter recorded cash.
+- A separate operator-owned [staged observation preview](portfolio-automation.md#offline-observation-staging-and-reconciliation)
+  reads a pinned v2 revision and never changes the journal or source file.
+  Bind accounts and products only through explicit operator-evidenced mappings;
+  preserve source, availability, coverage and freshness, including mapping
+  evidence available at the observation clock. Unknown or absent
+  observations are not zero, and same-clock, later-journal or late-available
+  accounting evidence makes a comparison unavailable rather than a guessed
+  historical balance. A declared match does not establish custody or buying power.
 - V2 savings-terms updates are append-only display facts for included deposit
   accounts. Preserve observed/available clocks; they never accrue interest or
   change cash, valuation, performance, or product eligibility.

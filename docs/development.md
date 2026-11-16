@@ -67,8 +67,10 @@ AI/calendar-derived trading features and experiment admission remain planned.
 The optional [local awareness projection](portfolio-automation.md) now supports
 explicit exposure matching, existing dated briefs and operator-configured
 reminders without changing collection, AI or trading authority. Provider sync
-remains discovery only. Tests use synthetic evidence and temporary independent
-investment/intelligence stores.
+remains discovery only. A separate local-file observation preview compares
+operator-staged GBP cash/holdings with a pinned v2 revision; it does not write
+the journal or automatically resolve discrepancies. Tests use synthetic
+evidence and temporary independent investment/intelligence stores.
 A future trading feature requires a separately approved prospective protocol,
 coverage/failure policy and admission evidence; existing exclusions are not
 silently removed by changing the mandate. Private account data is not an AI input.
@@ -105,6 +107,7 @@ The [CI workflow](../.github/workflows/offline-validation.yml) installs the vers
 | GBP campaign import/readiness/accounting contracts | [campaign dataset](../tests/test_campaign_dataset.py), [readiness](../tests/test_campaign_readiness.py), [fill accounting](../tests/test_campaign_accounting.py) |
 | Offline investment accounting, replay and proposals | [investment](../tests/test_investment.py), [read-only investment API](../tests/test_investment_dashboard.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
 | Local portfolio awareness, exposure mapping and reminders | [awareness](../tests/test_investment_awareness.py), [durable brief evidence](../tests/test_intelligence_completion.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
+| Offline observation staging and reconciliation | [reconciliation](../tests/test_investment_reconciliation.py), [opening accounting](../tests/test_investment_opening.py) |
 | Backtest / monitor timing | [backtest](../tests/test_backtest.py), [monitor](../tests/test_review2_monitor.py) |
 | Experiment runner (spec, dataset, selection, holdout) | [experiments](../tests/test_experiments.py) |
 | Intelligence calendar/contracts/wire schema | [intelligence](../tests/test_market_intelligence.py) |

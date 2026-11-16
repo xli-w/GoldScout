@@ -33,6 +33,10 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     awareness.add_argument("--database", required=True)
     awareness.add_argument("--intelligence-database", required=True)
     awareness.add_argument("--awareness-profile", required=True)
+    reconcile = commands.add_parser("reconcile-preview", help="preview local staged observations; never writes")
+    reconcile.add_argument("--database", required=True)
+    reconcile.add_argument("--observations", required=True)
+    reconcile.add_argument("--max-age-seconds", type=int, required=True)
     acknowledge = commands.add_parser("acknowledge-review", help="record a manual review, not an order approval")
     acknowledge.add_argument("--database", required=True)
     acknowledge.add_argument("--kind", choices=("monthly", "annual"), required=True)
@@ -60,6 +64,10 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             from .awareness import awareness_snapshot
             value = awareness_snapshot(args.database, args.intelligence_database,
                                        args.awareness_profile, requested_now)
+        elif args.command == "reconcile-preview":
+            from .reconciliation import preview_observations
+            value = preview_observations(args.database, load_json(args.observations),
+                                         args.max_age_seconds, requested_now)
         elif args.command == "acknowledge-review":
             acknowledgement = acknowledge_review(args.database, args.id, args.kind,
                                                   args.reviewed_revision, args.evidence, requested_now)

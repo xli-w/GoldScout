@@ -695,6 +695,17 @@ calls no model or broker, and has no trading/accounting authority. Existing
 US-focused source coverage and AI launch gates are unchanged. Calendar absence,
 unknown coverage, stale briefs and unmapped exposures remain explicit.
 
+### Offline observation preview
+
+An operator-prepared local JSON observation file can be reconciled against an
+already-opened v2 investment store with `reconcile-preview`. It compares explicit
+GBP cash and long-holding quantities using evidenced local mappings; missing,
+stale, incomplete, unmapped and time-incomparable evidence stays explicit.
+The [observation contract and example](portfolio-automation.md#offline-observation-staging-and-reconciliation)
+describe required timestamps, coverage and scope. The file is the staging
+artifact; the preview writes neither it nor the accounting journal and cannot
+correct discrepancies, infer transactions or access a provider.
+
 ## Explicit follow-on gates
 
 This release includes only a synthetic mechanics harness, not a continuous
@@ -734,12 +745,13 @@ following remain unsupported/unverified:
    products, risk budgets and loss/replenishment/profit-transfer rules before
    implementing policy-dependent proposals or funding experiments. Generic
    equity/bond/cash drift is not sufficient.
-3. **Portfolio awareness — limited local projection implemented; provider sync
-   discovery only:** explicitly configured local exposure matching, existing
-   dated briefs/calendar alerts and review reminders are read-only and do not
-   activate collection or AI. Choose and verify a genuinely read-only provider,
-   account and permission scope before implementing or enabling any sync adapter.
-   No account data is sent to hosted AI. Further scheduled brief generation,
+3. **Portfolio awareness and observation — local projection and offline preview
+   implemented; provider sync discovery only:** explicitly configured local
+   exposure matching, existing dated briefs/calendar alerts, review reminders and
+   operator-prepared GBP observation previews are read-only. Choose and verify a
+   genuinely read-only provider, account, permission scope and data terms before
+   implementing or enabling any sync adapter. No account data is sent to hosted
+   AI. Further scheduled brief generation,
    thesis/watch persistence and broader calendar coverage need separate design
    and validation.
 4. **Evidence and simulator engineering, in parallel with useful tracking:** close

@@ -41,6 +41,9 @@ accounting and explicit research/broker blockers.
   action accrues interest or refreshes portfolio valuation.
 - The v2 read-only report retains cash-observation history for reconciliation;
   it does not apply balance corrections.
+- An offline, operator-prepared [observation preview](docs/portfolio-automation.md#offline-observation-staging-and-reconciliation)
+  compares dated GBP cash and holdings with the v2 journal without changing it.
+  Source completeness, mappings and freshness remain explicit.
 - V2 growth history is derived only from recorded event clocks. Late or
   incomplete valuations remain visible as gaps; the dashboard does not
   interpolate between observations.
