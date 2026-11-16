@@ -28,10 +28,12 @@ historical simulation/selection, also use
   winning allocation.
 - `investment.simulation.simulate_synthetic_fixture` is only an engineering
   harness: synchronized GBP observations, next-session-open buy-only fills,
-  positive contribution flows and an assumed proportional fee. It does not
-  verify input provenance and is not connected to the campaign dataset, store,
-  CLI, or product research. Preserve its synthetic-only output label and do not
-  use it to imply a performance result; callers must not provide real product history.
+  positive contribution flows, an assumed proportional fee, and synthetic
+  split events known by modeled session opens. Split quantities must preserve
+  the declared increment. It does not verify input provenance and is not
+  connected to the campaign dataset, store, CLI, or product research. Preserve
+  its synthetic-only output label and do not use it to imply a performance
+  result; callers must not provide real product history.
 
 ## Change procedure
 

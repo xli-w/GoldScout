@@ -9,13 +9,14 @@ MAX_PRODUCTS = 25
 MAX_SESSIONS = 10000
 MAX_BARS = 250000
 MAX_CONTRIBUTIONS = 10000
+MAX_ACTIONS = 10000
 MAX_VALUE = Decimal("1e24")
 
 LIMITATIONS = [
     "Callers must supply synthetic fixtures; input provenance is not verified. Output is not product-performance evidence or an investment recommendation.",
     "All products must have synchronized GBP open/close observations; calendars and source rights are not verified.",
     "Only positive external contributions and buy-only fixed-target allocation are modeled; no sales or withdrawals.",
-    "Corporate actions, distributions, cash interest, FX, taxes, inflation, fixed fees, spreads and slippage are unsupported.",
+    "Only synthetic splits effective at modeled session opens and known by then are supported; distributions, cash interest, FX, taxes, inflation, fixed fees, spreads and slippage are unsupported.",
     "The proportional variable-cost input is an assumption, not a validated execution-cost estimate.",
     "No CLI, campaign dataset, broker, account, or live investment store is connected.",
 ]
@@ -141,6 +142,57 @@ def _contributions(values, close_times):
     return parsed
 
 
+def _splits(values, products, open_times):
+    if not isinstance(values, (list, tuple)) or len(values) > MAX_ACTIONS:
+        raise InvestmentError(f"At most {MAX_ACTIONS} synthetic split actions are supported")
+    required = ("id", "product_id", "effective_at", "available_at", "numerator", "denominator")
+    parsed = {}
+    identifiers = set()
+    previous_key = None
+    product_clocks = set()
+    for row in values:
+        fields(row, required)
+        identifier = text(row["id"])
+        product_id = text(row["product_id"])
+        if product_id not in products:
+            raise InvestmentError("Split references an unconfigured product")
+        effective_at = clock(row["effective_at"])
+        available_at = clock(row["available_at"])
+        numerator = _bounded(row["numerator"], positive=True)
+        denominator = _bounded(row["denominator"], positive=True)
+        key = (effective_at, product_id, identifier)
+        if identifier in identifiers:
+            raise InvestmentError("Duplicate synthetic action ID")
+        if previous_key is not None and key <= previous_key:
+            raise InvestmentError("Synthetic split actions must be in stable event-time order")
+        if (effective_at not in open_times or available_at > effective_at
+                or (effective_at, product_id) in product_clocks):
+            raise InvestmentError("Split must be known by a unique modeled session open")
+        identifiers.add(identifier)
+        product_clocks.add((effective_at, product_id))
+        parsed.setdefault(effective_at, []).append({
+            "id": identifier,
+            "product_id": product_id,
+            "numerator": numerator,
+            "denominator": denominator,
+        })
+        previous_key = key
+    return parsed
+
+
+def _apply_split(action, products, holdings):
+    product_id = action["product_id"]
+    quantity = holdings.get(product_id, Decimal(0))
+    if quantity <= 0:
+        raise InvestmentError("Synthetic split requires an evidenced positive holding")
+    with localcontext() as context:
+        context.prec = 100
+        adjusted = quantity * action["numerator"] / action["denominator"]
+        if adjusted > MAX_VALUE or adjusted % products[product_id]["increment"]:
+            raise InvestmentError("Split result exceeds bounds or declared quantity increment")
+        holdings[product_id] = adjusted
+
+
 def _buy_at_open(product_id, budget, price, product, fee_rate, cash, holdings):
     if budget <= 0:
         return cash, None, "no_allocation_budget"
@@ -204,7 +256,7 @@ def _allocation_budgets(products, holdings, prices, cash, flow):
 
 
 def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
-                               contributions=(), variable_cost_bps="0"):
+                               contributions=(), variable_cost_bps="0", splits=()):
     """Run a bounded synthetic buy-only portfolio clock for engineering tests.
 
     A close-time contribution creates allocation budgets for the next common
@@ -219,7 +271,9 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     product_state = _products(products, targets)
     sessions = _sessions(bars, product_state)
     close_times = {session["close_at"] for _, session in sessions}
+    open_times = {session["open_at"] for _, session in sessions}
     external_flows = _contributions(contributions, close_times)
+    split_events = _splits(splits, product_state, open_times)
 
     cash = Decimal(0)
     holdings = {}
@@ -234,11 +288,16 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     curve = []
     fill_events = []
     unfilled_allocations = []
+    applied_split_ids = []
 
     with localcontext() as context:
         context.prec = 100
         for index, (session_id, session) in enumerate(sessions):
             session_bars = session["bars"]
+            applied_splits = split_events.get(session["open_at"], [])
+            for action in applied_splits:
+                _apply_split(action, product_state, holdings)
+                applied_split_ids.append(action["id"])
             prices = {product_id: session_bars[product_id]["open"]
                       for product_id in product_state}
             fills = []
@@ -303,6 +362,7 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 "drawdown_pct": fmt(-worst_drawdown * 100),
                 "fees_gbp": fmt(total_fees),
                 "fills": fills,
+                "splits": [action["id"] for action in applied_splits],
                 "unfilled_allocations": unfilled,
             })
 
@@ -331,6 +391,7 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 for product_id, amount in sorted(pending.items()) if amount
             ],
             "fills": fill_events,
+            "splits": applied_split_ids,
             "unfilled_allocations": unfilled_allocations,
         },
         "limitations": LIMITATIONS.copy(),

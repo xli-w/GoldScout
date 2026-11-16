@@ -156,6 +156,82 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(result["curve"][1]["drawdown_pct"], "20")
         self.assertEqual(result["summary"]["max_drawdown_pct"], "20")
 
+    def test_synthetic_simulator_split_preserves_quantity_value_and_flow_return(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "5", "5"),
+        ]
+        split_at = bars[2]["open_at"]
+        contribution_at = bars[1]["close_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars,
+            [{"id": "top-up", "timestamp": contribution_at,
+              "available_at": contribution_at, "amount_gbp": "100"}],
+            splits=[{"id": "two-for-one", "product_id": "equity",
+                     "effective_at": split_at, "available_at": contribution_at,
+                     "numerator": "2", "denominator": "1"}])
+
+        self.assertEqual(result["curve"][1]["equity_gbp"], "1100")
+        self.assertEqual(result["curve"][2]["equity_gbp"], "1100")
+        self.assertEqual(result["curve"][2]["splits"], ["two-for-one"])
+        self.assertEqual(result["curve"][2]["fills"][0]["execution_at"], split_at)
+        self.assertEqual(result["curve"][2]["fills"][0]["price_gbp"], "5")
+        self.assertEqual(result["curve"][2]["fills"][0]["quantity"], "20")
+        self.assertEqual(result["summary"]["holdings"], [
+            {"product_id": "equity", "quantity": "220"},
+        ])
+        self.assertEqual(result["summary"]["twr_pct"], "0")
+
+    def test_synthetic_simulator_rejects_late_off_clock_duplicate_and_fractional_splits(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "5", "5"),
+        ]
+        split_at = bars[2]["open_at"]
+        split = {"id": "split", "product_id": "equity", "effective_at": split_at,
+                 "available_at": split_at, "numerator": "1", "denominator": "3"}
+        invalid_splits = (
+            [dict(split, available_at=iso(NOW + timedelta(days=2, hours=1)))],
+            [dict(split, effective_at=bars[2]["close_at"],
+                  available_at=bars[2]["close_at"])],
+            [split, dict(split, id="second")],
+        )
+        for values in invalid_splits:
+            with self.subTest(values=values), self.assertRaises(InvestmentError):
+                simulate_synthetic_fixture(
+                    "1000", products, {"equity": "100"}, bars, splits=values)
+
+        two_products = [
+            {"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"},
+            {"id": "bond", "quantity_increment": "1", "minimum_notional_gbp": "1"},
+        ]
+        two_product_bars = [
+            self.synthetic_bar(product_id, session, price, price)
+            for session, price in ((0, "10"), (1, "10"), (2, "5"))
+            for product_id in ("equity", "bond")
+        ]
+        out_of_order = [
+            {"id": "equity-split", "product_id": "equity", "effective_at": split_at,
+             "available_at": bars[1]["close_at"], "numerator": "2", "denominator": "1"},
+            {"id": "bond-split", "product_id": "bond", "effective_at": split_at,
+             "available_at": bars[1]["close_at"], "numerator": "2", "denominator": "1"},
+        ]
+        with self.assertRaisesRegex(InvestmentError, "stable event-time order"):
+            simulate_synthetic_fixture(
+                "1000", two_products, {"equity": "50", "bond": "50"},
+                two_product_bars, splits=out_of_order)
+
+        thirds = [dict(split, numerator="1", denominator="3")]
+        with self.assertRaisesRegex(InvestmentError, "quantity increment"):
+            simulate_synthetic_fixture(
+                "1000", products, {"equity": "100"}, bars, splits=thirds)
+
     def test_synthetic_simulator_rejects_future_prices_incomplete_sessions_and_late_flows(self):
         products = [
             {"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"},
