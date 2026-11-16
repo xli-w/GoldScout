@@ -100,6 +100,159 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.database = Path(self.temporary.name) / "investment.sqlite3"
 
+    def test_revision_bound_preview_and_commit_are_retry_safe(self):
+        initialize(self.database, profile(), NOW)
+        original = self.database.read_bytes()
+        preview = store.preview_record(self.database, opening(), NOW)
+        self.assertEqual(preview["revision"], 0)
+        self.assertEqual(preview["after"]["equity_gbp"], "2000")
+        self.assertEqual(self.database.read_bytes(), original)
+        receipt = store.commit_record(self.database, preview, NOW)
+        self.assertEqual(receipt["revision"], 1)
+        self.assertEqual(read(self.database, NOW).cash["bank"], 1000)
+        later = event("later-interest", "interest", NOW, "bank", amount_gbp="5")
+        import_events(self.database, [later], NOW)
+        self.assertEqual(store.commit_record(self.database, preview, NOW), receipt)
+        self.assertEqual(read(self.database, NOW).revision, 2)
+
+    def test_revision_bound_commit_rejects_stale_or_conflicting_input(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        first = event("first", "interest", NOW, "bank", amount_gbp="5")
+        second = event("second", "interest", NOW, "bank", amount_gbp="7")
+        stale = store.preview_record(self.database, first, NOW)
+        import_events(self.database, [second], NOW)
+        with self.assertRaisesRegex(InvestmentError, "revision"):
+            store.commit_record(self.database, stale, NOW)
+        self.assertEqual(read(self.database, NOW).cash["bank"], 1007)
+
+        committed = store.preview_record(
+            self.database, event("duplicate", "interest", NOW, "bank", amount_gbp="2"), NOW)
+        store.commit_record(self.database, committed, NOW)
+        changed = deepcopy(committed)
+        changed["event"]["amount_gbp"] = "9"
+        with self.assertRaises(InvestmentError):
+            store.commit_record(self.database, changed, NOW)
+        self.assertEqual(read(self.database, NOW).cash["bank"], 1009)
+
+    def test_revision_bound_commit_failure_rolls_back_and_can_retry(self):
+        initialize(self.database, profile(), NOW)
+        preview = store.preview_record(self.database, opening(), NOW)
+        connect = store._connect
+        denied = []
+
+        def deny_commit(database, readonly):
+            connection = connect(database, readonly)
+
+            def authorize(action, arg1, arg2, database_name, trigger):
+                if action == sqlite3.SQLITE_TRANSACTION and arg1 == "COMMIT":
+                    denied.append(True)
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
+            return connection
+
+        with patch.object(store, "_connect", side_effect=deny_commit):
+            with self.assertRaisesRegex(InvestmentError, "rolled back"):
+                store.commit_record(self.database, preview, NOW)
+        self.assertEqual(denied, [True])
+        self.assertEqual(read(self.database, NOW).revision, 0)
+        self.assertEqual(store.commit_record(self.database, preview, NOW)["revision"], 1)
+
+    def test_retry_rejects_type_changed_evidence_even_with_matching_hash(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        later = NOW + timedelta(days=1)
+        update = savings_terms_event(later)
+        update["notice_days"] = 1
+        preview = store.preview_record(self.database, update, later)
+        store.commit_record(self.database, preview, later)
+        changed = deepcopy(preview)
+        changed["event"]["notice_days"] = True
+        changed["event_hash"] = store.digest(store.canonical(changed["event"]))
+        with self.assertRaises(InvestmentError):
+            store.commit_record(self.database, changed, later)
+
+    def test_import_rejects_type_changed_duplicate_without_appending_batch(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        later = NOW + timedelta(days=1)
+        update = savings_terms_event(later)
+        update["notice_days"] = 1
+        import_events(self.database, [update], later)
+        changed = deepcopy(update)
+        changed["notice_days"] = True
+        extra = event("extra", "interest", later, "bank", amount_gbp="1")
+        with self.assertRaisesRegex(InvestmentError, "Conflicting duplicate"):
+            import_events(self.database, [changed, extra], later)
+        self.assertEqual(read(self.database, later).revision, 2)
+
+    def test_preview_fails_when_commit_input_would_exceed_bound(self):
+        initialize(self.database, profile(), NOW)
+        full = store.preview_record(self.database, opening(), NOW)
+        limit = len(store.canonical(full).encode("utf-8")) - 1
+        with patch.object(store, "MAX_JSON_BYTES", limit):
+            with self.assertRaisesRegex(InvestmentError, "bound"):
+                store.preview_record(self.database, opening(), NOW)
+        self.assertEqual(read(self.database, NOW).revision, 0)
+
+    def test_preview_fails_when_combined_evidence_exceeds_bound(self):
+        initialize(self.database, profile(), NOW)
+        size = len(store.canonical(profile()).encode("utf-8")) + len(
+            store.canonical([opening()]).encode("utf-8"))
+        with patch.object(store, "MAX_JSON_BYTES", size - 1):
+            with self.assertRaisesRegex(InvestmentError, "bound"):
+                store.preview_record(self.database, opening(), NOW)
+        self.assertEqual(read(self.database, NOW).revision, 0)
+
+    def test_retry_does_not_claim_an_uncommitted_intermediate_revision(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        first = event("batch-first", "interest", NOW, "bank", amount_gbp="2")
+        second = event("batch-second", "interest", NOW, "bank", amount_gbp="3")
+        preview = store.preview_record(self.database, first, NOW)
+        import_events(self.database, [first, second], NOW)
+        with self.assertRaisesRegex(InvestmentError, "revision"):
+            store.commit_record(self.database, preview, NOW)
+        self.assertEqual(read(self.database, NOW).revision, 3)
+
+    def test_preview_binding_rejects_other_profile_and_invalid_event(self):
+        initialize(self.database, profile(), NOW)
+        preview = store.preview_record(self.database, opening(), NOW)
+        other = self.database.with_name("other.sqlite3")
+        other_profile = profile()
+        other_profile["portfolio_id"] = "another"
+        initialize(other, other_profile, NOW)
+        with self.assertRaisesRegex(InvestmentError, "profile"):
+            store.commit_record(other, preview, NOW)
+        invalid = deepcopy(opening())
+        invalid["balances_gbp"]["bank"] = "-1"
+        with self.assertRaises(InvestmentError):
+            store.preview_record(self.database, invalid, NOW)
+        self.assertEqual(read(self.database, NOW).revision, 0)
+        self.assertEqual(read(other, NOW).revision, 0)
+
+    def test_preview_profile_hash_is_not_unique_store_identity(self):
+        initialize(self.database, profile(), NOW)
+        other = self.database.with_name("same-profile.sqlite3")
+        initialize(other, profile(), NOW)
+        first = store.preview_record(self.database, opening(), NOW)
+        second = store.preview_record(other, opening(), NOW)
+        self.assertEqual(first["profile_hash"], second["profile_hash"])
+        self.assertEqual(first["previous_hash"], second["previous_hash"])
+
+    def test_preview_preserves_same_clock_mark_before_flow_rule(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        later = NOW + timedelta(days=1)
+        flow = event("flow", "contribution", later, "bank", amount_gbp="100")
+        store.commit_record(self.database, store.preview_record(self.database, flow, later), later)
+        mark = event("mark", "mark", later, "broker", product_id="equity", price_gbp="10")
+        with self.assertRaisesRegex(InvestmentError, "must precede"):
+            store.preview_record(self.database, mark, later)
+        self.assertEqual(read(self.database, later).revision, 2)
+
     def test_existing_holdings_have_an_evidenced_baseline_not_a_fabricated_purchase(self):
         initialize(self.database, profile(), NOW)
         import_events(self.database, [opening()], NOW)

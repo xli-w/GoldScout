@@ -166,6 +166,14 @@ displayed observation dates rather than treating completeness as freshness.
 V2 allocation policies, review acknowledgements and proposal exports are not
 implemented; policy-dependent commands explicitly refuse them.
 
+An internal recording foundation can replay a single v2 event as a preview and
+atomically append it only if the previewed profile and journal predecessor are
+unchanged. An identical committed event can be retried without another append.
+This is not yet a browser or CLI confirmation workflow: its profile hash does
+not uniquely identify a physical store, and authentication, preview expiry and
+confirmation binding must be provided before exposing it to dashboard requests.
+Corrections are not implemented.
+
 Use the v1 account and product fields described below with `schema_version: 2`
 and `"policy": null`. Import one first event with type `opening`, a unique
 `id`, UTC `timestamp`, `available_at`, nonempty `evidence`, `balances_gbp`

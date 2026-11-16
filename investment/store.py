@@ -250,6 +250,12 @@ def read(database, now=None):
     return read_with_clock(database, now)[0]
 
 
+def _check_evidence_size(spec, events):
+    if len(canonical(spec).encode("utf-8")) + len(
+            canonical(events).encode("utf-8")) > MAX_JSON_BYTES:
+        raise InvestmentError("Combined investment evidence exceeds size bound")
+
+
 def _append_events(connection, spec, existing, old, previous, values, now):
     ids = {v["id"]: v for v in existing}
     additions = []
@@ -257,7 +263,7 @@ def _append_events(connection, spec, existing, old, previous, values, now):
         if not isinstance(value, dict) or not isinstance(value.get("id"), str):
             raise InvestmentError("Invalid source event")
         if value["id"] in ids:
-            if value != ids[value["id"]]:
+            if canonical(value) != canonical(ids[value["id"]]):
                 raise InvestmentError("Conflicting duplicate event")
         else:
             ids[value["id"]] = value
@@ -266,9 +272,7 @@ def _append_events(connection, spec, existing, old, previous, values, now):
            value.get("reviewed_revision") != old.revision for value in additions):
         raise InvestmentError("Review must reference the previously committed revision")
     ledger = replay(spec, existing + additions, now)
-    if len(canonical(spec).encode("utf-8")) + len(
-            canonical(existing + additions).encode("utf-8")) > MAX_JSON_BYTES:
-        raise InvestmentError("Combined investment evidence exceeds size bound")
+    _check_evidence_size(spec, existing + additions)
     for offset, value in enumerate(additions, old.revision + 1):
         payload = canonical(value)
         new_hash = digest(previous + payload)
@@ -295,6 +299,86 @@ def import_events(database, values, now=None):
                 return _append_events(connection, spec, existing, old, previous, values, now)
     except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
         raise InvestmentError("Investment import failed; transaction rolled back") from exc
+
+
+def preview_record(database, value, now=None):
+    """Replay one v2 event without writing; the caller must authenticate previews."""
+    from .service import opening_report
+
+    value = parse_json(canonical(value))
+    try:
+        with closing(_connect(database, True)) as connection:
+            connection.execute("BEGIN")
+            if now is None:
+                connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+            now = clock(now)
+            spec, existing, ledger, previous = _read(connection, now)
+            if spec["schema_version"] != 2:
+                raise InvestmentError("Manual recording requires a version 2 store")
+            if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+                raise InvestmentError("Invalid source event")
+            if value["id"] in ledger.ids:
+                raise InvestmentError("Event ID already recorded")
+            _check_evidence_size(spec, existing + [value])
+            updated = replay(spec, existing + [value], now)
+            result = {
+                "profile_hash": digest(canonical(spec)),
+                "revision": ledger.revision,
+                "previous_hash": previous,
+                "event": value,
+                "event_hash": digest(canonical(value)),
+                "before": opening_report(ledger, now),
+                "after": opening_report(updated, now),
+            }
+            if len(canonical(result).encode("utf-8")) > MAX_JSON_BYTES:
+                raise InvestmentError("Investment preview exceeds size bound")
+            return result
+    except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
+        raise InvestmentError("Investment preview failed") from exc
+
+
+def commit_record(database, preview, now=None):
+    """Append a previewed event only against its exact journal predecessor.
+
+    This is not an authentication or confirmation mechanism. A caller exposing
+    it to a user must bind the entire preview to an authenticated confirmation.
+    The profile hash is not a unique physical-store identity.
+    """
+    preview = parse_json(canonical(preview))
+    if (not isinstance(preview, dict) or set(preview) != {
+            "profile_hash", "revision", "previous_hash", "event", "event_hash", "before", "after"}
+            or type(preview["revision"]) is not int or
+            not 0 <= preview["revision"] < MAX_EVENTS or
+            not isinstance(preview["event"], dict) or
+            not isinstance(preview["event"].get("id"), str) or
+            preview["event_hash"] != digest(canonical(preview["event"]))):
+        raise InvestmentError("Invalid preview binding")
+    try:
+        with closing(_connect(database, False)) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                now = clock(now)
+                spec, existing, ledger, previous = _read(connection, now)
+                if spec["schema_version"] != 2 or digest(canonical(spec)) != preview["profile_hash"]:
+                    raise InvestmentError("Investment profile changed")
+                expected = preview["revision"]
+                value = preview["event"]
+                if value["id"] in ledger.ids:
+                    if (expected >= len(existing) or
+                            canonical(existing[expected]) != canonical(value) or
+                            connection.execute("SELECT 1 FROM commits WHERE revision=?",
+                                               (expected + 1,)).fetchone() is None or
+                            (digest(canonical(spec)) if expected == 0 else
+                             connection.execute("SELECT hash FROM events WHERE revision=?",
+                                                (expected,)).fetchone()[0]) != preview["previous_hash"]):
+                        raise InvestmentError("Conflicting duplicate event or revision")
+                    return {"id": value["id"], "revision": expected + 1}
+                if ledger.revision != expected or previous != preview["previous_hash"]:
+                    raise InvestmentError("Investment revision changed; preview again")
+                revision = _append_events(connection, spec, existing, ledger, previous, [value], now)
+                return {"id": value["id"], "revision": revision}
+    except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
+        raise InvestmentError("Investment commit failed; transaction rolled back") from exc
 
 
 def acknowledge_review(database, identifier, kind, reviewed_revision, evidence, now=None):
