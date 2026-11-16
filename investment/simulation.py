@@ -16,7 +16,8 @@ LIMITATIONS = [
     "Callers must supply synthetic fixtures; input provenance is not verified. Output is not product-performance evidence or an investment recommendation.",
     "All products must have synchronized GBP open/close observations; calendars and source rights are not verified.",
     "Only positive external contributions and buy-only fixed-target allocation are modeled; no sales or withdrawals.",
-    "Only synthetic splits effective at modeled session opens and known by then are supported; distributions, cash interest, FX, taxes, inflation, fixed fees, spreads and slippage are unsupported.",
+    "Only synthetic splits at modeled opens and cash rates at modeled opens/closes are supported; cash accrual uses declared simple ACT/365 assumptions, not verified account terms.",
+    "Dividends/distributions, FX, taxes, inflation, fixed fees, spreads and slippage are unsupported.",
     "The proportional variable-cost input is an assumption, not a validated execution-cost estimate.",
     "No CLI, campaign dataset, broker, account, or live investment store is connected.",
 ]
@@ -180,6 +181,53 @@ def _splits(values, products, open_times):
     return parsed
 
 
+def _cash_rates(values, open_times, close_times):
+    if not isinstance(values, (list, tuple)) or not values or len(values) > MAX_ACTIONS:
+        raise InvestmentError(f"Between 1 and {MAX_ACTIONS} synthetic cash rates are required")
+    required = ("id", "effective_at", "available_at", "annual_rate")
+    parsed = {}
+    identifiers = set()
+    previous_key = None
+    valid_clocks = open_times | close_times
+    for row in values:
+        fields(row, required)
+        identifier = text(row["id"])
+        effective_at = clock(row["effective_at"])
+        available_at = clock(row["available_at"])
+        annual_rate = _bounded(row["annual_rate"])
+        key = (effective_at, identifier)
+        if identifier in identifiers:
+            raise InvestmentError("Duplicate synthetic cash-rate ID")
+        if previous_key is not None and key <= previous_key:
+            raise InvestmentError("Synthetic cash rates must be in stable event-time order")
+        if effective_at not in valid_clocks or available_at > effective_at or annual_rate > 1:
+            raise InvestmentError("Cash rate must be known by a modeled clock and at most 100%")
+        if effective_at in parsed:
+            raise InvestmentError("Only one synthetic cash rate may change at a modeled clock")
+        identifiers.add(identifier)
+        parsed[effective_at] = {
+            "id": identifier,
+            "available_at": available_at,
+            "annual_rate": annual_rate,
+        }
+        previous_key = key
+    if not open_times or min(open_times) not in parsed:
+        raise InvestmentError("An explicit synthetic cash rate is required at the first open")
+    return parsed
+
+
+def _cash_interest(cash, start, end, annual_rate):
+    if end < start:
+        raise InvestmentError("Cash accrual clocks must be ordered")
+    delta = end - start
+    elapsed_microseconds = ((delta.days * 86400 + delta.seconds) * 1_000_000
+                            + delta.microseconds)
+    year_microseconds = 365 * 86400 * 1_000_000
+    with localcontext() as context:
+        context.prec = 100
+        return cash * annual_rate * Decimal(elapsed_microseconds) / Decimal(year_microseconds)
+
+
 def _apply_split(action, products, holdings):
     product_id = action["product_id"]
     quantity = holdings.get(product_id, Decimal(0))
@@ -256,12 +304,15 @@ def _allocation_budgets(products, holdings, prices, cash, flow):
 
 
 def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
-                               contributions=(), variable_cost_bps="0", splits=()):
+                               contributions=(), variable_cost_bps="0", splits=(),
+                               cash_rates=()):
     """Run a bounded synthetic buy-only portfolio clock for engineering tests.
 
     A close-time contribution creates allocation budgets for the next common
-    session's open. This function loads no external data; callers must provide
-    synthetic fixtures, whose provenance it cannot independently verify.
+    session's open. Cash interest uses synthetic rates and simple ACT/365
+    accrual between modeled open/close clocks. This function loads no external
+    data; callers must provide synthetic fixtures, whose provenance it cannot
+    independently verify.
     """
     initial_cash = _bounded(initial_cash_gbp, positive=True)
     fee_bps = _bounded(variable_cost_bps)
@@ -274,6 +325,7 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     open_times = {session["open_at"] for _, session in sessions}
     external_flows = _contributions(contributions, close_times)
     split_events = _splits(splits, product_state, open_times)
+    rate_events = _cash_rates(cash_rates, open_times, close_times)
 
     cash = Decimal(0)
     holdings = {}
@@ -284,16 +336,30 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     worst_drawdown = Decimal(0)
     total_contributions = Decimal(0)
     total_fees = Decimal(0)
+    total_cash_interest = Decimal(0)
     pending = {}
     curve = []
     fill_events = []
     unfilled_allocations = []
     applied_split_ids = []
+    active_rate = None
+    previous_close = None
 
     with localcontext() as context:
         context.prec = 100
         for index, (session_id, session) in enumerate(sessions):
             session_bars = session["bars"]
+            open_rate_event = rate_events.get(session["open_at"])
+            if previous_close is not None:
+                if active_rate is None:
+                    raise InvestmentError("A synthetic cash rate is required for every accrual interval")
+                interest = _cash_interest(
+                    cash, previous_close, session["open_at"], active_rate["annual_rate"])
+                cash += interest
+                total_cash_interest += interest
+            if open_rate_event is not None:
+                active_rate = open_rate_event
+
             applied_splits = split_events.get(session["open_at"], [])
             for action in applied_splits:
                 _apply_split(action, product_state, holdings)
@@ -320,6 +386,13 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                         })
                 pending = {}
 
+            if active_rate is None:
+                raise InvestmentError("An explicit synthetic cash rate is required at the first open")
+            interest = _cash_interest(
+                cash, session["open_at"], session["close_at"], active_rate["annual_rate"])
+            cash += interest
+            total_cash_interest += interest
+
             prices = {product_id: session_bars[product_id]["close"]
                       for product_id in product_state}
             before_flow = _portfolio_value(cash, holdings, prices)
@@ -342,6 +415,11 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 pending = _allocation_budgets(
                     product_state, holdings, prices, cash, flow)
 
+            close_rate_event = rate_events.get(session["close_at"])
+            if close_rate_event is not None:
+                active_rate = close_rate_event
+            previous_close = session["close_at"]
+
             equity = _portfolio_value(cash, holdings, prices)
             if units:
                 unit_value = equity / units
@@ -361,12 +439,18 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 "twr_pct": fmt((unit_value - 1) * 100),
                 "drawdown_pct": fmt(-worst_drawdown * 100),
                 "fees_gbp": fmt(total_fees),
+                "cash_interest_gbp": fmt(total_cash_interest),
                 "fills": fills,
                 "splits": [action["id"] for action in applied_splits],
                 "unfilled_allocations": unfilled,
             })
 
-    ending_equity = _portfolio_value(cash, holdings, prices)
+    with localcontext() as context:
+        context.prec = 100
+        ending_equity = _portfolio_value(cash, holdings, prices)
+        total_gain = ending_equity - total_contributions
+        total_return_pct = (unit_value - 1) * 100
+        max_drawdown_pct = -worst_drawdown * 100
     return {
         "schema_version": 1,
         "scope": "synthetic_portfolio_mechanics_only",
@@ -378,10 +462,17 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
             "ending_equity_gbp": fmt(ending_equity),
             "cash_gbp": fmt(cash),
             "net_contributions_gbp": fmt(total_contributions),
-            "gain_gbp": fmt(ending_equity - total_contributions),
-            "twr_pct": fmt((unit_value - 1) * 100),
-            "max_drawdown_pct": fmt(-worst_drawdown * 100),
+            "gain_gbp": fmt(total_gain),
+            "twr_pct": fmt(total_return_pct),
+            "max_drawdown_pct": fmt(max_drawdown_pct),
             "fees_gbp": fmt(total_fees),
+            "cash_interest_gbp": fmt(total_cash_interest),
+            "cash_rates": [
+                {"id": event["id"], "effective_at": iso(effective_at),
+                 "available_at": iso(event["available_at"]),
+                 "annual_rate": fmt(event["annual_rate"])}
+                for effective_at, event in sorted(rate_events.items())
+            ],
             "holdings": [
                 {"product_id": product_id, "quantity": fmt(quantity)}
                 for product_id, quantity in sorted(holdings.items()) if quantity

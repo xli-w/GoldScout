@@ -30,10 +30,15 @@ historical simulation/selection, also use
   harness: synchronized GBP observations, next-session-open buy-only fills,
   positive contribution flows, an assumed proportional fee, and synthetic
   split events known by modeled session opens. Split quantities must preserve
-  the declared increment. It does not verify input provenance and is not
-  connected to the campaign dataset, store, CLI, or product research. Preserve
-  its synthetic-only output label and do not use it to imply a performance
-  result; callers must not provide real product history.
+  the declared increment. It accepts explicit synthetic rate events at modeled
+  opens/closes using simple ACT/365 accrual only; the first open needs a rate,
+  overnight uses the prior rate, and changes apply after accrual at their
+  effective boundary. Initial capital enters at the first modeled close and
+  earns no earlier interest. This does not establish cash provider terms. It
+  does not verify input provenance and is not connected to the campaign dataset,
+  store, CLI, or product research. Preserve its
+  synthetic-only output label and do not use it to imply a performance result;
+  callers must not provide real product history.
 
 ## Change procedure
 

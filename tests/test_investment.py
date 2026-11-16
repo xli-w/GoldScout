@@ -4,7 +4,7 @@ import builtins
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, localcontext
 import io
 import importlib
 import json
@@ -60,6 +60,11 @@ class InvestmentTests(unittest.TestCase):
             "close_gbp": close_price,
         }
 
+    def zero_cash_rates(self, bars):
+        first_open = min(row["open_at"] for row in bars)
+        return [{"id": "explicit-zero-rate", "effective_at": first_open,
+                 "available_at": first_open, "annual_rate": "0"}]
+
     def test_synthetic_simulator_uses_next_open_and_flow_neutral_contributions(self):
         products = [
             {"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"},
@@ -77,7 +82,8 @@ class InvestmentTests(unittest.TestCase):
         result = simulate_synthetic_fixture(
             "1000", products, {"equity": "80", "bond": "20"}, bars,
             [{"id": "later-funding", "timestamp": contribution_at,
-              "available_at": contribution_at, "amount_gbp": "100"}])
+              "available_at": contribution_at, "amount_gbp": "100"}],
+            cash_rates=self.zero_cash_rates(bars))
 
         self.assertTrue(result["synthetic_only"])
         self.assertFalse(result["supports_product_performance_claims"])
@@ -111,7 +117,8 @@ class InvestmentTests(unittest.TestCase):
             self.synthetic_bar("equity", 1, "10", "10"),
         ]
         result = simulate_synthetic_fixture(
-            "1000", products, {"equity": "100"}, bars, variable_cost_bps="100")
+            "1000", products, {"equity": "100"}, bars, variable_cost_bps="100",
+            cash_rates=self.zero_cash_rates(bars))
 
         self.assertEqual(result["curve"][1]["fills"][0]["quantity"], "99")
         self.assertEqual(result["curve"][1]["fills"][0]["fee_gbp"], "9.9")
@@ -120,6 +127,68 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(result["summary"]["twr_pct"], "-0.99")
         self.assertEqual(result["summary"]["fees_gbp"], "9.9")
 
+    def test_synthetic_cash_interest_uses_only_rates_known_at_interval_start(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+        ]
+        rates = [
+            {"id": "initial-zero", "effective_at": bars[0]["open_at"],
+             "available_at": bars[0]["open_at"], "annual_rate": "0"},
+            {"id": "close-rate", "effective_at": bars[0]["close_at"],
+             "available_at": bars[0]["close_at"], "annual_rate": "0.365"},
+            {"id": "open-reset", "effective_at": bars[1]["open_at"],
+             "available_at": bars[1]["open_at"], "annual_rate": "0.73"},
+        ]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "50"}, bars, cash_rates=rates)
+
+        with localcontext() as context:
+            context.prec = 100
+            year_microseconds = Decimal(365 * 86400 * 1_000_000)
+            overnight_interest = (
+                Decimal(1000) * Decimal("0.365") * Decimal(17 * 3600 * 1_000_000)
+                / year_microseconds)
+            cash_after_fill = Decimal(500) + overnight_interest
+            intraday_interest = (
+                cash_after_fill * Decimal("0.73") * Decimal(7 * 3600 * 1_000_000)
+                / year_microseconds)
+            expected_interest = overnight_interest + intraday_interest
+            actual_interest = Decimal(result["summary"]["cash_interest_gbp"])
+            ending_equity = Decimal(result["summary"]["ending_equity_gbp"])
+            self.assertEqual(actual_interest, expected_interest)
+            self.assertEqual(ending_equity, Decimal(1000) + expected_interest)
+        self.assertEqual(result["curve"][1]["fills"][0]["quantity"], "50")
+        self.assertEqual(result["summary"]["cash_rates"], [
+            {"id": item["id"], "effective_at": item["effective_at"],
+             "available_at": item["available_at"],
+             "annual_rate": item["annual_rate"]} for item in rates])
+
+    def test_synthetic_cash_interest_requires_explicit_causal_rate_schedule(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+        ]
+        first_open = bars[0]["open_at"]
+        second_open = bars[1]["open_at"]
+        schedules = (
+            [],
+            [{"id": "late-initial", "effective_at": first_open,
+              "available_at": iso(NOW + timedelta(hours=10)), "annual_rate": "0.01"}],
+            [{"id": "off-clock", "effective_at": iso(NOW + timedelta(hours=1)),
+              "available_at": iso(NOW + timedelta(hours=1)), "annual_rate": "0.01"}],
+            [{"id": "missing-initial", "effective_at": second_open,
+              "available_at": second_open, "annual_rate": "0.01"}],
+        )
+        for schedule in schedules:
+            with self.subTest(schedule=schedule), self.assertRaises(InvestmentError):
+                simulate_synthetic_fixture(
+                    "1000", products, {"equity": "100"}, bars, cash_rates=schedule)
+
     def test_synthetic_simulator_reports_minimum_notional_skips(self):
         products = [{"id": "equity", "quantity_increment": "1",
                      "minimum_notional_gbp": "1001"}]
@@ -127,7 +196,9 @@ class InvestmentTests(unittest.TestCase):
             self.synthetic_bar("equity", 0, "10", "10"),
             self.synthetic_bar("equity", 1, "10", "10"),
         ]
-        result = simulate_synthetic_fixture("1000", products, {"equity": "100"}, bars)
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars,
+            cash_rates=self.zero_cash_rates(bars))
 
         self.assertEqual(result["curve"][1]["fills"], [])
         self.assertEqual(result["curve"][1]["unfilled_allocations"], [{
@@ -149,7 +220,8 @@ class InvestmentTests(unittest.TestCase):
         result = simulate_synthetic_fixture(
             "100", products, {"equity": "100"}, bars,
             [{"id": "fund-during-drawdown", "timestamp": contribution_at,
-              "available_at": contribution_at, "amount_gbp": "100"}])
+              "available_at": contribution_at, "amount_gbp": "100"}],
+            cash_rates=self.zero_cash_rates(bars))
 
         self.assertEqual(result["curve"][1]["unit_value"], "0.8")
         self.assertEqual(result["curve"][1]["equity_gbp"], "180")
@@ -172,7 +244,8 @@ class InvestmentTests(unittest.TestCase):
               "available_at": contribution_at, "amount_gbp": "100"}],
             splits=[{"id": "two-for-one", "product_id": "equity",
                      "effective_at": split_at, "available_at": contribution_at,
-                     "numerator": "2", "denominator": "1"}])
+                     "numerator": "2", "denominator": "1"}],
+            cash_rates=self.zero_cash_rates(bars))
 
         self.assertEqual(result["curve"][1]["equity_gbp"], "1100")
         self.assertEqual(result["curve"][2]["equity_gbp"], "1100")
@@ -205,7 +278,8 @@ class InvestmentTests(unittest.TestCase):
         for values in invalid_splits:
             with self.subTest(values=values), self.assertRaises(InvestmentError):
                 simulate_synthetic_fixture(
-                    "1000", products, {"equity": "100"}, bars, splits=values)
+                    "1000", products, {"equity": "100"}, bars, splits=values,
+                    cash_rates=self.zero_cash_rates(bars))
 
         two_products = [
             {"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"},
@@ -225,12 +299,14 @@ class InvestmentTests(unittest.TestCase):
         with self.assertRaisesRegex(InvestmentError, "stable event-time order"):
             simulate_synthetic_fixture(
                 "1000", two_products, {"equity": "50", "bond": "50"},
-                two_product_bars, splits=out_of_order)
+                two_product_bars, splits=out_of_order,
+                cash_rates=self.zero_cash_rates(two_product_bars))
 
         thirds = [dict(split, numerator="1", denominator="3")]
         with self.assertRaisesRegex(InvestmentError, "quantity increment"):
             simulate_synthetic_fixture(
-                "1000", products, {"equity": "100"}, bars, splits=thirds)
+                "1000", products, {"equity": "100"}, bars, splits=thirds,
+                cash_rates=self.zero_cash_rates(bars))
 
     def test_synthetic_simulator_rejects_future_prices_incomplete_sessions_and_late_flows(self):
         products = [
@@ -248,24 +324,24 @@ class InvestmentTests(unittest.TestCase):
             NOW.replace(hour=16) + timedelta(minutes=1))
         with self.assertRaises(InvestmentError):
             simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
-                                       bad_close)
+                                       bad_close, cash_rates=self.zero_cash_rates(bad_close))
 
         bad_open = deepcopy(bars)
         bad_open[0]["open_available_at"] = iso(
             NOW.replace(hour=9) + timedelta(minutes=1))
         with self.assertRaises(InvestmentError):
             simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
-                                       bad_open)
+                                       bad_open, cash_rates=self.zero_cash_rates(bad_open))
 
         with self.assertRaises(InvestmentError):
             simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
-                                       bars[:-1])
+                                       bars[:-1], cash_rates=self.zero_cash_rates(bars[:-1]))
 
         late_flow = [{"id": "late", "timestamp": iso(NOW.replace(hour=16)),
                       "available_at": iso(NOW.replace(hour=17)), "amount_gbp": "100"}]
         with self.assertRaises(InvestmentError):
             simulate_synthetic_fixture("1000", products, {"equity": "80", "bond": "20"},
-                                       bars, late_flow)
+                                       bars, late_flow, cash_rates=self.zero_cash_rates(bars))
 
 
     def test_pure_demo_contract_no_files_or_broker_imports(self):
