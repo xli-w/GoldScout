@@ -1,5 +1,39 @@
 # Investment Research Context
 
+## Current long-term investment mandate
+
+The investor explicitly revised the mandate on 2026-11-15: GBP 1,000, separate
+emergency savings, no expensive debt, no fixed withdrawal date, tolerance for
+40-50% drawdowns and optional regular contributions. Losses may be permanent.
+The core is human-chosen diversified global funds, high-quality bonds and GBP
+savings, without portfolio leverage, shorting or crypto. See the
+[current investment guide](investment.md) for implemented capabilities, primary
+research sources and unresolved gates.
+
+Prioritise accurate GBP measurement and contribution-first discipline. Use
+monthly reviews and annual/five-percentage-point drift proposals; the investor
+chooses the allocation rather than optimising it against historical returns.
+Interest-bearing eligible GBP savings is the primary cash comparator; keep
+NatWest's applicable 0% counterfactual for context, not as sufficient investment
+justification. Exact product/account/data rights remain to be verified.
+
+The earlier six-month return aspiration, stop-based risk profiles, leverage/crypto
+challengers and +5-point NatWest gate below are **historical campaign assumptions**,
+not the current passive-core policy. Retain their provenance and trial/holdout
+history. The 60-candidate ceiling, predeclaration, adverse costs, causal accounting
+and single-use report-only holdout remain controls for future research. A changed
+mandate cannot erase previously exposed samples.
+
+The current engineering release is offline GBP tracking and export-only proposals,
+not a historical performance campaign. The no-later-flow GBP 1,000 comparison
+remains a primary future research scenario; optional contribution scenarios must
+be separately labelled and matched across benchmarks. Before active research,
+approve exact improvement/uncertainty criteria relative to passive alternatives;
+never choose thresholds after seeing results. Trading/account access and
+changes to safety policies require separate explicit approval.
+
+## Historical trading campaign (retained context)
+
 This document records the investor's stated goals and the agreed boundaries for offline strategy research. It is context for research and decision-making, not investment, legal, or tax advice. It does not change the live bot, its configuration, or its operating limits.
 
 The [backtesting protocol](backtesting-protocol.md) operationalizes this context and records current simulator/data-import gaps. The separate [market-intelligence development](decisions/0002-market-intelligence.md) is advisory/shadow only; its existing bot observer does not influence orders, and it does not lift this campaign's exclusion of news/LLM trading signals or authorize trading integration.

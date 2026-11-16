@@ -1,5 +1,48 @@
 # Backtesting Protocol
 
+## Current investment protocol boundary
+
+The [current mandate](investment-research-context.md#current-long-term-investment-mandate)
+supersedes the earlier trading campaign's objectives and passive-core risk
+assumptions. The remainder of this document retains that campaign's historical
+design and runner limitations; it does not authorise crypto, leverage, stop-sized
+passive holdings or the former six-month return aspiration in the new core.
+
+The first [investment release](investment.md) provides offline GBP accounting,
+recorded valuation and export-only contribution/allocation proposals. It is not
+a historical portfolio simulator, research authorisation or broker adapter.
+Existing minute experiments still cannot answer this new portfolio question.
+
+Before any portfolio performance comparison:
+
+1. Verify exact product/UK/account/wrapper eligibility, licensed persistent data
+   use, historical price basis/actions, cash terms and point-in-time FX where needed.
+2. Validate one chronological funded portfolio clock and causal valuation/action/
+   cash-flow conventions. A final-cutoff normalized view must not expose future
+   data at earlier decisions. Actual fund prices often embed expenses/income:
+   prevent double-counting OCF and accumulating distributions.
+3. Register the small fixed passive comparison set in the investment guide,
+   benchmarks, base and 1.5x/2.0x variable-cost cases, contribution scenarios,
+   calendar, five-percentage-point drift rule and metrics before looking at returns.
+   Keep 60 as the total ceiling, not a search target; record failed/manual variants.
+4. Distinguish risk-preference-based passive allocation choice from active-model
+   selection. Preserve every previously exposed sample and consumed holdout.
+   Use genuinely unexposed/reserved confirmation intervals only.
+5. For any active challenger, approve the exact signal and cash-funded exposure,
+   passive-relative improvement, observation and dependence-aware uncertainty
+   criteria first. The historical +5-point NatWest rule is not the new universal
+   passive admission gate. No passing active candidate means no holdout simulation,
+   including baseline-only fallback. Locked confirmation is report-only.
+
+Primary future comparison: one initial GBP 1,000 without later flows. Optional
+contribution scenarios must be labelled and matched; deposits are not performance.
+Use eligible interest-bearing GBP savings and diversified passive references,
+with NatWest retained only as additional context. Short product histories or
+missing regimes must be labelled limited/inconclusive, not repaired with synthetic
+or unlicensed proxy data. No comparison guarantees profitability.
+
+## Historical trading protocol and runner evidence
+
 This protocol operationalizes [investment research context](investment-research-context.md). It tests whether a bounded set of approaches merits further consideration; it cannot guarantee returns, certify live readiness, or force a winner.
 
 ## 1. Non-negotiable boundaries

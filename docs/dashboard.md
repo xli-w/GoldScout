@@ -1,5 +1,23 @@
 # GoldScout Read-Only Dashboard
 
+## Long-term investment view
+
+The separate [investment path](investment.md) adds `/investment` and
+`/investment-guide`, showing GBP contributions, recorded valuations, sleeve drift
+and export-only allocation proposals. The legacy USD trading screens below remain
+available and unchanged in authority. Neither set of account views places orders.
+
+Use `python -m dashboard --demo` for synthetic investment and legacy previews.
+Use `python -m dashboard --investment-database .\investment.sqlite3` only for an
+explicitly initialised, operator-selected investment store. It is mutually
+exclusive with the legacy `--database` and `--demo` sources; recorded investment
+mode never substitutes synthetic legacy accounts. No store is created or repaired
+by reporting. The frontend build now binds both response schemas.
+
+This is an offline measurement/planning release, not full multi-currency research
+or a human-approved broker integration. See the investment guide's capability
+limits before interpreting any return or proposal.
+
 The dashboard includes a local FastAPI service and React overview, positions,
 health, activity, history, and intelligence screens. The dashboard cannot start, stop, pause, or change trading;
 it reads no broker credentials and makes no broker requests. Optional analysis-only
@@ -88,6 +106,9 @@ or passed through chat. No launcher runs automatic installs, builds, or updates.
 To create an installable distribution, build the frontend first, then run:
 
 ```powershell
+if (Test-Path .\build\lib\dashboard\static) {
+    Remove-Item -LiteralPath .\build\lib\dashboard\static -Recurse -Force
+}
 python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 python -m pip install --no-deps --force-reinstall .\dist\trader_local_dashboard-0.1.0-py3-none-any.whl
 trader-dashboard --demo
@@ -95,14 +116,19 @@ trader-dashboard --demo
 
 Install `requirements-dashboard.txt` into a clean runtime environment before
 using `--no-deps`; the build commands require the pinned development build tools.
-The wheel contains the `dashboard` and `market_intelligence` Python packages,
+The wheel contains the `dashboard`, `investment` and `market_intelligence` Python packages,
 `proxy_config`, their packaged JSON, the generated frontend, and distribution
-metadata. Intelligence dependencies are optional. It excludes `bot`, `config`,
+metadata. Investment reporting is offline; intelligence dependencies are optional. It excludes `bot`, `config`,
 tests, credentials, ledgers, snapshots, reports, and logs. Console launch works
 outside the checkout; there is no packaged trading entry point. Rebuild and
 reinstall the wheel after changing frontend/schema sources. Editable installs
 use the source package's generated assets and need a frontend rebuild after
 frontend/schema edits.
+
+The cleanup above targets only setuptools' generated frontend staging directory,
+not source assets or account data. Reusing old staging after a frontend rebuild
+can package obsolete hashed assets; exact manifest verification correctly refuses
+that wheel. Verify the installed bundle rather than relaxing the manifest check.
 
 Windows source setup uses the selected Python 3.11 environment; Python 3.10 is
 retained in package metadata but not newly certified here. Production and

@@ -6,10 +6,11 @@ from dashboard.assets import FrontendBuildError, build_guidance, verify_frontend
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="GoldScout local read-only trading dashboard")
+    parser = argparse.ArgumentParser(description="GoldScout local read-only investment and legacy trading dashboard")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--demo", action="store_true", help="Use synthetic data only")
     source.add_argument("--database", type=Path, help="Read an operator-selected existing ledger")
+    source.add_argument("--investment-database", type=Path, help="Read an explicitly initialised investment store")
     parser.add_argument("--scenario", default="healthy_recorded", help="Synthetic fixture scenario")
     parser.add_argument("--telemetry", type=Path, help="Optional operator-selected health snapshot")
     parser.add_argument("--api-only", action="store_true", help="Development API without production frontend assets")
@@ -25,9 +26,9 @@ def main(argv=None):
         parser.error("--analysis-controls requires an existing intelligence database")
     if not 1024 <= args.port <= 65535:
         parser.error("Port must be between 1024 and 65535")
-    if args.demo and args.telemetry is not None:
+    if args.database is None and args.telemetry is not None:
         parser.error("--telemetry is only valid with --database")
-    if args.database is not None and args.scenario != "healthy_recorded":
+    if not args.demo and args.scenario != "healthy_recorded":
         parser.error("--scenario is only valid with --demo")
     static_directory = None
     if not args.api_only:
@@ -45,12 +46,13 @@ def main(argv=None):
                          static_directory=static_directory, serve_frontend=not args.api_only,
                          intelligence_database=args.intelligence_database,intelligence_demo=args.intelligence_demo,
                          analysis_password=getpass.getpass("Local analysis-control password: ") if args.analysis_controls else None,
-                         analysis_profiles=tuple(args.analysis_profiles))
+                         analysis_profiles=tuple(args.analysis_profiles), investment_database=args.investment_database)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
-    except ValueError:
-        parser.error("Unknown synthetic scenario")
-    print(f"GoldScout read-only dashboard ({'synthetic demo' if args.demo else 'recorded data'}): http://127.0.0.1:{args.port}/")
+    except ValueError as exc:
+        parser.error(str(exc))
+    landing = "investment" if args.investment_database is not None else ""
+    print(f"GoldScout read-only dashboard ({'synthetic demo' if args.demo else 'recorded data'}): http://127.0.0.1:{args.port}/{landing}")
     uvicorn.run(app, host="127.0.0.1", port=args.port, proxy_headers=False, access_log=False)
 
 

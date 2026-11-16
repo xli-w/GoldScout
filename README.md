@@ -1,6 +1,47 @@
 # GoldScout
 
-GoldScout is a multi-strategy trading bot with a local portfolio dashboard.
+GoldScout is being refocused on **long-term, diversified GBP investing**:
+accurate portfolio measurement, optional contributions and explainable allocation
+proposals, rather than frequent price prediction. The first investment release is
+offline and export-only. It cannot place orders or guarantee profitability.
+
+See the [investment guide](docs/investment.md) for the current workflow, supported
+accounting and explicit research/broker blockers.
+
+## Investment first
+
+- A human chooses the allocation across global equities, high-quality bonds and
+  GBP cash; there is no automatic "best backtest" selection.
+- Contribution-first planning, monthly review and annual/five-percentage-point
+  drift reviews aim to limit unnecessary turnover. First-release proposals are
+  buy-only; sales and review acknowledgements are deferred. No trade is valid.
+- GBP contributions are separated from investment gains. External savings are
+  not broker buying power; manual inputs are not broker verification.
+- The read-only dashboard includes `/investment` and `/investment-guide`.
+  No dashboard account or trading route approves or executes orders.
+- Full FX, corporate-action entitlement/accrual, money-weighted/inflation returns,
+  licensed historical comparisons and human-approved broker execution remain
+  gated follow-ons. A valid import is not proof of investment suitability.
+
+With the selected Python environment and existing dependencies:
+
+```powershell
+python -m investment demo
+python -m dashboard --demo
+```
+
+The first command prints a synthetic GBP portfolio without creating a database.
+After building the frontend as described in the dashboard guide, open
+`http://127.0.0.1:8765/investment` for the synthetic investment view.
+Use only explicitly selected, separately initialised investment storage for
+recorded investment reporting; see the investment guide.
+
+## Separate legacy trading capability
+
+The original Alpaca trading engine and its accounting, stop protection and
+restart recovery remain available, **unchanged and separate**. The investment
+entry point does not invoke it, adopt its holdings or remove any protective orders.
+The legacy strategy configuration below is not the new investment policy.
 
 Economic-calendar and AI news context is available through the separate
 [market intelligence service and dashboard](docs/intelligence.md). Collection and AI
@@ -11,7 +52,7 @@ Trades SPY, QQQ, BTC/USD, GLD and USO with three strategy modules, ATR-based siz
 SPY/QQQ use 15-minute mean reversion, BTC/USD uses hourly momentum breakouts, and GLD/USO use
 4-hour trend following.
 
-## Setup
+## Legacy Alpaca trading setup
 For repository AI agents, skills, safety boundaries, and isolated regression commands, see
 [AI-assisted development](docs/development.md).
 
@@ -179,7 +220,7 @@ flowchart TD
   Main -. "asynchronous observation only" .-> Observer
 ```
 
-## Idiot's Guide
+## Legacy trading guide
 This project is a program that follows preset rules for trading through Alpaca, a brokerage. It watches a small
 set of markets and decides when to seek a trade or exit one. The trading rules are not AI, and they do not
 guarantee a profit. By default it is configured for **paper trading**: a practice account using simulated money,

@@ -42,6 +42,21 @@ class DashboardLaunchTests(unittest.TestCase):
         with self.assertRaises(FrontendBuildError):
             verify_frontend(self.static, self.schema)
 
+    def test_production_bundle_binds_investment_schema_as_well_as_legacy_schema(self):
+        production_schema = self.root / "dashboard" / "response.schema.json"
+        production_schema.parent.mkdir()
+        production_schema.write_text("{}")
+        investment_schema = self.root / "investment" / "response.schema.json"
+        investment_schema.parent.mkdir()
+        investment_schema.write_text("{}")
+        self.manifest["investment_schema_sha256"] = self.digest(investment_schema)
+        self.save_manifest()
+        with patch("dashboard.assets.__file__", str(production_schema.with_name("assets.py"))):
+            self.assertEqual(verify_frontend(self.static), self.static)
+            investment_schema.write_text('{"changed":true}')
+            with self.assertRaises(FrontendBuildError):
+                verify_frontend(self.static)
+
     def test_unlisted_assets_and_removed_manifest_entries_are_rejected(self):
         extra = self.static / "assets" / "unlisted.js"
         extra.write_text("void 0;")
@@ -113,14 +128,27 @@ class DashboardLaunchTests(unittest.TestCase):
         factory.assert_called_once_with(database=None, scenario="healthy_recorded", telemetry_path=None,
                                         static_directory=None, serve_frontend=False,
                                         intelligence_database=None, intelligence_demo=False,
-                                        analysis_password=None, analysis_profiles=())
+                                        analysis_password=None, analysis_profiles=(), investment_database=None)
         server.assert_called_once_with("synthetic-app", host="127.0.0.1", port=8766, proxy_headers=False, access_log=False)
 
     def test_invalid_modes_and_ports_fail_before_runtime_imports(self):
         for args in (["--demo", "--telemetry", "unused"], ["--demo", "--port", "80"],
-                     ["--database", "unused", "--scenario", "partial_exit"]):
+                     ["--database", "unused", "--scenario", "partial_exit"],
+                     ["--investment-database", "unused", "--telemetry", "unused"],
+                     ["--investment-database", "unused", "--demo"]):
             with self.subTest(args=args), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 main(args)
+
+    def test_investment_launch_passes_only_explicit_store_and_does_not_open_it(self):
+        server = Mock()
+        factory = Mock(return_value="investment-app")
+        with patch.dict(sys.modules, {"uvicorn": SimpleNamespace(run=server), "dashboard.app": SimpleNamespace(create_app=factory)}):
+            with redirect_stdout(io.StringIO()) as output:
+                main(["--investment-database", str(self.root / "investment.sqlite3"), "--api-only"])
+        self.assertEqual(factory.call_args.kwargs["investment_database"], self.root / "investment.sqlite3")
+        self.assertIsNone(factory.call_args.kwargs["database"])
+        self.assertIn("/investment", output.getvalue())
+        self.assertFalse((self.root / "investment.sqlite3").exists())
 
 
 if __name__ == "__main__":

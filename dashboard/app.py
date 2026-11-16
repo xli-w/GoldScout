@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError as SchemaValidationError
 from starlette.exceptions import HTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
@@ -32,7 +32,9 @@ MESSAGES = {
 
 
 def create_app(database=None, scenario="healthy_recorded", clock=None, static_directory=None, telemetry_path=None, process_check=None, serve_frontend=True,
-               intelligence_database=None, intelligence_demo=False, analysis_password=None, analysis_profiles=()):
+               intelligence_database=None, intelligence_demo=False, analysis_password=None, analysis_profiles=(), investment_database=None):
+    if database is not None and investment_database is not None:
+        raise ValueError("Select legacy trading or investment storage, not both")
     if serve_frontend:
         static_directory = verify_frontend(static_directory)
     clock = clock or (lambda: datetime.now(timezone.utc))
@@ -47,7 +49,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     intelligence = None
     if intelligence_database is not None or intelligence_demo:
-        if intelligence_demo and (database is not None or intelligence_database is not None):
+        if intelligence_demo and (database is not None or investment_database is not None or intelligence_database is not None):
             raise ValueError("Synthetic intelligence must not bind operational storage")
         from dashboard.intelligence import IntelligenceWorkspace
         intelligence = IntelligenceWorkspace(intelligence_database, analysis_profiles, analysis_password, intelligence_demo)
@@ -57,7 +59,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     def error(code, status=None):
         default_status, message, retryable = MESSAGES[code]
         meta = metadata(clock())
-        meta["source_mode"] = "recorded" if reader else "demo"
+        meta["source_mode"] = "recorded" if reader or investment_database is not None else "demo"
         if code in ("ledger_invalid", "schema_unsupported"):
             meta["ledger"]["freshness"] = "invalid"
         return JSONResponse(status_code=status or default_status, content={
@@ -105,7 +107,25 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
 
     @app.get("/api/v1/settings")
     def settings():
-        return {"mode": "recorded" if reader else "demo", "scenario": None if reader else scenario}
+        return {"mode": "recorded" if reader or investment_database is not None else "demo",
+                "scenario": None if reader or investment_database is not None else scenario}
+
+    @app.get("/api/investment/v1/snapshot")
+    def investment_snapshot():
+        from investment import InvestmentError
+        from investment.service import demo_snapshot, snapshot
+
+        if investment_database is None and reader is not None:
+            return JSONResponse(status_code=503, content={"error": "investment_not_configured"})
+        try:
+            report = snapshot(investment_database, now=clock()) if investment_database is not None else demo_snapshot(now=clock())
+            schema = json.loads((ROOT.parent / "investment" / "response.schema.json").read_text(encoding="utf-8"))
+            Draft202012Validator(schema, format_checker=FormatChecker()).validate(report)
+            return report
+        except (InvestmentError, OSError) as exc:
+            return JSONResponse(status_code=503, content={"error": "investment_unavailable", "message": str(exc)})
+        except SchemaValidationError:
+            return JSONResponse(status_code=409, content={"error": "investment_invalid", "message": "Investment report failed schema validation."})
 
     @app.get("/api/v1/intelligence")
     def intelligence_snapshot():
@@ -158,6 +178,8 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
             return error("invalid_request",409)
 
     def respond(resource, revision, database_id=None, run_id=None):
+        if investment_database is not None:
+            return error("source_unavailable")
         now = clock()
         if reader:
             snapshot = reader.snapshot(now)
@@ -270,6 +292,8 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         @app.get("/history")
         @app.get("/intelligence")
         @app.get("/guide")
+        @app.get("/investment")
+        @app.get("/investment-guide")
         def index():
             return FileResponse(static_directory / "index.html")
 

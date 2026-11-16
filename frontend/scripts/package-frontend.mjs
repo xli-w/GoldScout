@@ -21,6 +21,7 @@ collect(join(output, "assets"));
 files["index.html"] = hash(readFileSync(join(output, "index.html")));
 writeFileSync(join(output, "dashboard-build.json"), JSON.stringify({
   version: 1, schema_sha256: hash(readFileSync(join(frontend, "..", "dashboard", "response.schema.json"))), files,
+  investment_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "response.schema.json"))),
 }, null, 2) + "\n");
 rmSync(packaged, { recursive: true, force: true });
 cpSync(output, packaged, { recursive: true });

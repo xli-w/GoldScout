@@ -22,6 +22,10 @@ def verify_frontend(directory=None, schema=None):
         manifest = json.loads((directory / "dashboard-build.json").read_text(encoding="utf-8"))
         if manifest.get("version") != 1 or manifest.get("schema_sha256") != hashlib.sha256(schema.read_bytes()).hexdigest():
             raise FrontendBuildError("Frontend contract does not match this dashboard")
+        if schema == Path(__file__).with_name("response.schema.json"):
+            investment_schema = Path(__file__).resolve().parent.parent / "investment" / "response.schema.json"
+            if manifest.get("investment_schema_sha256") != hashlib.sha256(investment_schema.read_bytes()).hexdigest():
+                raise FrontendBuildError("Frontend investment contract does not match this dashboard")
         files = manifest.get("files")
         if not isinstance(files, dict) or "index.html" not in files or not any(name.startswith("assets/") for name in files):
             raise FrontendBuildError("Frontend build is incomplete")

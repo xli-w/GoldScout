@@ -10,6 +10,12 @@ In VS Code, check the chat customization UI/diagnostics for the two agents, four
 
 ## Research and Intelligence Scope
 
+The separate [investment path](investment.md) provides GBP-only recorded
+accounting and buy-only, export-only allocation proposals. Its store is not the
+legacy trading ledger. Use temporary profiles/events/stores for development;
+unsupported FX, entitlement, corrections, historical research and execution must
+remain explicit rather than inferred from the legacy engine.
+
 Read [investor context](investment-research-context.md) and the [backtesting protocol](backtesting-protocol.md) before strategy selection or portfolio-suitability research. They govern the agreed GBP campaign, not live configuration or every generic USD experiment. Its feasibility gates, candidate budget, risk profiles, net cash-relative hurdle, costs, and single-use holdout rules take precedence over generic CLI defaults. The return aspiration is not a pass condition.
 
 The separate [campaign dataset tools](campaign-dataset.md) validate/snapshot user-supplied daily/weekly product histories, GBP-per-unit FX, cash rates and corporate actions offline; the read-only readiness audit performs scoped XLON daily checks. A separate normalized daily view preserves declared availability and source provenance. The FX-readiness audit and complete FX observation view select published, fresh observations only at caller-supplied clocks; they do not convert prices or verify complete event coverage, executable rates or historical vintages. Neither view nor audit supports performance. The pure `account_fills` helper is a synthetic GBP cash/quantity conservation contract only: no market valuation, returns, costs beyond supplied fill fees, actions, accrual, risk or simulation. These tools are not connected to the USD minute experiment runner, do not alter minute Dataset v1, and do not close GBP feasibility gates or authorize a campaign run. `prepare --allow-network` still uses Alpaca and remains outside the campaign's public/user-supplied-data boundary; see the [current runner blockers](backtesting-protocol.md#9-current-runner-readiness-and-blockers).
@@ -46,6 +52,7 @@ The [CI workflow](../.github/workflows/offline-validation.yml) installs the vers
 | Ledger / restart / persistence | [ledger](../tests/test_ledger.py), [state validation](../tests/test_state_validation.py) |
 | Candle/session/action data | [data](../tests/test_review2_data.py), [research safety](../tests/test_research_safety.py) |
 | GBP campaign import/readiness/accounting contracts | [campaign dataset](../tests/test_campaign_dataset.py), [readiness](../tests/test_campaign_readiness.py), [fill accounting](../tests/test_campaign_accounting.py) |
+| Offline investment accounting, replay and proposals | [investment](../tests/test_investment.py), [read-only investment API](../tests/test_investment_dashboard.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
 | Backtest / monitor timing | [backtest](../tests/test_backtest.py), [monitor](../tests/test_review2_monitor.py) |
 | Experiment runner (spec, dataset, selection, holdout) | [experiments](../tests/test_experiments.py) |
 | Intelligence calendar/contracts/wire schema | [intelligence](../tests/test_market_intelligence.py) |

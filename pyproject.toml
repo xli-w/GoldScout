@@ -5,15 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trader-local-dashboard"
 version = "0.1.0"
-description = "GoldScout local read-only portfolio monitoring dashboard"
+description = "GoldScout offline GBP investment planning and read-only portfolio dashboard"
 requires-python = ">=3.10"
 dynamic = ["dependencies", "optional-dependencies"]
 
 [project.scripts]
 trader-dashboard = "dashboard.__main__:main"
+goldscout-investment = "investment.__main__:main"
 
 [tool.setuptools]
-packages = ["dashboard", "market_intelligence"]
+packages = ["dashboard", "market_intelligence", "investment"]
 py-modules = ["proxy_config"]
 include-package-data = false
 
@@ -26,3 +27,4 @@ intelligence = {file = ["requirements-intelligence.txt"]}
 [tool.setuptools.package-data]
 dashboard = ["*.json", "static/index.html", "static/dashboard-build.json", "static/assets/*"]
 market_intelligence = ["*.json"]
+investment = ["*.json"]

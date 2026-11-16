@@ -3,6 +3,43 @@ import { readFileSync } from "node:fs";
 
 const fixtures = JSON.parse(readFileSync(new URL("../../dashboard/fixtures.json", import.meta.url), "utf8"));
 
+test("investment demo separates contributions, GBP valuation and export-only proposals", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto("/investment");
+  await expect(page.getByRole("heading", { name: "Long-term investment", level: 1 })).toBeVisible();
+  await expect(page.getByText("SYNTHETIC INVESTMENT DEMO")).toBeVisible();
+  await expect(page.getByText("Deposits are not profit")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Allocation and drift" })).toBeVisible();
+  await expect(page.getByText(/External savings are not broker buying power/)).toBeVisible();
+  await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(page.locator(".metrics")).toContainText("GBP");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test("investment guide remains usable when recorded investment data is unavailable", async ({ page }) => {
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ status: 503, json: { error: "investment_unavailable" } }));
+  await page.goto("/investment");
+  await expect(page.getByRole("heading", { name: "Investment data unavailable" })).toBeVisible();
+  await page.locator(".record-toolbar").getByRole("link", { name: "Investment guide" }).click();
+  await expect(page.getByRole("heading", { name: "Ownership, not short-term prediction" })).toBeVisible();
+  await expect(page.getByText(/Losses can be large, prolonged or permanent/)).toBeVisible();
+});
+
+test("investment browser rejects invalid money instead of displaying an invented total", async ({ page }) => {
+  const response = await page.request.get("/api/investment/v1/snapshot");
+  expect(response.ok()).toBeTruthy();
+  const report = await response.json();
+  report.equity_gbp = "NaN";
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+  await expect(page.getByRole("heading", { name: "Investment data unavailable" })).toBeVisible();
+  await expect(page.getByText("Investment response failed validation.")).toBeVisible();
+  await expect(page.getByText("Portfolio value", { exact: true })).toHaveCount(0);
+});
+
 test("trading guide works from the footer and without account data", async ({ page }) => {
   await page.route("**/api/v1/**", route => route.abort());
   await page.goto("/");
