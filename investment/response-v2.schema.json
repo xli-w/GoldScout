@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -22,6 +22,14 @@
     "recorded_interest_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
     "recorded_dividends_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
     "recorded_income_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+    "recorded_fee_events": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/recordedFeeEvent"}
+    },
+    "recorded_income_events": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/recordedIncomeEvent"}
+    },
     "twr_pct": {"$ref": "#/$defs/nullableDecimal"},
     "max_drawdown_pct": {"$ref": "#/$defs/nullableDecimal"},
     "accounts": {
@@ -125,6 +133,36 @@
         "timestamp": {"$ref": "#/$defs/utc"},
         "available_at": {"$ref": "#/$defs/utc"},
         "source": {"$ref": "#/$defs/text"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "recordedFeeEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "account_id", "product_id", "quantity", "price_gbp", "fee_gbp", "timestamp", "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
+        "type": {"enum": ["buy", "sell"]},
+        "account_id": {"$ref": "#/$defs/text"},
+        "product_id": {"$ref": "#/$defs/text"},
+        "quantity": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "price_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "fee_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "recordedIncomeEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "account_id", "product_id", "amount_gbp", "timestamp", "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
+        "type": {"enum": ["interest", "dividend"]},
+        "account_id": {"$ref": "#/$defs/text"},
+        "product_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
         "evidence": {"$ref": "#/$defs/text"}
       }
     },

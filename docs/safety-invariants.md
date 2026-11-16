@@ -85,7 +85,9 @@ These are development contracts, not a certification of live readiness. Current 
   valuation invalidates linked TWR/drawdown; later marks cannot reconstruct
   the missing flow-time value.
 - V2 fee and income totals are derived only from explicitly journaled fill fees,
-  interest and dividend payments. They do not imply complete expense, income,
+  interest and dividend payments. Preserve journal order, effective/availability
+  timestamps and evidence in the corresponding event history; the dashboard may
+  show only a recent subset. These records do not imply complete expense, income,
   entitlement, tax or cash-accrual coverage.
 - Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
 - Time-weighted unitization is flow-neutral and remains linked across complete withdrawals and later refunding. A zero-equity interval does not erase prior unit price/history or manufacture a drawdown from new capital.

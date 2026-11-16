@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from investment.service import demo_events, demo_profile, demo_snapshot, snapshot
 from investment.store import acknowledge_review, import_events, initialize
 from test_dashboard_api import MemoryEventLoop
-from test_investment_opening import (NOW as OPENING_NOW, opening, profile,
+from test_investment_opening import (NOW as OPENING_NOW, event, opening, profile,
                                      cash_observation, iso, savings_terms,
                                      savings_terms_event)
 
@@ -78,6 +78,29 @@ class InvestmentDashboardTests(unittest.TestCase):
                                          headers={"Origin": "http://127.0.0.1"}).status_code, 405)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
+    def test_v2_recorded_event_history_is_schema_valid_and_read_only(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [
+            opening(),
+            event("recorded-buy", "buy", OPENING_NOW, "broker", product_id="equity",
+                  quantity="1", price_gbp="10", fee_gbp="2"),
+            event("recorded-interest", "interest", OPENING_NOW, "bank", amount_gbp="5"),
+        ], self.now)
+        original = self.path.read_bytes()
+
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+        self.assertEqual(response.status_code, 200, response.text)
+        report = response.json()
+        self.assertEqual(report["recorded_fee_events"][0]["id"], "recorded-buy")
+        self.assertEqual(report["recorded_fee_events"][0]["available_at"], iso(OPENING_NOW))
+        self.assertEqual(report["recorded_income_events"][0]["id"], "recorded-interest")
+        self.assertIsNone(report["recorded_income_events"][0]["product_id"])
+        self.assertEqual(report["recorded_income_events"][0]["evidence"],
+                         "synthetic event evidence")
+        self.assertEqual(self.path.read_bytes(), original)
 
     def test_v2_unopened_store_does_not_invent_zero_balances(self):
         self.now = OPENING_NOW

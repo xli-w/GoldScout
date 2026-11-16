@@ -137,6 +137,20 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(result["recorded_interest_gbp"], "5")
         self.assertEqual(result["recorded_dividends_gbp"], "3")
         self.assertEqual(result["recorded_income_gbp"], "8")
+        self.assertEqual(result["recorded_fee_events"], [{
+            "id": "recorded-buy", "type": "buy", "account_id": "broker",
+            "product_id": "equity", "quantity": "1", "price_gbp": "10",
+            "fee_gbp": "2", "timestamp": iso(NOW), "available_at": iso(NOW),
+            "evidence": "synthetic event evidence",
+        }])
+        self.assertEqual(result["recorded_income_events"], [
+            {"id": "recorded-interest", "type": "interest", "account_id": "bank",
+             "product_id": None, "amount_gbp": "5", "timestamp": iso(NOW),
+             "available_at": iso(NOW), "evidence": "synthetic event evidence"},
+            {"id": "recorded-dividend", "type": "dividend", "account_id": "broker",
+             "product_id": "equity", "amount_gbp": "3", "timestamp": iso(NOW),
+             "available_at": iso(NOW), "evidence": "synthetic event evidence"},
+        ])
         self.assertEqual(import_events(self.database, events[1:], NOW), result["revision"])
         self.assertEqual(snapshot(self.database, NOW), result)
 

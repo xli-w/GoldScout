@@ -25,6 +25,12 @@ type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | 
   lifetime_gain_gbp: null;
   recorded_fees_gbp: string; recorded_interest_gbp: string; recorded_dividends_gbp: string;
   recorded_income_gbp: string;
+  recorded_fee_events: { id: string; type: "buy" | "sell"; account_id: string;
+    product_id: string; quantity: string; price_gbp: string; fee_gbp: string;
+    timestamp: string; available_at: string; evidence: string }[];
+  recorded_income_events: { id: string; type: "interest" | "dividend"; account_id: string;
+    product_id: string | null; amount_gbp: string; timestamp: string;
+    available_at: string; evidence: string }[];
   cash_observations: { account_id: string; balance_gbp: string; difference_gbp: string;
     timestamp: string; available_at: string; source: string; evidence: string }[];
   valuation_history: {
@@ -199,6 +205,34 @@ export function InvestmentView() {
               <div><dt>Recorded dividends</dt><dd>{pounds(data.recorded_dividends_gbp)}</dd></div>
               <div><dt>Recorded income total</dt><dd>{pounds(data.recorded_income_gbp)}</dd></div>
             </dl>
+            {data.recorded_fee_events.length > 0 && <>
+              <h3>Recorded fill events</h3>
+              <p className="position-note">Showing the latest {Math.min(data.recorded_fee_events.length, 100)} journal entries in original order.</p>
+              <div className="table-scroll" tabIndex={0} aria-label="Recorded fill fee history">
+                <table>
+                  <thead><tr><th>Effective at (UTC)</th><th>Side</th><th>Account</th><th>Product</th><th>Quantity</th><th>Price</th><th>Fee</th><th>Available at</th><th>Evidence</th></tr></thead>
+                  <tbody>{data.recorded_fee_events.slice(-100).map(event =>
+                    <tr key={event.id}><td>{timestamp(event.timestamp)}</td><td>{label(event.type)}</td>
+                      <td>{event.account_id}</td><td>{event.product_id}</td><td>{event.quantity}</td>
+                      <td>{pounds(event.price_gbp)}</td><td>{pounds(event.fee_gbp)}</td>
+                      <td>{timestamp(event.available_at)}</td><td>{event.evidence}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </>}
+            {data.recorded_income_events.length > 0 && <>
+              <h3>Recorded income events</h3>
+              <p className="position-note">Showing the latest {Math.min(data.recorded_income_events.length, 100)} journal entries in original order.</p>
+              <div className="table-scroll" tabIndex={0} aria-label="Recorded income history">
+                <table>
+                  <thead><tr><th>Effective at (UTC)</th><th>Type</th><th>Account</th><th>Product</th><th>Amount</th><th>Available at</th><th>Evidence</th></tr></thead>
+                  <tbody>{data.recorded_income_events.slice(-100).map(event =>
+                    <tr key={event.id}><td>{timestamp(event.timestamp)}</td><td>{label(event.type)}</td>
+                      <td>{event.account_id}</td>                      <td>{event.product_id ?? "Not applicable"}</td>
+                      <td>{pounds(event.amount_gbp)}</td><td>{timestamp(event.available_at)}</td>
+                      <td>{event.evidence}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </>}
           </section>}
           {data.schema_version === 2 && <p className="position-note">Baseline as of {timestamp(data.baseline_as_of)}. Lifetime gain and prior cost basis are unavailable. No valuation freshness threshold is configured.</p>}
           <dl className="health-facts">

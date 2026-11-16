@@ -202,8 +202,11 @@ After a baseline exists, an external flow without a complete contemporaneous
 valuation invalidates the linked TWR/drawdown series; later marks do not
 reconstruct the missing flow-time value.
 The v2 snapshot also totals explicitly journaled fill fees, interest and
-dividend payments. These are recorded-event totals only: they do not establish
-complete fee, income, entitlement, tax or cash-accrual coverage.
+dividend payments, and exposes the underlying fee-bearing fills and income
+events with effective/availability timestamps and evidence. The report retains
+the bounded journal history; the dashboard shows the latest 100 journal entries
+of each kind in original order. These are recorded-event details only: they do
+not establish complete fee, income, entitlement, tax or cash-accrual coverage.
 
 Readers verify every stored commit's replay hash for both versions; these
 unkeyed hashes detect inconsistencies, not malicious tampering by a party who

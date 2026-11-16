@@ -105,6 +105,28 @@ def opening_report(ledger, now, source_mode="recorded"):
         recorded_dividends = sum(
             (number(value["amount_gbp"]) for value in ledger.ids.values()
              if value.get("type") == "dividend"), ZERO)
+        recorded_fee_events = [
+            _reported_timestamps({
+                key: value[key] for key in (
+                    "id", "type", "account_id", "product_id", "quantity",
+                    "price_gbp", "fee_gbp", "timestamp", "available_at", "evidence")
+            }, ("timestamp", "available_at"))
+            for value in ledger.ids.values()
+            if value.get("type") in ("buy", "sell")
+        ]
+        recorded_income_events = [
+            _reported_timestamps({
+                "id": value["id"], "type": value["type"],
+                "account_id": value["account_id"],
+                "product_id": value.get("product_id"),
+                "amount_gbp": value["amount_gbp"],
+                "timestamp": value["timestamp"],
+                "available_at": value["available_at"],
+                "evidence": value["evidence"],
+            }, ("timestamp", "available_at"))
+            for value in ledger.ids.values()
+            if value.get("type") in ("interest", "dividend")
+        ]
         products = {item["id"]: item for item in ledger.spec["products"]}
         holdings = []
         for (account, product_id), quantity in sorted(ledger.holdings.items()):
@@ -162,6 +184,8 @@ def opening_report(ledger, now, source_mode="recorded"):
             "recorded_interest_gbp": fmt(recorded_interest),
             "recorded_dividends_gbp": fmt(recorded_dividends),
             "recorded_income_gbp": fmt(recorded_interest + recorded_dividends),
+            "recorded_fee_events": recorded_fee_events,
+            "recorded_income_events": recorded_income_events,
             "twr_pct": fmt((ledger.unit_price - 1) * 100) if performance else None,
             "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],
