@@ -154,6 +154,38 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(import_events(self.database, events[1:], NOW), result["revision"])
         self.assertEqual(snapshot(self.database, NOW), result)
 
+    def test_v2_report_exposes_recorded_cash_flows_in_journal_order(self):
+        initialize(self.database, profile(), NOW)
+        events = [
+            opening(),
+            event("recorded-contribution", "contribution", NOW, "bank",
+                  amount_gbp="100"),
+            event("recorded-transfer", "transfer", NOW, "bank", amount_gbp="50",
+                  destination_account_id="broker"),
+            event("recorded-withdrawal", "withdrawal", NOW, "bank",
+                  amount_gbp="20"),
+        ]
+        import_events(self.database, events, NOW)
+
+        result = snapshot(self.database, NOW)
+        self.assertEqual(result["net_contributions_gbp"], "80")
+        self.assertEqual(result["recorded_flow_events"], [
+            {"id": "recorded-contribution", "type": "contribution",
+             "account_id": "bank", "destination_account_id": None,
+             "amount_gbp": "100", "timestamp": iso(NOW), "available_at": iso(NOW),
+             "evidence": "synthetic event evidence"},
+            {"id": "recorded-transfer", "type": "transfer",
+             "account_id": "bank", "destination_account_id": "broker",
+             "amount_gbp": "50", "timestamp": iso(NOW), "available_at": iso(NOW),
+             "evidence": "synthetic event evidence"},
+            {"id": "recorded-withdrawal", "type": "withdrawal",
+             "account_id": "bank", "destination_account_id": None,
+             "amount_gbp": "20", "timestamp": iso(NOW), "available_at": iso(NOW),
+             "evidence": "synthetic event evidence"},
+        ])
+        self.assertEqual(import_events(self.database, events[1:], NOW), result["revision"])
+        self.assertEqual(snapshot(self.database, NOW), result)
+
     def test_growth_history_separates_recorded_capital_from_gain_and_preserves_gaps(self):
         initialize(self.database, profile(), NOW)
         initial = opening()

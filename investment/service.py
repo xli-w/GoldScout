@@ -127,6 +127,19 @@ def opening_report(ledger, now, source_mode="recorded"):
             for value in ledger.ids.values()
             if value.get("type") in ("interest", "dividend")
         ]
+        recorded_flow_events = [
+            _reported_timestamps({
+                "id": value["id"], "type": value["type"],
+                "account_id": value["account_id"],
+                "destination_account_id": value.get("destination_account_id"),
+                "amount_gbp": value["amount_gbp"],
+                "timestamp": value["timestamp"],
+                "available_at": value["available_at"],
+                "evidence": value["evidence"],
+            }, ("timestamp", "available_at"))
+            for value in ledger.ids.values()
+            if value.get("type") in ("contribution", "withdrawal", "transfer")
+        ]
         products = {item["id"]: item for item in ledger.spec["products"]}
         holdings = []
         for (account, product_id), quantity in sorted(ledger.holdings.items()):
@@ -186,6 +199,7 @@ def opening_report(ledger, now, source_mode="recorded"):
             "recorded_income_gbp": fmt(recorded_interest + recorded_dividends),
             "recorded_fee_events": recorded_fee_events,
             "recorded_income_events": recorded_income_events,
+            "recorded_flow_events": recorded_flow_events,
             "twr_pct": fmt((ledger.unit_price - 1) * 100) if performance else None,
             "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],

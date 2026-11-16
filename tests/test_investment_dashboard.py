@@ -87,6 +87,12 @@ class InvestmentDashboardTests(unittest.TestCase):
             event("recorded-buy", "buy", OPENING_NOW, "broker", product_id="equity",
                   quantity="1", price_gbp="10", fee_gbp="2"),
             event("recorded-interest", "interest", OPENING_NOW, "bank", amount_gbp="5"),
+            event("recorded-contribution", "contribution", OPENING_NOW, "bank",
+                  amount_gbp="100"),
+            event("recorded-transfer", "transfer", OPENING_NOW, "bank",
+                  amount_gbp="50", destination_account_id="broker"),
+            event("recorded-withdrawal", "withdrawal", OPENING_NOW, "bank",
+                  amount_gbp="20"),
         ], self.now)
         original = self.path.read_bytes()
 
@@ -100,6 +106,11 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertIsNone(report["recorded_income_events"][0]["product_id"])
         self.assertEqual(report["recorded_income_events"][0]["evidence"],
                          "synthetic event evidence")
+        self.assertEqual([item["id"] for item in report["recorded_flow_events"]],
+                         ["recorded-contribution", "recorded-transfer",
+                          "recorded-withdrawal"])
+        self.assertEqual(report["recorded_flow_events"][1]["destination_account_id"],
+                         "broker")
         self.assertEqual(self.path.read_bytes(), original)
 
     def test_v2_unopened_store_does_not_invent_zero_balances(self):

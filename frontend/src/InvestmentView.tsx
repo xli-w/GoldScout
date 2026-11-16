@@ -31,6 +31,9 @@ type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | 
   recorded_income_events: { id: string; type: "interest" | "dividend"; account_id: string;
     product_id: string | null; amount_gbp: string; timestamp: string;
     available_at: string; evidence: string }[];
+  recorded_flow_events: { id: string; type: "contribution" | "withdrawal" | "transfer";
+    account_id: string; destination_account_id: string | null; amount_gbp: string;
+    timestamp: string; available_at: string; evidence: string }[];
   cash_observations: { account_id: string; balance_gbp: string; difference_gbp: string;
     timestamp: string; available_at: string; source: string; evidence: string }[];
   valuation_history: {
@@ -235,6 +238,23 @@ export function InvestmentView() {
             </>}
           </section>}
           {data.schema_version === 2 && <p className="position-note">Baseline as of {timestamp(data.baseline_as_of)}. Lifetime gain and prior cost basis are unavailable. No valuation freshness threshold is configured.</p>}
+          {data.schema_version === 2 && data.recorded_flow_events.length > 0 &&
+            <section className="history-group" aria-label="Recorded capital flows">
+              <h2>Recorded contributions, withdrawals and transfers</h2>
+              <p className="position-note">Showing the latest {Math.min(data.recorded_flow_events.length, 100)} of {data.recorded_flow_events.length} journal entries in original order. These are operator-recorded events, not independently verified movements. Transfers between included accounts do not change net external contributions.</p>
+              <div className="table-scroll" tabIndex={0} aria-label="Recorded capital flow history">
+                <table>
+                  <thead><tr><th>Effective at (UTC)</th><th>Type</th><th>Account</th><th>Other side</th><th>Recorded amount</th><th>Available at</th><th>Evidence</th></tr></thead>
+                  <tbody>{data.recorded_flow_events.slice(-100).map(event =>
+                    <tr key={event.id}><td>{timestamp(event.timestamp)}</td><td>{label(event.type)}</td>
+                      <td>{event.account_id}</td>
+                      <td>{event.destination_account_id ??
+                        (event.type === "contribution" ? "External source" : "External destination")}</td>
+                      <td>{pounds(event.amount_gbp)}</td><td>{timestamp(event.available_at)}</td>
+                      <td>{event.evidence}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </section>}
           <dl className="health-facts">
             <div><dt>Time-weighted return</dt><dd>{percent(data.twr_pct)}</dd></div>
             <div><dt>Flow-neutral maximum drawdown</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>

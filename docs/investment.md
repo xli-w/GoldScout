@@ -207,6 +207,11 @@ events with effective/availability timestamps and evidence. The report retains
 the bounded journal history; the dashboard shows the latest 100 journal entries
 of each kind in original order. These are recorded-event details only: they do
 not establish complete fee, income, entitlement, tax or cash-accrual coverage.
+V2 also exposes contribution, withdrawal and included-account transfer events
+with their evidence clocks. The dashboard shows the latest 100 in original
+journal order; transfers are identified separately because they do not change
+net external contributions. These operator records are not independently
+verified account movements.
 
 Readers verify every stored commit's replay hash for both versions; these
 unkeyed hashes detect inconsistencies, not malicious tampering by a party who

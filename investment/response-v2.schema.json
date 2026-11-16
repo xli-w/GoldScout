@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "recorded_flow_events", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -29,6 +29,10 @@
     "recorded_income_events": {
       "type": "array", "maxItems": 10000,
       "items": {"$ref": "#/$defs/recordedIncomeEvent"}
+    },
+    "recorded_flow_events": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/recordedFlowEvent"}
     },
     "twr_pct": {"$ref": "#/$defs/nullableDecimal"},
     "max_drawdown_pct": {"$ref": "#/$defs/nullableDecimal"},
@@ -165,6 +169,25 @@
         "available_at": {"$ref": "#/$defs/utc"},
         "evidence": {"$ref": "#/$defs/text"}
       }
+    },
+    "recordedFlowEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "account_id", "destination_account_id", "amount_gbp", "timestamp", "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
+        "type": {"enum": ["contribution", "withdrawal", "transfer"]},
+        "account_id": {"$ref": "#/$defs/text"},
+        "destination_account_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "evidence": {"$ref": "#/$defs/text"}
+      },
+      "allOf": [{
+        "if": {"properties": {"type": {"const": "transfer"}}},
+        "then": {"properties": {"destination_account_id": {"$ref": "#/$defs/text"}}},
+        "else": {"properties": {"destination_account_id": {"type": "null"}}}
+      }]
     },
     "valuationHistoryPoint": {
       "type": "object", "additionalProperties": false,

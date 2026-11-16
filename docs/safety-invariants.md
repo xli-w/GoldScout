@@ -89,6 +89,10 @@ These are development contracts, not a certification of live readiness. Current 
   timestamps and evidence in the corresponding event history; the dashboard may
   show only a recent subset. These records do not imply complete expense, income,
   entitlement, tax or cash-accrual coverage.
+- V2 capital-flow history preserves contribution, withdrawal and transfer events
+  with their journal order and evidence clocks. A transfer between included
+  accounts is not an external contribution or withdrawal; recorded events are not
+  independent verification of account movements.
 - Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
 - Time-weighted unitization is flow-neutral and remains linked across complete withdrawals and later refunding. A zero-equity interval does not erase prior unit price/history or manufacture a drawdown from new capital.
 - External-deposit cash is part of recorded mandate value only when included by policy; it is never broker buying power. Scheduled contributions are not settled cash. Transfers between included accounts do not count as external investment performance flows.

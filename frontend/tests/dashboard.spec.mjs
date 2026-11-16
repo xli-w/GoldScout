@@ -86,6 +86,19 @@ test("opening records show since-baseline value without inventing lifetime gain"
       product_id: "fund", amount_gbp: "3", timestamp: at, available_at: at,
       evidence: "synthetic later payment evidence",
     }],
+    recorded_flow_events: [{
+      id: "synthetic-contribution", type: "contribution", account_id: "bank",
+      destination_account_id: null, amount_gbp: "10", timestamp: at,
+      available_at: at, evidence: "synthetic contribution evidence",
+    }, {
+      id: "synthetic-transfer", type: "transfer", account_id: "bank",
+      destination_account_id: "broker", amount_gbp: "5", timestamp: at,
+      available_at: at, evidence: "synthetic transfer evidence",
+    }, {
+      id: "synthetic-withdrawal", type: "withdrawal", account_id: "bank",
+      destination_account_id: null, amount_gbp: "10", timestamp: at,
+      available_at: at, evidence: "synthetic withdrawal evidence",
+    }],
     cash_observations: [
       { account_id: "bank", balance_gbp: "990", difference_gbp: "-10",
         timestamp: "2025-12-01T12:00:00Z", available_at: "2025-12-01T12:00:00Z",
@@ -140,6 +153,15 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(incomeHistory.getByRole("columnheader", { name: "Effective at (UTC)" })).toBeVisible();
   await expect(incomeHistory.getByRole("row").nth(1)).toContainText("synthetic payment evidence");
   await expect(incomeHistory.getByRole("row").nth(2)).toContainText("synthetic later payment evidence");
+  const flowHistory = page.getByLabel("Recorded capital flow history").getByRole("table");
+  await expect(flowHistory.getByRole("columnheader", { name: "Effective at (UTC)" })).toBeVisible();
+  await expect(flowHistory.getByRole("row").nth(1)).toContainText("synthetic contribution evidence");
+  await expect(flowHistory.getByRole("row").nth(1)).toContainText("External source");
+  await expect(flowHistory.getByRole("row").nth(2)).toContainText("synthetic transfer evidence");
+  await expect(flowHistory.getByRole("row").nth(2)).toContainText("broker");
+  await expect(flowHistory.getByRole("row").nth(3)).toContainText("synthetic withdrawal evidence");
+  await expect(flowHistory.getByRole("row").nth(3)).toContainText("External destination");
+  await expect(page.getByText(/Transfers between included accounts do not change net external contributions/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Reported savings-account terms" })).toBeVisible();
   await expect(page.getByText(/4.25% AER/)).toBeVisible();
   await expect(page.getByText(/not current provider verification or an interest-accrual input/)).toBeVisible();
