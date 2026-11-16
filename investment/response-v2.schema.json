@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "recorded_flow_events", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "recorded_flow_events", "recorded_corrections", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "role_accounting", "role_accounting_at", "role_assignments", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -33,6 +33,10 @@
     "recorded_flow_events": {
       "type": "array", "maxItems": 10000,
       "items": {"$ref": "#/$defs/recordedFlowEvent"}
+    },
+    "recorded_corrections": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/recordedCorrection"}
     },
     "twr_pct": {"$ref": "#/$defs/nullableDecimal"},
     "max_drawdown_pct": {"$ref": "#/$defs/nullableDecimal"},
@@ -73,6 +77,40 @@
         }
       }
     },
+    "role_accounting": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["role", "cash_gbp", "value_gbp", "accounts", "holdings"],
+        "properties": {
+          "role": {"enum": ["core", "dynamic", "unassigned"]},
+          "cash_gbp": {"$ref": "#/$defs/nullableDecimal"},
+          "value_gbp": {"$ref": "#/$defs/nullableDecimal"},
+          "accounts": {"type": "array", "maxItems": 50, "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["account_id", "cash_gbp"],
+            "properties": {"account_id": {"$ref": "#/$defs/text"}, "cash_gbp": {"$ref": "#/$defs/nonnegativeDecimal"}}
+          }},
+          "holdings": {"type": "array", "maxItems": 5000, "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["account_id", "product_id", "quantity"],
+            "properties": {"account_id": {"$ref": "#/$defs/text"}, "product_id": {"$ref": "#/$defs/text"}, "quantity": {"$ref": "#/$defs/nonnegativeDecimal"}}
+          }}
+        }
+      }
+    },
+    "role_accounting_at": {"$ref": "#/$defs/nullableUtc"},
+    "role_assignments": {"type": "array", "maxItems": 10000, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "account_id", "product_id", "role", "amount", "timestamp", "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"}, "account_id": {"$ref": "#/$defs/text"},
+        "product_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "role": {"enum": ["core", "dynamic"]}, "amount": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "timestamp": {"$ref": "#/$defs/utc"}, "available_at": {"$ref": "#/$defs/utc"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    }},
     "proposal": {
       "type": "object", "additionalProperties": false,
       "required": ["status", "reason", "expires_at", "orders", "manual_transfers", "execution_enabled"],
@@ -142,10 +180,11 @@
     },
     "recordedFeeEvent": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "type", "account_id", "product_id", "quantity", "price_gbp", "fee_gbp", "timestamp", "available_at", "evidence"],
+      "required": ["id", "type", "account_id", "product_id", "role", "quantity", "price_gbp", "fee_gbp", "timestamp", "available_at", "evidence"],
       "properties": {
         "id": {"$ref": "#/$defs/text"},
         "type": {"enum": ["buy", "sell"]},
+        "role": {"enum": ["core", "dynamic", "unassigned"]},
         "account_id": {"$ref": "#/$defs/text"},
         "product_id": {"$ref": "#/$defs/text"},
         "quantity": {"$ref": "#/$defs/nonnegativeDecimal"},
@@ -158,10 +197,12 @@
     },
     "recordedIncomeEvent": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "type", "account_id", "product_id", "amount_gbp", "timestamp", "available_at", "evidence"],
+      "required": ["id", "type", "account_id", "product_id", "role", "role_evidence", "amount_gbp", "timestamp", "available_at", "evidence"],
       "properties": {
         "id": {"$ref": "#/$defs/text"},
         "type": {"enum": ["interest", "dividend"]},
+        "role": {"enum": ["core", "dynamic", "unassigned"]},
+        "role_evidence": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
         "account_id": {"$ref": "#/$defs/text"},
         "product_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
         "amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
@@ -172,10 +213,11 @@
     },
     "recordedFlowEvent": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "type", "account_id", "destination_account_id", "amount_gbp", "timestamp", "available_at", "evidence"],
+      "required": ["id", "type", "account_id", "destination_account_id", "role", "amount_gbp", "timestamp", "available_at", "evidence"],
       "properties": {
         "id": {"$ref": "#/$defs/text"},
         "type": {"enum": ["contribution", "withdrawal", "transfer"]},
+        "role": {"enum": ["core", "dynamic", "unassigned"]},
         "account_id": {"$ref": "#/$defs/text"},
         "destination_account_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
         "amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
@@ -188,6 +230,26 @@
         "then": {"properties": {"destination_account_id": {"$ref": "#/$defs/text"}}},
         "else": {"properties": {"destination_account_id": {"type": "null"}}}
       }]
+    },
+    "recordedCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "original_event_id", "replacement_event_id", "replaced_type",
+        "account_id", "role", "role_evidence", "original_amount_gbp", "replacement_amount_gbp", "timestamp",
+        "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
+        "original_event_id": {"$ref": "#/$defs/text"},
+        "replacement_event_id": {"$ref": "#/$defs/text"},
+        "replaced_type": {"enum": ["contribution", "withdrawal", "interest"]},
+        "role": {"enum": ["core", "dynamic", "unassigned"]},
+        "role_evidence": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "account_id": {"$ref": "#/$defs/text"},
+        "original_amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "replacement_amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
     },
     "valuationHistoryPoint": {
       "type": "object", "additionalProperties": false,

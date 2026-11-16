@@ -45,7 +45,12 @@ These are development contracts, not a certification of live readiness. Current 
   The [core-plus-dynamic roadmap](decisions/0004-core-dynamic-portfolio-manager.md)
   is planned, not an implemented accounting or execution contract. The
   illustrative 80-90% / 10-20% split does not approve weights, risk or replenishment.
-- Future role budgets must be distinct from asset-class targets. No experiment
+- V2 core/dynamic/unassigned role balances are explicit replayed evidence,
+  independent of account and asset class. They conserve aggregate cash and
+  holdings; missing attribution stays unassigned. Role debits cannot consume
+  another role, account transfers preserve role, and role-to-role movements
+  are disabled. Attribution is not a risk budget or evidence of independently
+  verified custody. Future role budgets must be distinct from asset-class targets. No experiment
   may automatically draw core funding to replace losses, promote itself, alter
   allocation/risk limits or treat core gains as alpha. Approved capital caps do
   not guarantee realised loss bounds. Exact transfer and loss rules require
@@ -59,10 +64,11 @@ These are development contracts, not a certification of live readiness. Current 
 - V1 begins at explicitly evidenced empty inception. V2 can start from an explicit
   opening record of cash and long holdings without inferring prior transactions,
   cost basis or lifetime gain. A performance baseline starts only at a complete
-  common valuation whose evidence was available at that clock. V2 is CLI-recorded
-  and locally viewable read-only, with no allocation policy, review approval,
-  proposal export or migration. No v2 freshness threshold is configured.
-  Never infer FX, correction, entitlement, unrecorded interest or distributions.
+  common valuation whose evidence was available at that clock. V2 is
+  operator-recorded by CLI or explicitly enabled local dashboard, with no
+  allocation policy, review approval, proposal export or migration. No v2
+  freshness threshold is configured. Never infer FX, entitlement, unrecorded
+  interest or distributions; corrections remain narrowly evidence-backed.
 - V2 cash observations are separate append-only evidence, never balance mutations.
   Calculate any difference against recorded cash at that observation clock; preserve
   the dated discrepancy and evidence source. A statement observation cannot refresh
@@ -81,6 +87,14 @@ These are development contracts, not a certification of live readiness. Current 
   sequencing: required marks precede same-clock external flows, and the first
   complete baseline precedes same-clock interest or dividends. Never infer
   this ordering from equal timestamps.
+- The investment dashboard is read-only by default. Manual writes require an
+  explicit server opt-in, an operator-entered password and a selected existing
+  v2 store; they are same-origin, CSRF-protected, previewed and revision-bound.
+  Stale revisions fail closed. Browser sessions/previews are temporary and no
+  browser path contacts a bank/broker, moves funds, approves orders or executes
+  trades. Corrections are append-only and limited to the amount of the
+  immediately latest contribution, withdrawal or interest event; statement
+  observations remain evidence and are never automatic balance corrections.
 - An external flow after the baseline without a complete contemporaneous
   valuation invalidates linked TWR/drawdown; later marks cannot reconstruct
   the missing flow-time value.
@@ -96,7 +110,10 @@ These are development contracts, not a certification of live readiness. Current 
 - Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
 - Time-weighted unitization is flow-neutral and remains linked across complete withdrawals and later refunding. A zero-equity interval does not erase prior unit price/history or manufacture a drawdown from new capital.
 - External-deposit cash is part of recorded mandate value only when included by policy; it is never broker buying power. Scheduled contributions are not settled cash. Transfers between included accounts do not count as external investment performance flows.
-- The allocation planner is pure and human-policy-driven. Proposals are exported with expiry/revision binding and execution disabled. Sales are limited to recorded overweight holdings at annual/drift reviews, bounded by sleeve excess, holdings and declared increments/minimums; proposed sale proceeds never fund buys. Purchases use only recorded per-account broker cash, not external deposits or hypothetical proceeds. Missing targeted products block funded orders; unavailable purchase references exclude affected buys and any supported partial proposal must disclose partial coverage. Future costs and settlement assurance are not implemented.
+- V1 and v2 investment proposals are blocked until role-aware policy, actual
+  weights, products and loss/transfer rules are approved and implemented.
+  The legacy asset-class planner is not connected to reports or exports.
+  Neither a report, acknowledgement nor an attribution grants execution authority.
 - Investment v1 store schemas are validated against the original tables, implicit index and immutable triggers before integrity checks or data queries can execute untrusted schema expressions. Altered or extra objects are refused; readers never repair them.
 - Manual review acknowledgements are append-only, bound to an unchanged, previously committed revision and a complete, fresh recorded valuation; they are not trade approval. Monthly and annual clocks are separate; an annual acknowledgement also counts as monthly, while five-point drift remains a trigger. Acknowledgements do not alter cash, holdings, valuation clocks or performance; later evidence cannot be backdated before them. Invalid historical attestations fail replay rather than being silently repaired.
 - A cash-only confirmation may refresh the recorded valuation clock only when every included account has an exact matching GBP balance and evidence available at that clock; an unheld-product price mark cannot refresh that clock. It never changes money or repairs discrepancies; it is an operator attestation, not independent proof of balances or settlement. Prior journal evidence must have been available by either an acknowledgement or confirmation clock.

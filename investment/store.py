@@ -111,13 +111,20 @@ def state_digest(ledger):
             }
             value["terms_last_time"] = iso(ledger.terms_last_time)
             value["terms_latest_available_at"] = iso(ledger.terms_latest_available_at)
+        if ledger.role_active:
+            value["role_accounting"] = {
+                "cash": [[*key, fmt(amount)] for key, amount in sorted(ledger.role_cash.items())],
+                "holdings": [[*key, fmt(quantity)]
+                             for key, quantity in sorted(ledger.role_holdings.items())],
+                "attributed_at": iso(ledger.role_last_time),
+            }
     return digest(canonical(value))
 
 
 def _connect(database, readonly):
     path = Path(database).absolute()
     if not path.is_file():
-        raise InvestmentError("Investment store missing; explicit init required")
+        raise InvestmentError("Investment store missing; explicit init required") from FileNotFoundError(path)
     try:
         if path.stat().st_size > MAX_DATABASE_BYTES:
             raise InvestmentError("Investment database exceeds size bound")

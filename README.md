@@ -9,8 +9,9 @@ The goal is transparent net compound growth, a majority stable investment core,
 a capped experimental sleeve, source-linked AI/economic research and as much
 validated policy-bound automation as practical. An illustrative 80-90% core /
 10-20% dynamic split is a design discussion, not an approved allocation or default.
-The current investment release is still offline and export-only: it cannot place
-orders, isolate a dynamic sleeve or guarantee profitability.
+The current investment release is offline and operator-recorded: it cannot place
+orders or guarantee profitability. Explicit v2 core/dynamic accounting separates
+recorded balances, but is not a risk limit or execution authority.
 
 See the [investment guide](docs/investment.md) for the current workflow, supported
 accounting and explicit research/broker blockers.
@@ -21,19 +22,20 @@ accounting and explicit research/broker blockers.
   high-quality bonds and designated GBP savings, and eventually a separate dynamic
   budget. "Fixed" means stable policy, not fixed prices or guaranteed returns.
   No automatic "best backtest" allocation selection is implemented or intended.
-- Contribution-first planning, monthly review and annual/five-percentage-point
-  drift reviews aim to limit unnecessary turnover. Export-only sales can be
-  suggested at annual/drift reviews; proposed proceeds do not fund purchases.
-  Separate monthly/annual reviews can be acknowledged in the offline CLI;
+- Investment proposals are blocked until role-aware policy, actual targets,
+  products and loss/transfer rules are approved and implemented.
+  Separate monthly/annual v1 reviews can be acknowledged in the offline CLI;
   persistent five-point drift remains a trigger. No trade is a valid outcome.
 - GBP contributions are separated from investment gains. External savings are
   not broker buying power; manual inputs are not broker verification.
-- The read-only dashboard includes `/investment` and `/investment-guide`.
+- The dashboard is read-only by default and includes `/investment` and `/investment-guide`.
+  Explicitly enabled v2 manual recording requires local authentication.
   No dashboard account or trading route approves or executes orders.
 - A separate v2 opening-evidence contract can record existing GBP
   balances and long holdings without fabricating past purchases; its reports
   label lifetime gains unavailable and its policies/proposals are not implemented.
-  CLI imports are displayed in the local read-only investment dashboard.
+  Explicit evidence can attribute cash and holdings to core, dynamic or unassigned
+  across accounts and products; role-to-role transfers are disabled.
   Cash observations preserve discrepancies without changing balances, and
   evidence-dated savings-term updates change only the displayed terms; neither
   action accrues interest or refreshes portfolio valuation.

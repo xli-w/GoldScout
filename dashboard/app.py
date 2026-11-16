@@ -32,7 +32,8 @@ MESSAGES = {
 
 
 def create_app(database=None, scenario="healthy_recorded", clock=None, static_directory=None, telemetry_path=None, process_check=None, serve_frontend=True,
-               intelligence_database=None, intelligence_demo=False, analysis_password=None, analysis_profiles=(), investment_database=None):
+               intelligence_database=None, intelligence_demo=False, analysis_password=None, analysis_profiles=(), investment_database=None,
+               investment_recording_password=None):
     if database is not None and investment_database is not None:
         raise ValueError("Select legacy trading or investment storage, not both")
     if serve_frontend:
@@ -48,12 +49,24 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         json.loads((ROOT / "response.schema.json").read_text(encoding="utf-8")), format_checker=FormatChecker())
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     intelligence = None
+    investment_recording = None
+    if investment_recording_password is not None:
+        if investment_database is None or reader is not None or intelligence_demo:
+            raise ValueError("Investment recording requires a selected recorded investment store")
+        from dashboard.investment_recording import RecordingSessions
+        investment_recording = RecordingSessions(
+            investment_database, investment_recording_password, clock)
     if intelligence_database is not None or intelligence_demo:
         if intelligence_demo and (database is not None or investment_database is not None or intelligence_database is not None):
             raise ValueError("Synthetic intelligence must not bind operational storage")
         from dashboard.intelligence import IntelligenceWorkspace
         intelligence = IntelligenceWorkspace(intelligence_database, analysis_profiles, analysis_password, intelligence_demo)
-    mutation_paths = {"/api/v1/intelligence/login", "/api/v1/intelligence/controls"}
+    mutation_paths = {
+        "/api/v1/intelligence/login", "/api/v1/intelligence/controls",
+        "/api/investment/v1/recording/login",
+        "/api/investment/v1/recording/preview",
+        "/api/investment/v1/recording/confirm",
+    }
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     def error(code, status=None):
@@ -79,7 +92,12 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
             response = error("invalid_request", 400)
         elif origin and origin != f"{request.url.scheme}://{host}":
             response = error("invalid_request", 403)
-        elif request.method not in ("GET", "HEAD") and not (request.method == "POST" and request.url.path in mutation_paths and intelligence and intelligence.controls_enabled):
+        elif request.method not in ("GET", "HEAD") and not (
+                request.method == "POST" and request.url.path in mutation_paths and (
+                    (intelligence and intelligence.controls_enabled and
+                     request.url.path.startswith("/api/v1/intelligence/")) or
+                    (investment_recording and
+                     request.url.path.startswith("/api/investment/v1/recording/")))):
             response = error("invalid_request", 405)
         elif request.method == "POST" and (origin != f"{request.url.scheme}://{host}" or request.headers.get("sec-fetch-site") not in (None,"same-origin")):
             response = error("invalid_request", 403)
@@ -129,6 +147,26 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         except SchemaValidationError:
             return JSONResponse(status_code=409, content={"error": "investment_invalid", "message": "Investment report failed schema validation."})
 
+    @app.get("/api/investment/v1/recording/session")
+    def investment_recording_session(request: Request):
+        if investment_recording is None:
+            return {"enabled": False, "authenticated": False, "csrf": None,
+                    "accounts": [], "products": [], "latest_correctable_event": None}
+        from dashboard.investment_recording import RecordingError
+
+        try:
+            result = investment_recording.session_payload(
+                request.cookies.get("investment_recording_session"), clock())
+        except RecordingError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        token = result.pop("_token")
+        response = JSONResponse(result)
+        response.set_cookie(
+            "investment_recording_session", token, httponly=True, samesite="strict",
+            secure=request.url.scheme == "https",
+            path="/api/investment/v1/recording", max_age=900)
+        return response
+
     @app.get("/api/v1/intelligence")
     def intelligence_snapshot():
         if intelligence is None:
@@ -148,15 +186,85 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         response.set_cookie("analysis_session",token,httponly=True,samesite="strict",secure=request.url.scheme=="https",path="/api/v1/intelligence",max_age=900)
         return response
 
-    async def bounded_json(request):
+    async def bounded_json(request, maximum=4096):
         if request.headers.get("content-type","").split(";",1)[0]!="application/json":
             raise ValueError("JSON only")
-        body=b""
+        body = bytearray()
         async for chunk in request.stream():
-            body+=chunk
-            if len(body)>4096:
+            body.extend(chunk)
+            if len(body) > maximum:
                 raise ValueError("Command too large")
-        return json.loads(body)
+        return json.loads(bytes(body))
+
+    @app.post("/api/investment/v1/recording/login")
+    async def investment_recording_login(request: Request):
+        if investment_recording is None:
+            return JSONResponse(status_code=503, content={"error": "recording_disabled"})
+        from dashboard.investment_recording import RecordingError
+
+        try:
+            payload = await bounded_json(request)
+            if type(payload) is not dict or set(payload) != {"password"}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            if not investment_recording.login(
+                    request.cookies.get("investment_recording_session"),
+                    request.headers.get("x-csrf-token"), payload["password"], clock()):
+                return JSONResponse(status_code=403, content={"error": "authentication_failed"})
+            return {"authenticated": True}
+        except (ValueError, RecordingError):
+            return JSONResponse(status_code=400, content={"error": "invalid_request"})
+
+    @app.post("/api/investment/v1/recording/preview")
+    async def investment_recording_preview(request: Request):
+        if investment_recording is None:
+            return JSONResponse(status_code=503, content={"error": "recording_disabled"})
+        from dashboard.investment_recording import RecordingError
+
+        if not investment_recording.authorize(
+                request.cookies.get("investment_recording_session"),
+                request.headers.get("x-csrf-token"), clock()):
+            return JSONResponse(status_code=403, content={"error": "recording_unauthorized"})
+        try:
+            payload = await bounded_json(request, 2 * 1024 * 1024)
+            if type(payload) is not dict or set(payload) != {"request_id", "event"}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            result = investment_recording.preview(
+                request.cookies.get("investment_recording_session"),
+                payload["request_id"], payload["event"], clock())
+            schema = json.loads(
+                (ROOT.parent / "investment" / "response-v2.schema.json").read_text(
+                    encoding="utf-8"))
+            validator = Draft202012Validator(schema, format_checker=FormatChecker())
+            validator.validate(result["before"])
+            validator.validate(result["after"])
+            return result
+        except RecordingError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        except (ValueError, SchemaValidationError, OSError):
+            return JSONResponse(status_code=409, content={"error": "preview_rejected"})
+
+    @app.post("/api/investment/v1/recording/confirm")
+    async def investment_recording_confirm(request: Request):
+        if investment_recording is None:
+            return JSONResponse(status_code=503, content={"error": "recording_disabled"})
+        from dashboard.investment_recording import RecordingError
+
+        if not investment_recording.authorize(
+                request.cookies.get("investment_recording_session"),
+                request.headers.get("x-csrf-token"), clock()):
+            return JSONResponse(status_code=403, content={"error": "recording_unauthorized"})
+        try:
+            payload = await bounded_json(request)
+            if type(payload) is not dict or set(payload) != {"preview_id"}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            return investment_recording.confirm(
+                request.cookies.get("investment_recording_session"),
+                payload["preview_id"], clock())
+        except RecordingError as exc:
+            return JSONResponse(status_code=exc.status, content={
+                "error": exc.code, "retryable": exc.status >= 500})
+        except ValueError:
+            return JSONResponse(status_code=409, content={"error": "confirmation_rejected"})
 
     @app.post("/api/v1/intelligence/login")
     async def intelligence_login(request:Request):

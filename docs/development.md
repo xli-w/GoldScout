@@ -11,7 +11,8 @@ In VS Code, check the chat customization UI/diagnostics for the two agents, four
 ## Research and Intelligence Scope
 
 The separate [investment path](investment.md) provides GBP-only recorded
-accounting and export-only buy/sell allocation proposals. Its store is not the
+accounting. Proposals are blocked pending approved, implemented role-aware
+policy. Its store is not the
 legacy trading ledger. Use temporary profiles/events/stores for development;
 unsupported FX, entitlement, corrections, historical research and execution must
 remain explicit rather than inferred from the legacy engine.
@@ -37,8 +38,9 @@ The [current mandate](investment-research-context.md) is a substantial-capital
 core-plus-dynamic portfolio manager, excluding household cash/emergency budgeting.
 The illustrative 80-90% core / 10-20% dynamic range is not a default or approved
 risk allocation. Read the [portfolio decision](decisions/0004-core-dynamic-portfolio-manager.md)
-before implementing role/risk budgets or automation. Core/dynamic is independent
-of equity/bond/cash; today's schema/planner cannot enforce the new design.
+before implementing role/risk budgets or automation. V2 records core/dynamic
+attribution independently of asset class and account; it has no risk budgets or
+role-to-role transfers, and v1 targets do not enforce role isolation.
 Document intended capabilities separately from released functionality.
 
 Prioritise useful onboarding, reconciliation, growth attribution and automated

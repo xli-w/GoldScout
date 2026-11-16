@@ -1,8 +1,8 @@
 # Long-term GBP portfolio manager
 
-GoldScout's new investment path measures an operator-selected portfolio and
-produces export-only allocation proposals. It does not trade, transfer money,
-choose products or promise returns. The existing [Alpaca engine](../README.md#separate-legacy-trading-capability)
+GoldScout's investment path measures an operator-selected portfolio. Allocation
+proposals are blocked pending approved and implemented role-aware rules. It
+does not trade, transfer money, choose products or promise returns. The existing [Alpaca engine](../README.md#separate-legacy-trading-capability)
 remains separate with its original stops, ownership checks and recovery.
 
 ## Current mandate
@@ -30,19 +30,20 @@ Exact product/account/wrapper/protection eligibility must be verified.
 Leverage, shorts, crypto and speculative options remain unapproved.
 
 The end goal includes extensive automation: research, monitoring, reporting,
-policy-bound core maintenance and admitted dynamic strategies. The released v1
-code uses fixed human targets and export-only proposals; v2 has no allocation
-policy yet. Neither enables autonomous investment execution.
+policy-bound core maintenance and admitted dynamic strategies. Existing v1
+asset-class targets do not constitute a role-aware policy; v1 proposals are
+blocked. V2 has explicit role accounting but no allocation policy. Neither
+enables autonomous investment execution.
 See the [mandate](investment-research-context.md) and
 [architecture decision](decisions/0004-core-dynamic-portfolio-manager.md).
 
 ### Two allocation dimensions, not three new tickers
 
-The future model must distinguish **asset class** (equity/bond/designated savings)
+The model distinguishes **asset class** (equity/bond/designated savings)
 from **management role** (core/dynamic). An equity fund may be core; a different
 equity strategy may be dynamic. Account location alone does not establish role.
-The current schema has only equity/bond/cash targets and cannot represent or
-enforce these independent budgets. Do not relabel today's targets as isolation.
+V2 records independent management roles without setting targets or risk budgets.
+V1 targets cannot represent or enforce role isolation.
 
 Core maintenance remains low-turnover and contribution-first, with periodic/drift
 review; calendar headlines must not churn the core. The dynamic sleeve explores
@@ -131,9 +132,9 @@ python -m investment export --database .\investment.sqlite3
 python -m investment review-status --database .\investment.sqlite3
 ```
 
-`propose` and `export` print the same bound, execution-disabled proposal envelope
-to stdout; they do not write an order or change the database. A human may save
-that output locally. `review-status` is also read-only. Profile/event paths must
+For v1, `propose` and `export` print the same bound, execution-disabled envelope,
+currently blocked with no orders. V2 refuses proposal export. Neither changes
+the database. `review-status` is also read-only. Profile/event paths must
 contain operator-prepared JSON, not broker credentials or operational exports
 from the legacy engine.
 Never select the trading/intelligence ledger as investment storage. Store creation
@@ -159,20 +160,88 @@ are refused rather than converted by assumption.
 The explicit `init`, `import` and `report` CLI commands also accept a new
 version-2 profile for evidenced opening balances and existing long holdings.
 This is a **separate newly created store**: it does not migrate an existing v1
-store, change valid v1 accounting, import broker data, enable browser recording or trade.
-The local dashboard can display a selected v2 store read-only; recording remains
-CLI-only. V2 has no configured valuation-freshness threshold, so check the
-displayed observation dates rather than treating completeness as freshness.
+store, change valid v1 accounting, import broker data or trade. The local
+dashboard can display a selected v2 store read-only by default. V2 has no
+configured valuation-freshness threshold, so check the displayed observation
+dates rather than treating completeness as freshness.
 V2 allocation policies, review acknowledgements and proposal exports are not
 implemented; policy-dependent commands explicitly refuse them.
 
-An internal recording foundation can replay a single v2 event as a preview and
-atomically append it only if the previewed profile and journal predecessor are
-unchanged. An identical committed event can be retried without another append.
-This is not yet a browser or CLI confirmation workflow: its profile hash does
-not uniquely identify a physical store, and authentication, preview expiry and
-confirmation binding must be provided before exposing it to dashboard requests.
-Corrections are not implemented.
+Manual browser recording is an explicit opt-in for an existing v2 store. Start
+the recorded dashboard with `--investment-recording` in addition to
+`--investment-database`; the operator enters a 12-256 character password
+directly into the terminal. The browser does not select or initialize a store.
+Without that flag the dashboard remains read-only. Enabled sessions are local,
+authenticated and temporary. Each entry is previewed against the current
+revision, then separately confirmed; the preview expires after five minutes,
+and changed or stale journal state is refused. Repeating a committed request
+within the session is safe, but a fresh preview is required after expiry or
+conflict. This workflow records operator evidence; it does not independently
+verify that evidence, contact a bank or broker, move money, authorize an order,
+or provide an execution path.
+
+The browser can record the opening balances and existing long holdings, later
+contributions, withdrawals and transfers, paid interest and dividends, buy/sell
+fills with recorded fees, price marks, and cash-balance observations. The
+opening balance must cover every included account; a holding may have an
+unknown opening price, which leaves its valuation incomplete rather than
+inventing a value. A cash observation remains separate evidence: a discrepancy
+is shown, not applied as a balance adjustment.
+
+The only browser correction is an append-only replacement of the amount in the
+immediately latest contribution, withdrawal or interest event. The original
+event remains in the audit history; the correction retains its effective time
+and records when the correction became available. Opening entries, fills,
+marks, observations, older events and event identity cannot be corrected this
+way. Corrections do not reconcile statement discrepancies automatically.
+Review acknowledgements and cash-only valuation confirmations remain CLI-only.
+
+### Version 2 management-role accounting
+
+V2 reports cash and holdings by `core`, `dynamic` and `unassigned`, independent
+of account and equity/bond class. Existing records stay unassigned until the
+operator appends an evidenced `role_assignment` event. For cash, `product_id`
+is null and `amount` is GBP; for a holding, `product_id` identifies the product
+and `amount` is a quantity aligned to its increment. For example:
+
+```json
+[
+  {"id":"attribute-example","type":"role_assignment",
+   "timestamp":"2026-11-15T12:00:00Z","available_at":"2026-11-15T12:00:00Z",
+   "evidence":"Operator-verified role allocation","account_id":"broker",
+   "product_id":null,"role":"core","amount":"100"}
+]
+```
+
+Attribution must be contemporaneous, after prior evidence is available, and
+cannot exceed unassigned balances. It does not change aggregate cash, holdings,
+valuation or historical performance. It cannot move balances from one role to
+another, including via unassigned. After attribution, v2 contributions,
+withdrawals, transfers between included accounts, interest, dividends and fills
+can include `"role": "core"`, `"dynamic"` or `"unassigned"`; omitted roles are
+unassigned. Debits and sales cannot consume a different role's balance. Account
+transfers preserve role; splits preserve each role's attributed quantity.
+The opt-in dashboard provides role selection and attribution using the normal
+preview and confirmation flow. Corrections retain the original event's role.
+Existing v2 stores remain readable with no migration or invented role history.
+Once role accounting is active, recorded interest requires positive cash in the
+selected role, dividends require a holding of the product in that role, and
+both require a separate nonempty `role_evidence` describing the operator's
+allocation of the payment to that role. Splits must preserve the declared
+quantity increment for every role; activation is refused if an existing
+holding is already off-increment. Dashboard records marked unassigned do not
+activate role accounting, so pre-role records can still be entered in such a
+store; explicit attribution remains blocked until its quantities are valid.
+These checks do not prove entitlement or source completeness; the operator remains
+responsible for the evidence and timing. A separately recorded withdrawal and
+contribution are not independently verified as external transactions and could
+misdescribe a role transfer; do not use them to bypass the transfer prohibition.
+
+Role values require a complete common-clock portfolio valuation at or after the
+latest attribution; a later assignment does not rewrite an earlier valuation.
+Role-level returns, budgets, historical allocation, role-to-role movements,
+policy approval and replenishment are not implemented. No allocation is inferred
+from an account or product, and no loss is automatically refilled from the core.
 
 Use the v1 account and product fields described below with `schema_version: 2`
 and `"policy": null`. Import one first event with type `opening`, a unique
@@ -313,7 +382,7 @@ Policy contains `id`, `targets` (decimal-text percentages for exactly `equity`,
 `bond`, `cash`, summing to 100), integer `max_mark_age_seconds` (1-2,678,400),
 integer `proposal_ttl_seconds` (1-604,800) and `monthly_contribution_gbp`
 (decimal text; planning metadata only). Product selection may be incomplete for
-tracking, but a missing targeted product blocks funded purchase proposals.
+tracking. These fields do not approve a role-aware policy.
 
 Event input is a JSON array. Every account event contains `id`, `type`, `timestamp`,
 `available_at`, `account_id`, `currency` and nonempty `evidence`. Both clocks must
@@ -357,32 +426,12 @@ implemented. Do not put credentials or private identifiers in shared example fil
 
 ### Allocation proposals
 
-Monthly reviews use the human's fixed sleeve targets. Direct settled new cash to
-underweights first. Annual review or at least five absolute percentage points of
-sleeve drift flags review. At those annual/drift reviews, the planner can also
-suggest selling overweight holdings, bounded by recorded holdings and sleeve
-excess, using declared increments and minimum notionals. It processes holdings
-in account/product ID order; this is not tax optimisation. Proposed sale
-proceeds never fund buys in the same proposal. Record actual proceeds before
-considering another purchase and independently verify settlement. Retained
-cash/partial correction and no trade are legitimate outcomes. Review clocks are
-initially relative to profile inception. Scheduled contributions are metadata,
-not spendable cash.
-
-An external deposit account cannot fund a broker purchase without an actual,
-recorded internal transfer. A transfer suggestion is not an instruction to a bank.
-Incomplete held-product valuation blocks proposals. Missing, stale or
-late-available purchase references exclude the affected purchases; valid
-alternatives can produce a labelled partial correction. With no eligible
-purchase remaining, the proposal is blocked. Unused zero-target products do not
-need purchase references. Exported proposals have expiry/revision information
-and **execution disabled**. They are not blanket authorisation for future trades.
-
-Purchase funding covers estimated notionals only. Sale quantities and notionals
-are estimates based on recorded holdings and marks, not broker-verified
-availability. Future fees, slippage, settlement and venue permissions are not
-verified; a funded proposal is not proof of executable funding. A human must
-recheck those conditions and prices.
+All v1 and v2 investment proposals are blocked until a role-aware policy,
+actual weights, products and loss/transfer rules are approved and implemented.
+V1's previous asset-class planner remains internal research code and is not
+connected to reports or exports. V1 review clocks and drift remain visible, but
+do not grant trade authority. Scheduled contributions are not spendable cash,
+and deposit cash is not broker buying power.
 
 ### Acknowledging a review
 
@@ -532,7 +581,9 @@ synthetic. A selected legacy ledger does not implicitly become an investment sto
 The investment responses have separate strict v1/v2 schemas and compiled
 browser validators. Production assets are bound to both investment schemas and
 the legacy schema checksums. Missing, incomplete or invalid values stay unavailable in the UI.
-Refreshes only read reports; there is no browser approval or execution route.
+Refreshes only read reports unless the operator explicitly enabled authenticated
+manual recording as described in [Version 2 opening evidence](investment.md#version-2-opening-evidence).
+There is no browser trade-approval or execution route.
 
 ## Research and provider screen
 
@@ -647,7 +698,7 @@ following remain unsupported/unverified:
 - Validated spread/slippage/quote/cost models for executable proposals.
 - Exact venue permissions and uniquely evidenced ambiguous-order recovery.
 - Licensed historical portfolio comparisons and the optional active challenger.
-- Core/dynamic role accounting, independent risk/transfer budgets, matched
+- Core/dynamic risk/transfer budgets, matched
   all-core attribution and revocable standing-policy execution.
 - Automated portfolio-specific briefs, thesis/watch workflows, UK/global
   calendar coverage and prospectively admitted intelligence-derived features.
@@ -659,7 +710,7 @@ following remain unsupported/unverified:
    updates without fabricated returns/cost basis; history and cost/income
    attribution. The current empty-inception contract remains until explicitly
    implemented alternatives are tested. Do not import household cash by default.
-2. **Core/dynamic accounting and policy:** introduce independent role/risk budgets,
+2. **Core/dynamic accounting and policy:** extend recorded role accounting with independent risk budgets,
    evidenced transfers, combined concentration and review controls. Approve exact
    allocation, loss/replenishment/profit rules and investable products before
    funding experiments. Generic equity/bond/cash drift is not sufficient.

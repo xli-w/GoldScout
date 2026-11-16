@@ -76,6 +76,23 @@ def cash_observation(timestamp=NOW, available_at=None, account="bank", balance="
     }
 
 
+def correction(original, replacement_amount, available_at):
+    evidence = "synthetic correction statement"
+    replacement = deepcopy(original)
+    replacement.update({
+        "id": "replacement-" + original["id"],
+        "amount_gbp": replacement_amount,
+        "available_at": iso(available_at),
+        "evidence": evidence,
+    })
+    return {
+        "id": "correction-" + original["id"], "type": "correction",
+        "timestamp": original["timestamp"], "available_at": iso(available_at),
+        "evidence": evidence, "original_event_id": original["id"],
+        "replacement_event": replacement,
+    }
+
+
 def savings_terms_event(timestamp, available_at=None, account="bank",
                         identifier="bank-terms-update"):
     available_at = timestamp if available_at is None else available_at
@@ -114,6 +131,50 @@ class InvestmentOpeningTests(unittest.TestCase):
         import_events(self.database, [later], NOW)
         self.assertEqual(store.commit_record(self.database, preview, NOW), receipt)
         self.assertEqual(read(self.database, NOW).revision, 2)
+
+    def test_latest_cash_flow_correction_preserves_evidence_and_replaces_accounting_effect(self):
+        initialize(self.database, profile(), NOW)
+        contribution = event("funding", "contribution", NOW, "bank", amount_gbp="100")
+        import_events(self.database, [opening(), contribution], NOW)
+        available = NOW + timedelta(days=1)
+        correction_event = correction(contribution, "80", available)
+        import_events(self.database, [correction_event], available)
+
+        ledger = read(self.database, available)
+        result = snapshot(self.database, available)
+        self.assertEqual(ledger.cash["bank"], 1080)
+        self.assertEqual(ledger.net, 80)
+        self.assertIn("funding", ledger.ids)
+        self.assertIn("replacement-funding", ledger.ids)
+        self.assertIn("funding", ledger.superseded_ids)
+        self.assertEqual(result["net_contributions_gbp"], "80")
+        self.assertEqual([item["id"] for item in result["recorded_flow_events"]],
+                         ["replacement-funding"])
+        self.assertEqual(result["recorded_corrections"], [{
+            "id": "correction-funding", "original_event_id": "funding",
+            "replacement_event_id": "replacement-funding", "replaced_type": "contribution",
+            "account_id": "bank", "role": "unassigned", "role_evidence": None, "original_amount_gbp": "100",
+            "replacement_amount_gbp": "80", "timestamp": iso(NOW),
+            "available_at": iso(available), "evidence": "synthetic correction statement",
+        }])
+        self.assertIsNone(result["equity_gbp"])
+        self.assertEqual(import_events(self.database, [correction_event], available), 3)
+
+    def test_cash_correction_is_only_for_latest_cash_amount_and_not_observations(self):
+        initialize(self.database, profile(), NOW)
+        contribution = event("funding", "contribution", NOW, "bank", amount_gbp="100")
+        interest = event("interest", "interest", NOW, "bank", amount_gbp="5")
+        import_events(self.database, [opening(), contribution, interest], NOW)
+        later = NOW + timedelta(days=1)
+        with self.assertRaisesRegex(InvestmentError, "latest"):
+            import_events(self.database, [correction(contribution, "80", later)], later)
+        observation = cash_observation(NOW, identifier="observation")
+        observation["timestamp"] = iso(later)
+        observation["available_at"] = iso(later)
+        import_events(self.database, [observation], later)
+        with self.assertRaisesRegex(InvestmentError, "latest cash"):
+            import_events(self.database, [correction(interest, "4", later)], later)
+        self.assertEqual(read(self.database, later).revision, 4)
 
     def test_revision_bound_commit_rejects_stale_or_conflicting_input(self):
         initialize(self.database, profile(), NOW)
@@ -293,15 +354,15 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(result["recorded_fee_events"], [{
             "id": "recorded-buy", "type": "buy", "account_id": "broker",
             "product_id": "equity", "quantity": "1", "price_gbp": "10",
-            "fee_gbp": "2", "timestamp": iso(NOW), "available_at": iso(NOW),
+            "fee_gbp": "2", "role": "unassigned", "timestamp": iso(NOW), "available_at": iso(NOW),
             "evidence": "synthetic event evidence",
         }])
         self.assertEqual(result["recorded_income_events"], [
             {"id": "recorded-interest", "type": "interest", "account_id": "bank",
-             "product_id": None, "amount_gbp": "5", "timestamp": iso(NOW),
+             "product_id": None, "role": "unassigned", "role_evidence": None, "amount_gbp": "5", "timestamp": iso(NOW),
              "available_at": iso(NOW), "evidence": "synthetic event evidence"},
             {"id": "recorded-dividend", "type": "dividend", "account_id": "broker",
-             "product_id": "equity", "amount_gbp": "3", "timestamp": iso(NOW),
+             "product_id": "equity", "role": "unassigned", "role_evidence": None, "amount_gbp": "3", "timestamp": iso(NOW),
              "available_at": iso(NOW), "evidence": "synthetic event evidence"},
         ])
         self.assertEqual(import_events(self.database, events[1:], NOW), result["revision"])
@@ -324,15 +385,15 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(result["net_contributions_gbp"], "80")
         self.assertEqual(result["recorded_flow_events"], [
             {"id": "recorded-contribution", "type": "contribution",
-             "account_id": "bank", "destination_account_id": None,
+             "account_id": "bank", "destination_account_id": None, "role": "unassigned",
              "amount_gbp": "100", "timestamp": iso(NOW), "available_at": iso(NOW),
              "evidence": "synthetic event evidence"},
             {"id": "recorded-transfer", "type": "transfer",
-             "account_id": "bank", "destination_account_id": "broker",
+             "account_id": "bank", "destination_account_id": "broker", "role": "unassigned",
              "amount_gbp": "50", "timestamp": iso(NOW), "available_at": iso(NOW),
              "evidence": "synthetic event evidence"},
             {"id": "recorded-withdrawal", "type": "withdrawal",
-             "account_id": "bank", "destination_account_id": None,
+             "account_id": "bank", "destination_account_id": None, "role": "unassigned",
              "amount_gbp": "20", "timestamp": iso(NOW), "available_at": iso(NOW),
              "evidence": "synthetic event evidence"},
         ])

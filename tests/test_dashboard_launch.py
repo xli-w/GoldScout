@@ -135,7 +135,8 @@ class DashboardLaunchTests(unittest.TestCase):
         factory.assert_called_once_with(database=None, scenario="healthy_recorded", telemetry_path=None,
                                         static_directory=None, serve_frontend=False,
                                         intelligence_database=None, intelligence_demo=False,
-                                        analysis_password=None, analysis_profiles=(), investment_database=None)
+                                        analysis_password=None, analysis_profiles=(), investment_database=None,
+                                        investment_recording_password=None)
         server.assert_called_once_with("synthetic-app", host="127.0.0.1", port=8766, proxy_headers=False, access_log=False)
 
     def test_invalid_modes_and_ports_fail_before_runtime_imports(self):

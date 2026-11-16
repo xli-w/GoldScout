@@ -20,6 +20,7 @@ from unittest.mock import patch
 from investment import InvestmentError
 from investment.__main__ import main
 from investment.core import iso, replay
+from investment.planner import plan
 from investment.simulation import simulate_synthetic_fixture
 from investment.service import (demo_events, demo_profile, demo_snapshot, proposal_export,
                                 report, review_status, snapshot)
@@ -48,6 +49,15 @@ def append_legacy_batch(database, values, state_hash):
                                (revision, value["id"], payload, previous, new_hash))
             previous = new_hash
         connection.execute("INSERT INTO commits VALUES (?,?)", (revision, state_hash))
+
+
+def planner_proposal(ledger, now):
+    """Exercise the legacy planner in isolation, not as public policy."""
+    with localcontext() as context:
+        context.prec = 100
+        equity, as_of = ledger.valuation()
+        allocation = report(ledger, now)["allocation"]
+        return plan(ledger, now, equity, as_of, allocation)
 
 
 class InvestmentTests(unittest.TestCase):
@@ -726,7 +736,7 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(result["gain_gbp"], "0")
         self.assertEqual(result["source_mode"], "demo")
         self.assertEqual([a["actual_pct"] for a in result["allocation"]], ["80", "0", "20"])
-        self.assertFalse(result["proposal"]["execution_enabled"])
+        self.assert_blocked_proposal(result["proposal"])
         self.assertEqual(result["as_of"], iso(NOW))
         self.assertEqual(json.loads(stream.getvalue()), result)
         self.assertEqual(demo_snapshot()["source_mode"], "demo")
@@ -967,12 +977,16 @@ class InvestmentTests(unittest.TestCase):
         self.assertFalse(missing["complete"])
         self.assertIsNone(missing["equity_gbp"])
         self.assertIsNone(missing["holdings"][0]["value_gbp"])
-        self.assertEqual(missing["proposal"]["status"], "blocked")
-        stale = report(replay(self.spec, demo_events(NOW), NOW), NOW + timedelta(days=2))
+        self.assert_blocked_proposal(missing["proposal"])
+        self.assertIn("Incomplete", planner_proposal(ledger, NOW)["reason"])
+        stale_time = NOW + timedelta(days=2)
+        stale_ledger = replay(self.spec, demo_events(NOW), NOW)
+        stale = report(stale_ledger, stale_time)
         self.assertTrue(stale["complete"])
         self.assertEqual(stale["equity_gbp"], "1000")
         self.assertEqual(stale["as_of"], iso(NOW))
-        self.assertEqual(stale["proposal"]["status"], "blocked")
+        self.assert_blocked_proposal(stale["proposal"])
+        self.assertIn("Stale", planner_proposal(stale_ledger, stale_time)["reason"])
         later = NOW + timedelta(hours=1)
         changed = demo_events(NOW) + [ev("new-flow", "contribution", at=later, amount_gbp="100")]
         result = report(replay(self.spec, changed, later), later)
@@ -1015,28 +1029,45 @@ class InvestmentTests(unittest.TestCase):
         self.init_demo()
         import_events(self.database, [ev("extra", "contribution", amount_gbp="100")], NOW)
         result = snapshot(self.database, NOW)
-        self.assertEqual(result["proposal"]["status"], "review")
-        self.assertEqual(result["proposal"]["orders"][0]["quantity"], "8")
-        self.assertEqual(result["proposal"]["orders"][0]["estimated_notional_gbp"], "80")
+        self.assert_blocked_proposal(result["proposal"])
+        proposal = planner_proposal(read(self.database, NOW), NOW)
+        self.assertEqual(proposal["status"], "review")
+        self.assertEqual(proposal["orders"][0]["quantity"], "8")
+        self.assertEqual(proposal["orders"][0]["estimated_notional_gbp"], "80")
         binding = proposal_export(self.database, NOW)
         self.assertEqual(binding["portfolio_id"], "synthetic-demo")
         self.assertEqual(binding["revision"], 5)
         self.assertEqual(binding["policy_id"], "human-demo-80-20")
         self.assertEqual(len(binding["policy_hash"]), 64)
         self.assertFalse(binding["execution_enabled"])
-        self.assertIsNotNone(binding["expires_at"])
+        self.assertIsNone(binding["expires_at"])
+        self.assertEqual(binding["proposal"], result["proposal"])
+        for command in ("propose", "export"):
+            output = io.StringIO()
+            self.assertEqual(main([command, "--database", str(self.database)],
+                                  stdout=output, now=NOW), 0)
+            self.assertEqual(json.loads(output.getvalue()), binding)
         import_events(self.database, [
             ev("external", "contribution", account="savings", amount_gbp="1000")], NOW)
-        proposal = snapshot(self.database, NOW)["proposal"]
+        self.assert_blocked_proposal(snapshot(self.database, NOW)["proposal"])
+        self.assert_blocked_proposal(proposal_export(self.database, NOW)["proposal"])
+        proposal = planner_proposal(read(self.database, NOW), NOW)
         self.assertLessEqual(sum(float(o["estimated_notional_gbp"]) for o in proposal["orders"]), 100)
         self.assertTrue(proposal["manual_transfers"])
 
     def test_external_savings_never_funds_broker_purchase(self):
         values = demo_events(NOW) + [
             ev("external", "contribution", account="savings", amount_gbp="1000")]
-        result = report(replay(self.spec, values, NOW), NOW)
-        self.assertEqual(result["proposal"]["orders"], [])
-        self.assertTrue(result["proposal"]["manual_transfers"])
+        proposal = planner_proposal(replay(self.spec, values, NOW), NOW)
+        self.assertEqual(proposal["orders"], [])
+        self.assertTrue(proposal["manual_transfers"])
+
+    def assert_blocked_proposal(self, proposal):
+        self.assertEqual(proposal, {
+            "status": "blocked",
+            "reason": "Role-aware policy, products, weights and loss/transfer rules are not approved or implemented.",
+            "expires_at": None, "orders": [], "manual_transfers": [], "execution_enabled": False,
+        })
 
     def test_cli_local_json_functions_and_no_overwrite(self):
         root = Path(self.temporary.name)
@@ -1092,6 +1123,8 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(result["equity_gbp"], "1000")
         self.assertEqual(result["proposal"]["status"], "blocked")
         self.assertEqual(result["proposal"]["orders"], [])
+        self.assertEqual(planner_proposal(replay(self.spec, values, available), available)["status"],
+                         "blocked")
 
     def test_full_withdrawal_refunding_preserves_linked_return_and_restart(self):
         t1, t2, t3 = (NOW + timedelta(days=d) for d in (1, 2, 3))
@@ -1124,13 +1157,14 @@ class InvestmentTests(unittest.TestCase):
             if products:
                 values.append(ev("reference", "mark", product_id="equity", price_gbp="10"))
             with self.subTest(products=products):
-                result = report(replay(spec, values, NOW), NOW)
-                self.assertTrue(result["complete"])
-                self.assertEqual(result["proposal"]["status"], "blocked")
-                self.assertIn("product", result["proposal"]["reason"].lower())
-                self.assertIn("manual", result["proposal"]["reason"].lower())
-                self.assertEqual(result["proposal"]["orders"], [])
-                self.assertIsNone(result["proposal"]["expires_at"])
+                ledger = replay(spec, values, NOW)
+                self.assertTrue(report(ledger, NOW)["complete"])
+                proposal = planner_proposal(ledger, NOW)
+                self.assertEqual(proposal["status"], "blocked")
+                self.assertIn("product", proposal["reason"].lower())
+                self.assertIn("manual", proposal["reason"].lower())
+                self.assertEqual(proposal["orders"], [])
+                self.assertIsNone(proposal["expires_at"])
 
     def test_unused_unmarked_product_does_not_change_minimum_notional_no_trade(self):
         spec = deepcopy(self.spec)
@@ -1139,23 +1173,23 @@ class InvestmentTests(unittest.TestCase):
             ev("fund", "contribution", amount_gbp="1000"),
             ev("reference", "mark", product_id="equity", price_gbp="10"),
         ]
-        baseline = report(replay(spec, values, NOW), NOW)["proposal"]
+        baseline = planner_proposal(replay(spec, values, NOW), NOW)
         self.assertEqual(baseline["status"], "no_trade")
         spec["products"].append(dict(self.spec["products"][0], id="unused-bond",
                                      name="Unused synthetic bond", sleeve="bond"))
-        unused = report(replay(spec, values, NOW), NOW)["proposal"]
+        unused = planner_proposal(replay(spec, values, NOW), NOW)
         self.assertEqual(unused, baseline)
 
     def test_unmarked_minimum_or_unfunded_purchase_is_no_trade_not_reference_block(self):
         minimum = deepcopy(self.spec)
         minimum["products"][0]["minimum_notional_gbp"] = "1000"
         funded = [ev("fund", "contribution", amount_gbp="1000")]
-        result = report(replay(minimum, funded, NOW), NOW)
-        self.assertEqual(result["proposal"]["status"], "no_trade")
+        result = planner_proposal(replay(minimum, funded, NOW), NOW)
+        self.assertEqual(result["status"], "no_trade")
         external_only = [ev("external", "contribution", account="savings", amount_gbp="1000")]
-        result = report(replay(self.spec, external_only, NOW), NOW)
-        self.assertEqual(result["proposal"]["status"], "no_trade")
-        self.assertEqual(result["proposal"]["orders"], [])
+        result = planner_proposal(replay(self.spec, external_only, NOW), NOW)
+        self.assertEqual(result["status"], "no_trade")
+        self.assertEqual(result["orders"], [])
 
     def test_partial_purchase_reference_warning_with_valid_alternative_and_other_sleeve(self):
         available = NOW + timedelta(hours=1)
@@ -1178,16 +1212,16 @@ class InvestmentTests(unittest.TestCase):
                 late["available_at"] = iso(available)
                 values.append(late)
             with self.subTest(unsupported=unsupported):
-                result = report(replay(spec, values, available), available)
-                self.assertEqual(result["proposal"]["status"], "review")
+                proposal = planner_proposal(replay(spec, values, available), available)
+                self.assertEqual(proposal["status"], "review")
                 self.assertEqual(
-                    [o["product_id"] for o in result["proposal"]["orders"]],
+                    [o["product_id"] for o in proposal["orders"]],
                     ["supported-equity", "supported-bond"])
                 self.assertEqual(
-                    [o["estimated_notional_gbp"] for o in result["proposal"]["orders"]],
+                    [o["estimated_notional_gbp"] for o in proposal["orders"]],
                     ["600", "200"])
-                self.assertIn("partial-reference", result["proposal"]["reason"].lower())
-                self.assertIn("excluded", result["proposal"]["reason"].lower())
+                self.assertIn("partial-reference", proposal["reason"].lower())
+                self.assertIn("excluded", proposal["reason"].lower())
 
     def test_partial_purchase_reference_warning_for_unavailable_underweight_sleeve(self):
         available = NOW + timedelta(hours=1)
@@ -1201,11 +1235,11 @@ class InvestmentTests(unittest.TestCase):
             ev("reference", "mark", product_id="equity", price_gbp="10"),
             late,
         ]
-        result = report(replay(spec, values, available), available)
-        self.assertEqual(result["proposal"]["status"], "review")
-        self.assertEqual([o["product_id"] for o in result["proposal"]["orders"]], ["equity"])
-        self.assertIn("partial-reference", result["proposal"]["reason"].lower())
-        self.assertIn("excluded", result["proposal"]["reason"].lower())
+        proposal = planner_proposal(replay(spec, values, available), available)
+        self.assertEqual(proposal["status"], "review")
+        self.assertEqual([o["product_id"] for o in proposal["orders"]], ["equity"])
+        self.assertIn("partial-reference", proposal["reason"].lower())
+        self.assertIn("excluded", proposal["reason"].lower())
 
     def test_actual_sqlite_commit_failure_rolls_back_and_restart_can_retry(self):
         self.init_demo()
@@ -1299,19 +1333,19 @@ class InvestmentTests(unittest.TestCase):
     def test_monthly_annual_or_five_point_drift_and_minimum_no_trade(self):
         values = demo_events(NOW) + [
             ev("small", "contribution", amount_gbp="10")]
-        same_month = report(replay(self.spec, values, NOW), NOW)
-        self.assertEqual(same_month["proposal"]["status"], "no_trade")
+        same_month = planner_proposal(replay(self.spec, values, NOW), NOW)
+        self.assertEqual(same_month["status"], "no_trade")
         next_month = NOW + timedelta(days=31)
         monthly_values = values + [
             ev("fresh", "mark", at=next_month, product_id="equity", price_gbp="10")]
-        monthly = report(replay(self.spec, monthly_values, next_month), next_month)
+        monthly = planner_proposal(replay(self.spec, monthly_values, next_month), next_month)
         # GBP8 deficit rounds below one-unit GBP10 product minimum.
-        self.assertEqual(monthly["proposal"]["status"], "no_trade")
+        self.assertEqual(monthly["status"], "no_trade")
         anniversary = NOW.replace(year=2027)
         annual_values = demo_events(NOW) + [
             ev("annual", "mark", at=anniversary, product_id="equity", price_gbp="10")]
-        annual = report(replay(self.spec, annual_values, anniversary), anniversary)
-        self.assertIn("Annual", annual["proposal"]["reason"])
+        annual = planner_proposal(replay(self.spec, annual_values, anniversary), anniversary)
+        self.assertIn("Annual", annual["reason"])
 
         drift_time = NOW + timedelta(hours=1)
         for price, expected_status in (("7.51", "no_trade"), ("7.5", "review"),
@@ -1322,19 +1356,19 @@ class InvestmentTests(unittest.TestCase):
                 ev("drift-mark", "mark", at=drift_time, product_id="equity",
                    price_gbp=price)]
             with self.subTest(price=price):
-                drift = report(replay(self.spec, drift_values, drift_time), drift_time)
-                self.assertEqual(drift["proposal"]["status"], expected_status)
+                drift = planner_proposal(replay(self.spec, drift_values, drift_time), drift_time)
+                self.assertEqual(drift["status"], expected_status)
                 if expected_status == "review":
-                    self.assertTrue(drift["proposal"]["orders"])
+                    self.assertTrue(drift["orders"])
                 else:
-                    self.assertIn("below 5 percentage points", drift["proposal"]["reason"])
+                    self.assertIn("below 5 percentage points", drift["reason"])
 
         minimum = deepcopy(self.spec)
         minimum["products"][0]["minimum_notional_gbp"] = "1000"
         minimum_values = demo_events(NOW) + [
             ev("larger", "contribution", amount_gbp="100")]
-        rejected = report(replay(minimum, minimum_values, NOW), NOW)
-        self.assertEqual(rejected["proposal"]["status"], "no_trade")
+        rejected = planner_proposal(replay(minimum, minimum_values, NOW), NOW)
+        self.assertEqual(rejected["status"], "no_trade")
 
     def test_annual_review_acknowledgement_resets_calendar_trigger(self):
         self.init_demo()
@@ -1343,7 +1377,8 @@ class InvestmentTests(unittest.TestCase):
             ev("annual-mark", "mark", at=annual, product_id="equity", price_gbp="11")
         ], annual)
         before = snapshot(self.database, annual)
-        self.assertEqual(before["proposal"]["orders"][0]["side"], "sell")
+        self.assert_blocked_proposal(before["proposal"])
+        self.assertEqual(planner_proposal(read(self.database, annual), annual)["orders"][0]["side"], "sell")
         acknowledgement = {
             "id": "annual-review", "type": "review_acknowledgement",
             "timestamp": iso(annual), "available_at": iso(annual),
@@ -1352,7 +1387,8 @@ class InvestmentTests(unittest.TestCase):
         }
         import_events(self.database, [acknowledgement], annual)
         after = snapshot(self.database, annual)
-        self.assertEqual(after["proposal"]["orders"], [])
+        self.assert_blocked_proposal(after["proposal"])
+        self.assertEqual(planner_proposal(read(self.database, annual), annual)["orders"], [])
         self.assertEqual(after["revision"], before["revision"] + 1)
         for field in ("as_of", "equity_gbp", "gain_gbp", "twr_pct", "max_drawdown_pct"):
             self.assertEqual(after[field], before[field])
@@ -1368,13 +1404,13 @@ class InvestmentTests(unittest.TestCase):
         self.assertTrue(status["monthly_due"])
         self.assertFalse(status["annual_due"])
         self.assertFalse(status["drift_due"])
-        self.assertEqual(snapshot(self.database, monthly)["proposal"]["orders"][0]["quantity"], "3")
+        self.assertEqual(planner_proposal(read(self.database, monthly), monthly)["orders"][0]["quantity"], "3")
         acknowledge_review(self.database, "feb-review", "monthly", status["revision"],
                            "reviewed synthetic allocation", monthly)
         status = review_status(self.database, monthly)
         self.assertFalse(status["monthly_due"])
         self.assertIsNone(status["last_annual_review_at"])
-        self.assertEqual(snapshot(self.database, monthly)["proposal"]["orders"], [])
+        self.assertEqual(planner_proposal(read(self.database, monthly), monthly)["orders"], [])
 
         next_month = NOW.replace(month=3)
         import_events(self.database, [
@@ -1414,7 +1450,9 @@ class InvestmentTests(unittest.TestCase):
         import_events(self.database, demo_events(NOW), NOW)
         review_time = NOW + timedelta(hours=1)
         before = snapshot(self.database, review_time)
-        self.assertEqual(before["proposal"]["orders"][0]["quantity"], "5")
+        self.assert_blocked_proposal(before["proposal"])
+        before_plan = planner_proposal(read(self.database, review_time), review_time)
+        self.assertEqual(before_plan["orders"][0]["quantity"], "5")
         self.assertTrue(review_status(self.database, review_time)["drift_due"])
         acknowledge_review(self.database, "drift-review", "annual", before["revision"],
                            "reviewed but did not trade", review_time)
@@ -1423,8 +1461,10 @@ class InvestmentTests(unittest.TestCase):
         self.assertTrue(status["drift_due"])
         self.assertFalse(status["monthly_due"])
         self.assertFalse(status["annual_due"])
-        self.assertEqual(after["proposal"]["orders"], before["proposal"]["orders"])
-        self.assertFalse(after["proposal"]["execution_enabled"])
+        self.assert_blocked_proposal(after["proposal"])
+        after_plan = planner_proposal(read(self.database, review_time), review_time)
+        self.assertEqual(after_plan["orders"], before_plan["orders"])
+        self.assertFalse(after_plan["execution_enabled"])
 
     def test_review_status_agrees_with_proposal_at_exact_drift_boundary(self):
         spec = deepcopy(self.spec)
@@ -1456,7 +1496,9 @@ class InvestmentTests(unittest.TestCase):
                 drift = Decimal(result["allocation"][0]["drift_pp"]).copy_abs()
                 self.assertEqual(drift >= 5, due)
                 self.assertEqual(review_status(database, NOW)["drift_due"], due)
-                self.assertEqual(result["proposal"]["status"], "review" if due else "no_trade")
+                self.assert_blocked_proposal(result["proposal"])
+                self.assertEqual(planner_proposal(read(database, NOW), NOW)["status"],
+                                 "review" if due else "no_trade")
 
     def test_review_acknowledgement_requires_fresh_complete_unchanged_evidence(self):
         self.init_demo()
@@ -1545,7 +1587,8 @@ class InvestmentTests(unittest.TestCase):
         import_events(self.database, [confirmation], later)
         result = snapshot(self.database, later)
         self.assertEqual(result["as_of"], iso(later))
-        self.assertEqual(result["proposal"]["status"], "review")
+        self.assert_blocked_proposal(result["proposal"])
+        self.assertEqual(planner_proposal(read(self.database, later), later)["status"], "review")
         acknowledge_review(self.database, "confirmed-review", "monthly",
                            result["revision"], "synthetic", later)
 
@@ -2097,7 +2140,7 @@ class InvestmentTests(unittest.TestCase):
         spec["products"].append(dict(spec["products"][0], id="bond", sleeve="bond"))
         values = demo_events(NOW) + [
             ev("bond-reference", "mark", product_id="bond", price_gbp="10")]
-        proposal = report(replay(spec, values, NOW), NOW)["proposal"]
+        proposal = planner_proposal(replay(spec, values, NOW), NOW)
         self.assertEqual(proposal["status"], "review")
         self.assertEqual(proposal["orders"], [{
             "account_id": "broker", "product_id": "equity", "side": "sell",
@@ -2108,7 +2151,7 @@ class InvestmentTests(unittest.TestCase):
 
         values.append(ev("actual-sale", "sell", product_id="equity",
                          quantity="20", price_gbp="10", fee_gbp="0"))
-        after = report(replay(spec, values, NOW), NOW)["proposal"]
+        after = planner_proposal(replay(spec, values, NOW), NOW)
         self.assertEqual(after["orders"], [{
             "account_id": "broker", "product_id": "bond", "side": "buy",
             "quantity": "20", "estimated_notional_gbp": "200",
@@ -2118,19 +2161,19 @@ class InvestmentTests(unittest.TestCase):
         later = NOW + timedelta(days=31)
         values = demo_events(NOW) + [
             ev("fresh", "mark", at=later, product_id="equity", price_gbp="11")]
-        monthly = report(replay(self.spec, values, later), later)["proposal"]
+        monthly = planner_proposal(replay(self.spec, values, later), later)
         self.assertEqual(monthly["orders"], [])
 
         annual = NOW.replace(year=2027)
         values[-1] = ev("annual", "mark", at=annual, product_id="equity", price_gbp="11")
-        proposal = report(replay(self.spec, values, annual), annual)["proposal"]
+        proposal = planner_proposal(replay(self.spec, values, annual), annual)
         self.assertEqual(proposal["orders"][0]["side"], "sell")
         self.assertEqual(proposal["orders"][0]["quantity"], "1")
         self.assertEqual(proposal["orders"][0]["estimated_notional_gbp"], "11")
         expensive_minimum = deepcopy(self.spec)
         expensive_minimum["products"][0]["minimum_notional_gbp"] = "12"
-        self.assertEqual(report(replay(expensive_minimum, values, annual), annual)
-                         ["proposal"]["orders"], [])
+        self.assertEqual(planner_proposal(replay(expensive_minimum, values, annual), annual)
+                         ["orders"], [])
 
     def test_sell_rebalance_conserves_excess_across_accounts_and_blocks_incomplete_marks(self):
         spec = deepcopy(self.spec)
@@ -2147,8 +2190,8 @@ class InvestmentTests(unittest.TestCase):
             ev("buy-b", "buy", account="broker-2", product_id="equity", quantity="77",
                price_gbp="10", fee_gbp="0"),
         ]
-        result = report(replay(spec, values, NOW), NOW)
-        self.assertEqual(result["proposal"]["orders"], [
+        proposal = planner_proposal(replay(spec, values, NOW), NOW)
+        self.assertEqual(proposal["orders"], [
             {"account_id": "broker", "product_id": "equity", "side": "sell",
              "quantity": "3", "estimated_notional_gbp": "30"},
             {"account_id": "broker-2", "product_id": "equity", "side": "sell",
@@ -2157,7 +2200,7 @@ class InvestmentTests(unittest.TestCase):
         later = NOW + timedelta(hours=1)
         values.append(ev("only-one-fresh", "mark", at=later, product_id="equity",
                          price_gbp="10"))
-        blocked = report(replay(spec, values, later), later)["proposal"]
+        blocked = planner_proposal(replay(spec, values, later), later)
         self.assertEqual(blocked["status"], "blocked")
         self.assertEqual(blocked["orders"], [])
         self.assertIsNone(blocked["expires_at"])
@@ -2173,7 +2216,7 @@ class InvestmentTests(unittest.TestCase):
             ev("extra-cash", "contribution", amount_gbp="100"),
             ev("bond-reference", "mark", product_id="bond", price_gbp="10"),
         ]
-        proposal = report(replay(spec, values, NOW), NOW)["proposal"]
+        proposal = planner_proposal(replay(spec, values, NOW), NOW)
         self.assertEqual(proposal["orders"], [
             {"account_id": "broker", "product_id": "bond", "side": "buy",
              "quantity": "8", "estimated_notional_gbp": "80"},
@@ -2188,7 +2231,7 @@ class InvestmentTests(unittest.TestCase):
         spec["policy"]["targets"] = {"equity": "60", "bond": "20", "cash": "20"}
         values = demo_events(NOW) + [
             ev("extra-cash", "contribution", amount_gbp="100")]
-        proposal = report(replay(spec, values, NOW), NOW)["proposal"]
+        proposal = planner_proposal(replay(spec, values, NOW), NOW)
         self.assertEqual(proposal["status"], "blocked")
         self.assertIn("Missing product", proposal["reason"])
         self.assertEqual(proposal["orders"], [])
@@ -2204,8 +2247,7 @@ class InvestmentTests(unittest.TestCase):
             ev("equity-ref", "mark", product_id="equity", price_gbp="10"),
             ev("bond-ref", "mark", product_id="bond", price_gbp="20"),
         ]
-        result = report(replay(spec, values, NOW), NOW)
-        orders = result["proposal"]["orders"]
+        orders = planner_proposal(replay(spec, values, NOW), NOW)["orders"]
         self.assertEqual([o["estimated_notional_gbp"] for o in orders], ["600", "200"])
         self.assertLessEqual(sum(float(o["estimated_notional_gbp"]) for o in orders), 1000)
         bought = values + [
@@ -2220,6 +2262,7 @@ class InvestmentTests(unittest.TestCase):
         self.assertFalse(incomplete["complete"])
         self.assertIsNone(incomplete["equity_gbp"])
         self.assertEqual(incomplete["proposal"]["orders"], [])
+        self.assertEqual(planner_proposal(replay(spec, mixed, later), later)["orders"], [])
         mixed += [ev("all-fresh", "mark", at=later, product_id="bond", price_gbp="20")]
         complete = report(replay(spec, mixed, later), later)
         self.assertTrue(complete["complete"])

@@ -4,8 +4,8 @@ from decimal import Decimal, localcontext
 from datetime import timedelta
 
 from . import InvestmentError
-from .core import MAX_EVENTS, ZERO, clock, fmt, iso, number, replay
-from .planner import plan, review_schedule
+from .core import MAX_EVENTS, ROLES, ZERO, clock, fmt, iso, number, replay
+from .planner import review_schedule
 from .store import canonical, digest, read, read_with_clock
 
 
@@ -19,12 +19,11 @@ LIMITATIONS = [
     "No opening-position cost basis or inception is invented; empty evidenced inception required.",
     "Actual fill fees reduce cash/equity and gain; no forecast fees or automatic income adjustments.",
     "MWR is unavailable; inflation, tax, research, broker features and automatic execution deferred.",
-    "Proposals are expiring export-only suggestions. Fees/slippage for future trades are not "
-    "estimated; a human must recheck funding, costs, product suitability and prices.",
-    "Broker cash covers estimated purchase notionals only; unknown fees and settlement mean "
-    "full funding/executability remains unverified. Scheduled contributions are not spendable cash.",
+    "Proposals are blocked pending approved and implemented role-aware policy, products, "
+    "weights and loss/transfer rules.",
+    "External deposit cash is not broker buying power; scheduled contributions are not spendable cash.",
     "Review acknowledgements are manual records, not trade approvals. Five-point drift "
-    "remains a trigger; proposed sales do not fund purchases or prove settlement.",
+    "remains a trigger.",
 ]
 
 
@@ -74,7 +73,11 @@ def report(ledger, now, source_mode="recorded"):
         if not performance:
             warnings.append("TWR/drawdown unavailable: no fully evidenced common-clock "
                             "valuation/flow chain from inception.")
-        proposal = plan(ledger, now, equity, as_of, allocation)
+        proposal = {
+            "status": "blocked",
+            "reason": "Role-aware policy, products, weights and loss/transfer rules are not approved or implemented.",
+            "expires_at": None, "orders": [], "manual_transfers": [], "execution_enabled": False,
+        }
         return {
             "schema_version": 1, "source_mode": source_mode,
             "portfolio_id": ledger.spec["portfolio_id"], "revision": ledger.revision,
@@ -101,44 +104,68 @@ def opening_report(ledger, now, source_mode="recorded"):
                 if equity is not None and baseline is not None else None)
         recorded_interest = sum(
             (number(value["amount_gbp"]) for value in ledger.ids.values()
-             if value.get("type") == "interest"), ZERO)
+             if value.get("type") == "interest" and
+             value["id"] not in ledger.superseded_ids), ZERO)
         recorded_dividends = sum(
             (number(value["amount_gbp"]) for value in ledger.ids.values()
-             if value.get("type") == "dividend"), ZERO)
+             if value.get("type") == "dividend" and
+             value["id"] not in ledger.superseded_ids), ZERO)
         recorded_fee_events = [
             _reported_timestamps({
-                key: value[key] for key in (
+                **{key: value[key] for key in (
                     "id", "type", "account_id", "product_id", "quantity",
-                    "price_gbp", "fee_gbp", "timestamp", "available_at", "evidence")
+                    "price_gbp", "fee_gbp", "timestamp", "available_at", "evidence")},
+                "role": value.get("role", "unassigned"),
             }, ("timestamp", "available_at"))
             for value in ledger.ids.values()
-            if value.get("type") in ("buy", "sell")
+            if value.get("type") in ("buy", "sell") and
+            value["id"] not in ledger.superseded_ids
         ]
         recorded_income_events = [
             _reported_timestamps({
                 "id": value["id"], "type": value["type"],
                 "account_id": value["account_id"],
                 "product_id": value.get("product_id"),
+                "role": value.get("role", "unassigned"),
+                "role_evidence": value.get("role_evidence"),
                 "amount_gbp": value["amount_gbp"],
                 "timestamp": value["timestamp"],
                 "available_at": value["available_at"],
                 "evidence": value["evidence"],
             }, ("timestamp", "available_at"))
             for value in ledger.ids.values()
-            if value.get("type") in ("interest", "dividend")
+            if value.get("type") in ("interest", "dividend") and
+            value["id"] not in ledger.superseded_ids
         ]
         recorded_flow_events = [
             _reported_timestamps({
                 "id": value["id"], "type": value["type"],
                 "account_id": value["account_id"],
                 "destination_account_id": value.get("destination_account_id"),
+                "role": value.get("role", "unassigned"),
                 "amount_gbp": value["amount_gbp"],
                 "timestamp": value["timestamp"],
                 "available_at": value["available_at"],
                 "evidence": value["evidence"],
             }, ("timestamp", "available_at"))
             for value in ledger.ids.values()
-            if value.get("type") in ("contribution", "withdrawal", "transfer")
+            if value.get("type") in ("contribution", "withdrawal", "transfer") and
+            value["id"] not in ledger.superseded_ids
+        ]
+        recorded_corrections = [
+            _reported_timestamps({
+                "id": value["id"], "original_event_id": value["original_event_id"],
+                "replacement_event_id": value["replacement_event"]["id"],
+                "replaced_type": value["replacement_event"]["type"],
+                "account_id": value["replacement_event"]["account_id"],
+                "role": value["replacement_event"].get("role", "unassigned"),
+                "role_evidence": value["replacement_event"].get("role_evidence"),
+                "original_amount_gbp": ledger.ids[value["original_event_id"]]["amount_gbp"],
+                "replacement_amount_gbp": value["replacement_event"]["amount_gbp"],
+                "timestamp": value["timestamp"], "available_at": value["available_at"],
+                "evidence": value["evidence"],
+            }, ("timestamp", "available_at"))
+            for value in ledger.ids.values() if value.get("type") == "correction"
         ]
         products = {item["id"]: item for item in ledger.spec["products"]}
         holdings = []
@@ -185,6 +212,42 @@ def opening_report(ledger, now, source_mode="recorded"):
              for account, observations in ledger.cash_observation_history.items()
              for observation in observations),
             key=lambda item: (clock(item[1]["timestamp"]), item[0]))
+        role_cash = (ledger.role_cash if ledger.role_active else
+                     {(account, "unassigned"): amount for account, amount in ledger.cash.items()})
+        role_holdings = (ledger.role_holdings if ledger.role_active else
+                         {(*key, "unassigned"): amount for key, amount in ledger.holdings.items()})
+        role_values = []
+        for role in ROLES:
+            cash = sum((amount for (account, owner), amount in role_cash.items()
+                        if owner == role), ZERO)
+            role_value = None
+            if equity is not None and (not ledger.role_active or ledger.role_last_time <= as_of):
+                role_value = cash + sum(
+                    (quantity * ledger.marks[(account, product)][0]
+                     for (account, product, owner), quantity in role_holdings.items()
+                     if owner == role and quantity > 0), ZERO)
+            role_values.append({
+                "role": role, "cash_gbp": fmt(cash) if ledger.opened else None,
+                "value_gbp": fmt(role_value),
+                "accounts": [
+                    {"account_id": account["id"],
+                     "cash_gbp": fmt(role_cash.get((account["id"], role), ZERO))}
+                    for account in ledger.spec["accounts"]
+                ] if ledger.opened else [],
+                "holdings": [
+                    {"account_id": account, "product_id": product, "quantity": fmt(quantity)}
+                    for (account, product, owner), quantity in sorted(role_holdings.items())
+                    if owner == role and quantity > 0
+                ],
+            })
+        role_assignments = [
+            _reported_timestamps({
+                key: value[key] for key in (
+                    "id", "account_id", "product_id", "role", "amount",
+                    "timestamp", "available_at", "evidence")
+            }, ("timestamp", "available_at"))
+            for value in ledger.ids.values() if value.get("type") == "role_assignment"
+        ]
         return {
             "schema_version": 2, "source_mode": source_mode,
             "portfolio_id": ledger.spec["portfolio_id"], "revision": ledger.revision,
@@ -200,6 +263,7 @@ def opening_report(ledger, now, source_mode="recorded"):
             "recorded_fee_events": recorded_fee_events,
             "recorded_income_events": recorded_income_events,
             "recorded_flow_events": recorded_flow_events,
+            "recorded_corrections": recorded_corrections,
             "twr_pct": fmt((ledger.unit_price - 1) * 100) if performance else None,
             "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],
@@ -218,6 +282,9 @@ def opening_report(ledger, now, source_mode="recorded"):
             ],
             "valuation_history": ledger.valuation_history,
             "holdings": holdings,
+            "role_accounting": role_values,
+            "role_accounting_at": iso(ledger.role_last_time) if ledger.role_active else None,
+            "role_assignments": role_assignments,
             "proposal": {"status": "blocked", "reason": "Allocation and role policy are not implemented",
                          "expires_at": None, "orders": [], "manual_transfers": [],
                          "execution_enabled": False},
@@ -229,6 +296,7 @@ def opening_report(ledger, now, source_mode="recorded"):
                 "No valuation freshness threshold is configured; check the recorded dates.",
                 "Cash observations are evidence only; discrepancies do not update recorded balances.",
                 "Fee and income totals include only explicitly recorded events; completeness, tax and entitlement are not verified.",
+                "Role allocations are operator evidence, not independent custody verification or risk budgets.",
                 "Allocation policy, proposals and execution are not implemented for this store.",
             ],
         }

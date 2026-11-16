@@ -1,4 +1,5 @@
 import copy
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -7,7 +8,9 @@ from unittest.mock import patch
 
 from dashboard.app import create_app
 from fastapi.testclient import TestClient
+from investment import InvestmentError
 from investment.service import demo_events, demo_profile, demo_snapshot, snapshot
+from investment import store as investment_store
 from investment.store import acknowledge_review, import_events, initialize
 from test_dashboard_api import MemoryEventLoop
 from test_investment_opening import (NOW as OPENING_NOW, event, opening, profile,
@@ -33,7 +36,7 @@ class InvestmentDashboardTests(unittest.TestCase):
             report = response.json()
             self.assertEqual(report["source_mode"], "demo")
             self.assertEqual(report["currency"], "GBP")
-            self.assertFalse(report["proposal"]["execution_enabled"])
+            self.assert_blocked_proposal(report["proposal"])
             for route in ("/api/investment/v1/snapshot", "/api/v1/orders"):
                 self.assertEqual(client.post(route, json={}, headers={"Origin": "http://127.0.0.1"}).status_code, 405)
             self.assertEqual(client.get("/api/investment/v1/snapshot", headers={"Origin": "https://foreign.invalid"}).status_code, 403)
@@ -58,6 +61,7 @@ class InvestmentDashboardTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json(), expected)
                 self.assertEqual(response.json()["source_mode"], "recorded")
+                self.assert_blocked_proposal(response.json()["proposal"])
                 self.assertEqual(client.get("/api/v1/overview").status_code, 503)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
@@ -122,6 +126,252 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertFalse(response.json()["complete"])
             self.assertTrue(all(account["cash_gbp"] is None
                                 for account in response.json()["accounts"]))
+
+    def test_recording_is_disabled_by_default_and_mutation_routes_stay_closed(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        with self.client(investment_database=self.path) as client:
+            session = client.get("/api/investment/v1/recording/session")
+            self.assertEqual(session.status_code, 200)
+            self.assertFalse(session.json()["enabled"])
+            self.assertEqual(client.post(
+                "/api/investment/v1/recording/preview", json={},
+                headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+            self.assertEqual(client.post(
+                "/api/investment/v1/recording/confirm", json={},
+                headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+
+    def test_authenticated_recording_preview_commit_and_lost_response_retry(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        original = self.path.read_bytes()
+        with self.client(
+                investment_database=self.path,
+                investment_recording_password="local-recording-passphrase") as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            self.assertTrue(session["enabled"])
+            self.assertFalse(session["authenticated"])
+            self.assertEqual(session["accounts"], [])
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            self.assertEqual(client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "unauthorized", "event": opening()},
+                headers=headers).status_code, 403)
+            self.assertEqual(client.post(
+                "/api/investment/v1/recording/login", json={"password": "wrong"},
+                headers=headers).status_code, 403)
+            self.assertEqual(client.post(
+                "/api/investment/v1/recording/login",
+                json={"password": "local-recording-passphrase"},
+                headers=headers).status_code, 200)
+            authenticated = client.get("/api/investment/v1/recording/session").json()
+            self.assertTrue(authenticated["authenticated"])
+            self.assertEqual([item["id"] for item in authenticated["accounts"]],
+                             ["bank", "broker"])
+            headers["X-CSRF-Token"] = authenticated["csrf"]
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "open-portfolio", "event": opening()},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["revision"], 0)
+            self.assertEqual(preview.json()["after"]["equity_gbp"], "2000")
+            self.assertEqual(self.path.read_bytes(), original)
+            preview_id = preview.json()["preview_id"]
+            confirmation = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview_id}, headers=headers)
+            self.assertEqual(confirmation.status_code, 200, confirmation.text)
+            self.assertEqual(confirmation.json(), {"id": "opening", "revision": 1})
+            retry = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview_id}, headers=headers)
+            self.assertEqual(retry.status_code, 200, retry.text)
+            self.assertEqual(retry.json(), confirmation.json())
+            snapshot_response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(snapshot_response.status_code, 200, snapshot_response.text)
+            self.assertEqual(snapshot_response.json()["revision"], 1)
+
+    def test_confirmation_storage_failure_is_retryable_with_same_preview(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening()], self.now)
+        with self.client(
+                investment_database=self.path,
+                investment_recording_password="local-recording-passphrase") as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            client.post("/api/investment/v1/recording/login",
+                        json={"password": "local-recording-passphrase"}, headers=headers)
+            value = event("retryable-interest", "interest", OPENING_NOW, "bank",
+                          amount_gbp="5")
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "retryable-write", "event": value},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            append_events = investment_store._append_events
+            attempts = 0
+
+            def fail_once(*args, **kwargs):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise sqlite3.OperationalError("database is locked")
+                return append_events(*args, **kwargs)
+
+            with patch("investment.store._append_events", side_effect=fail_once):
+                failed = client.post(
+                    "/api/investment/v1/recording/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                self.assertEqual(failed.status_code, 503, failed.text)
+                self.assertEqual(failed.json(), {
+                    "error": "investment_store_unavailable", "retryable": True})
+                retried = client.post(
+                    "/api/investment/v1/recording/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(retried.status_code, 200, retried.text)
+            self.assertEqual(retried.json()["revision"], 2)
+            self.assertEqual(
+                snapshot(self.path, OPENING_NOW)["recorded_interest_gbp"], "5")
+
+    def test_confirmation_missing_store_race_is_retryable_with_same_preview(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening()], self.now)
+        with self.client(
+                investment_database=self.path,
+                investment_recording_password="local-recording-passphrase") as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            client.post("/api/investment/v1/recording/login",
+                        json={"password": "local-recording-passphrase"}, headers=headers)
+            value = event("retryable-after-disappear", "interest", OPENING_NOW, "bank",
+                          amount_gbp="5")
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "retryable-disappear", "event": value},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            connect = investment_store._connect
+            attempts = 0
+
+            def unavailable_during_commit(database, readonly):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 2:
+                    raise InvestmentError(
+                        "Investment store missing; explicit init required") from FileNotFoundError(self.path)
+                return connect(database, readonly)
+
+            with patch("investment.store._connect", side_effect=unavailable_during_commit):
+                failed = client.post(
+                    "/api/investment/v1/recording/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                self.assertEqual(failed.status_code, 503, failed.text)
+                self.assertTrue(failed.json()["retryable"])
+                retried = client.post(
+                    "/api/investment/v1/recording/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(retried.status_code, 200, retried.text)
+            self.assertEqual(retried.json()["revision"], 2)
+
+    def test_recording_stale_preview_and_origin_checks_fail_closed(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening()], self.now)
+        with self.client(
+                investment_database=self.path,
+                investment_recording_password="local-recording-passphrase") as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            csrf = session["csrf"]
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": csrf}
+            client.post("/api/investment/v1/recording/login",
+                        json={"password": "local-recording-passphrase"}, headers=headers)
+            first = event("first-interest", "interest", OPENING_NOW, "bank", amount_gbp="5")
+            second = event("second-interest", "interest", OPENING_NOW, "bank", amount_gbp="7")
+            previews = []
+            for request_id, value in (("first", first), ("second", second)):
+                response = client.post(
+                    "/api/investment/v1/recording/preview",
+                    json={"request_id": request_id, "event": value}, headers=headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                previews.append(response.json()["preview_id"])
+            committed = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": previews[0]}, headers=headers)
+            self.assertEqual(committed.status_code, 200, committed.text)
+            stale = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": previews[1]}, headers=headers)
+            self.assertEqual(stale.status_code, 409, stale.text)
+            self.assertFalse(stale.json()["retryable"])
+            cross_origin = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "foreign", "event": first},
+                headers={"Origin": "https://foreign.invalid", "X-CSRF-Token": csrf})
+            self.assertEqual(cross_origin.status_code, 403)
+            no_csrf = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "missing-csrf", "event": first},
+                headers={"Origin": "http://127.0.0.1"})
+            self.assertEqual(no_csrf.status_code, 403)
+        self.assertEqual(snapshot(self.path, OPENING_NOW)["recorded_interest_gbp"], "5")
+
+    def test_authenticated_correction_preview_keeps_original_event_and_reports_replacement(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        contribution = event("recorded-contribution", "contribution", OPENING_NOW,
+                             "bank", amount_gbp="100")
+        import_events(self.path, [opening(), contribution], self.now)
+        corrected_at = OPENING_NOW + timedelta(days=1)
+        replacement = dict(contribution, id="replacement-contribution",
+                           amount_gbp="80", available_at=iso(corrected_at),
+                           evidence="Synthetic corrected statement")
+        correction_event = {
+            "id": "correction-contribution", "type": "correction",
+            "timestamp": iso(OPENING_NOW), "available_at": iso(corrected_at),
+            "evidence": "Synthetic corrected statement",
+            "original_event_id": contribution["id"], "replacement_event": replacement,
+        }
+        self.now = corrected_at
+        with self.client(
+                investment_database=self.path,
+                investment_recording_password="local-recording-passphrase") as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            client.post("/api/investment/v1/recording/login",
+                        json={"password": "local-recording-passphrase"}, headers=headers)
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "correct-contribution", "event": correction_event},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["after"]["net_contributions_gbp"], "80")
+            receipt = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(receipt.status_code, 200, receipt.text)
+            result = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(result.status_code, 200, result.text)
+        report = result.json()
+        self.assertEqual(report["revision"], 3)
+        self.assertEqual(report["net_contributions_gbp"], "80")
+        self.assertEqual([item["id"] for item in report["recorded_flow_events"]],
+                         ["replacement-contribution"])
+        self.assertEqual(report["recorded_corrections"][0]["original_event_id"],
+                         "recorded-contribution")
+
+    def test_recording_requires_an_explicit_existing_version_two_store(self):
+        self.now = OPENING_NOW
+        initialize(self.path, demo_profile(self.now), self.now)
+        with self.assertRaisesRegex(ValueError, "version 2"):
+            self.client(investment_database=self.path,
+                        investment_recording_password="local-recording-passphrase")
 
     def test_v2_savings_terms_are_read_only_and_do_not_change_portfolio_value(self):
         self.now = OPENING_NOW
@@ -222,7 +472,14 @@ class InvestmentDashboardTests(unittest.TestCase):
             response = client.get("/api/investment/v1/snapshot")
         self.assertEqual(response.status_code, 409)
 
-    def test_recorded_sell_proposal_is_read_only_and_schema_valid(self):
+    def assert_blocked_proposal(self, proposal):
+        self.assertEqual(proposal, {
+            "status": "blocked",
+            "reason": "Role-aware policy, products, weights and loss/transfer rules are not approved or implemented.",
+            "expires_at": None, "orders": [], "manual_transfers": [], "execution_enabled": False,
+        })
+
+    def test_recorded_overweight_proposal_is_blocked_read_only_and_schema_valid(self):
         spec = demo_profile(self.now)
         spec["policy"]["targets"] = {"equity": "60", "bond": "20", "cash": "20"}
         spec["products"].append(dict(spec["products"][0], id="bond", sleeve="bond"))
@@ -232,10 +489,7 @@ class InvestmentDashboardTests(unittest.TestCase):
         with self.client(investment_database=self.path) as client:
             response = client.get("/api/investment/v1/snapshot")
             self.assertEqual(response.status_code, 200, response.text)
-            proposal = response.json()["proposal"]
-            self.assertEqual([(order["side"], order["quantity"])
-                              for order in proposal["orders"]], [("sell", "20")])
-            self.assertFalse(proposal["execution_enabled"])
+            self.assert_blocked_proposal(response.json()["proposal"])
             self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
                                          headers={"Origin": "http://127.0.0.1"}).status_code, 405)
         self.assertEqual(self.path.read_bytes(), original)

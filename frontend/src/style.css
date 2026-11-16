@@ -34,6 +34,28 @@
 .chart-empty { display: flex; justify-content: center; align-items: center; gap: 12px; min-height: 180px; border-block: 1px solid var(--line); margin-bottom: 25px; color: var(--muted); font-size: 13px; }
 .history-heading { margin-top: 30px; }
 .history-group { margin-top: 28px; }
+.investment-recording { border-top: 1px solid var(--line); padding-top: 18px; }
+.recording-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: end; }
+.recording-form > label { display: grid; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.recording-form input, .recording-form select, .recording-form textarea { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 3px; background: #fff; color: var(--ink); }
+.recording-form textarea { min-height: 72px; resize: vertical; }
+.recording-form fieldset { grid-column: 1 / -1; display: grid; gap: 12px; border: 1px solid var(--line); padding: 14px; }
+.recording-form fieldset > label { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(160px, 2fr); align-items: center; gap: 12px; font-size: 12px; }
+.recording-form legend { padding-inline: 5px; font-size: 12px; color: var(--muted); }
+.recording-form button, .recording-preview button { width: fit-content; min-height: 36px; border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; background: #f7faf9; font-size: 12px; }
+.recording-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 10px; align-items: end; }
+.recording-row label { display: grid; gap: 5px; min-width: 0; font-size: 11px; color: var(--muted); }
+.recording-preview { border: 1px solid var(--line); border-left: 3px solid var(--green); padding: 14px; }
+.recording-preview h3 { margin: 0; font-size: 14px; }
+.recording-event { margin: 12px 0; border: 1px solid var(--line); background: #f7faf9; }
+.recording-event summary { padding: 9px 12px; cursor: pointer; font-size: 12px; color: var(--ink); }
+.recording-event pre { max-height: 240px; overflow: auto; margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.recording-preview button + button { margin-left: 8px; }
+@media (max-width: 640px) {
+  .recording-form { grid-template-columns: 1fr; }
+  .recording-form fieldset > label { grid-template-columns: 1fr; gap: 6px; }
+  .recording-row { grid-template-columns: 1fr 1fr; }
+}
 .history-group h3 { margin: 0; font-size: 15px; }
 .record-id { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; font: 10px "IBM Plex Mono", monospace; color: var(--muted); margin-top: 4px; }
 .correction-reason { white-space: normal; min-width: 220px; max-width: 380px; line-height: 1.5; }

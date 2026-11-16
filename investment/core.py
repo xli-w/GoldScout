@@ -2,6 +2,7 @@
 
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, localcontext, InvalidOperation
+import json
 import re
 
 from . import InvestmentError
@@ -11,6 +12,9 @@ MAX_TEXT = 200
 DECIMAL = re.compile(r"(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,8})?\Z")
 RECORDED_BALANCE = re.compile(r"(?:0|[1-9][0-9]{0,24})(?:\.[0-9]{1,16})?\Z")
 ZERO = Decimal(0)
+ROLES = ("core", "dynamic", "unassigned")
+ROLE_EVENTS = {"contribution", "withdrawal", "transfer", "interest",
+               "dividend", "buy", "sell"}
 
 
 def clock(value=None):
@@ -162,8 +166,59 @@ EVENT_FIELDS = {
     "mark": ("product_id", "price_gbp"),
 }
 
+CORRECTABLE_CASH_EVENTS = {"contribution", "withdrawal", "interest"}
+
 
 def event(value, spec, now):
+    if isinstance(value, dict) and value.get("type") == "role_assignment":
+        if spec["schema_version"] != 2:
+            raise InvestmentError("Role attribution requires a version 2 store")
+        fields(value, ("id", "type", "timestamp", "available_at", "evidence",
+                       "account_id", "product_id", "role", "amount"))
+        for key in ("id", "evidence", "account_id"):
+            text(value[key])
+        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
+            raise InvestmentError("Role attribution requires contemporaneous evidence")
+        if value["role"] not in ("core", "dynamic"):
+            raise InvestmentError("Role attribution requires core or dynamic")
+        accounts = {account["id"]: account for account in spec["accounts"]}
+        products = {product["id"]: product for product in spec["products"]}
+        account, product = value["account_id"], value["product_id"]
+        if account not in accounts:
+            raise InvestmentError("Unknown account binding")
+        amount = number(value["amount"], positive=True)
+        if product is not None:
+            if product not in products or accounts[account]["kind"] != "broker":
+                raise InvestmentError("Role holding requires an included broker and product")
+            with localcontext() as context:
+                context.prec = 100
+                if amount % number(products[product]["quantity_increment"], positive=True):
+                    raise InvestmentError("Role quantity is not an exact product increment")
+        return value
+    if isinstance(value, dict) and value.get("type") == "correction":
+        if spec["schema_version"] != 2:
+            raise InvestmentError("Corrections require an explicit version 2 store")
+        fields(value, ("id", "type", "timestamp", "available_at", "evidence",
+                       "original_event_id", "replacement_event"))
+        for key in ("id", "evidence", "original_event_id"):
+            text(value[key])
+        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        if (timestamp < clock(spec["created_at"]) or available < timestamp or
+                available > now):
+            raise InvestmentError("Invalid correction evidence clock")
+        replacement = value["replacement_event"]
+        if (not isinstance(replacement, dict) or
+                replacement.get("type") not in CORRECTABLE_CASH_EVENTS):
+            raise InvestmentError("Only latest cash flows and interest can be corrected")
+        event(replacement, spec, now)
+        if (replacement["timestamp"] != value["timestamp"] or
+                replacement["available_at"] != value["available_at"] or
+                replacement["evidence"] != value["evidence"] or
+                replacement["id"] == value["original_event_id"] or
+                replacement["id"] == value["id"]):
+            raise InvestmentError("Correction replacement must use the correction evidence clock")
+        return value
     if isinstance(value, dict) and value.get("type") == "opening":
         if spec["schema_version"] != 2:
             raise InvestmentError("Opening evidence requires an explicit version 2 store")
@@ -274,8 +329,19 @@ def event(value, spec, now):
         return value
     if not isinstance(value, dict) or value.get("type") not in EVENT_FIELDS:
         raise InvestmentError("Unsupported operation; corrections, FX and other actions refused")
-    fields(value, ("id", "type", "account_id", "timestamp", "available_at", "currency",
-                   "evidence") + EVENT_FIELDS[value["type"]])
+    required = ("id", "type", "account_id", "timestamp", "available_at", "currency",
+                "evidence") + EVENT_FIELDS[value["type"]]
+    has_role = "role" in value
+    has_role_evidence = "role_evidence" in value
+    if has_role and (spec["schema_version"] != 2 or value["type"] not in ROLE_EVENTS
+                     or value["role"] not in ROLES):
+        raise InvestmentError("Unsupported management role")
+    if has_role_evidence:
+        if spec["schema_version"] != 2 or value["type"] not in ("interest", "dividend"):
+            raise InvestmentError("Role income evidence is not applicable")
+        text(value["role_evidence"])
+    fields(value, required + (("role",) if has_role else ()) +
+           (("role_evidence",) if has_role_evidence else ()))
     for key in ("id", "account_id", "evidence"):
         text(value[key])
     if value["currency"] != "GBP":
@@ -340,6 +406,23 @@ class Ledger:
             self.baseline_value = None
             self.baseline_net = None
             self.valuation_history = []
+            self.superseded_ids = set()
+            self.role_active = False
+            self.role_cash = {}
+            self.role_holdings = {}
+            self.role_last_time = self.last_time
+
+    def activate_roles(self):
+        if not self.role_active:
+            products = {item["id"]: item for item in self.spec["products"]}
+            if any(quantity % number(products[product]["quantity_increment"], positive=True)
+                   for (_, product), quantity in self.holdings.items()):
+                raise InvestmentError("Existing holding has an unsupported role quantity increment")
+            self.role_cash = {(account, "unassigned"): amount
+                              for account, amount in self.cash.items()}
+            self.role_holdings = {(*key, "unassigned"): quantity
+                                  for key, quantity in self.holdings.items()}
+            self.role_active = True
 
     def valuation(self, timestamp=None):
         if self.spec["schema_version"] == 2 and not self.opened:
@@ -447,6 +530,9 @@ class Ledger:
         for key in ("cash", "holdings", "marks", "ids", "cash_observations",
                     "account_terms"):
             saved[key] = saved[key].copy()
+        if self.spec["schema_version"] == 2:
+            saved["role_cash"] = self.role_cash.copy()
+            saved["role_holdings"] = self.role_holdings.copy()
         saved["updated_account_terms"] = saved["updated_account_terms"].copy()
         saved["cash_observation_history"] = {
             account: observations.copy()
@@ -468,7 +554,7 @@ class Ledger:
         timestamp = clock(value["timestamp"])
         order_time = max(self.last_time, self.monthly_review_at or self.last_time)
         if self.spec["schema_version"] == 2:
-            order_time = max(order_time, self.terms_last_time)
+            order_time = max(order_time, self.terms_last_time, self.role_last_time)
         if timestamp < order_time:
             raise InvestmentError("Events must be timestamp ordered; no corrections")
         kind = value["type"]
@@ -501,6 +587,23 @@ class Ledger:
             return True
         if self.spec["schema_version"] == 2 and not self.opened:
             raise InvestmentError("Explicit opening evidence is required before other events")
+        if kind == "role_assignment":
+            if max(self.latest_available_at, self.terms_latest_available_at) > timestamp:
+                raise InvestmentError("Prior evidence was not available at the attribution clock")
+            self.activate_roles()
+            account, product, role = value["account_id"], value["product_id"], value["role"]
+            balances = self.role_cash if product is None else self.role_holdings
+            source = (account, "unassigned") if product is None else (account, product, "unassigned")
+            target = (account, role) if product is None else (account, product, role)
+            amount = number(value["amount"], positive=True)
+            if balances.get(source, ZERO) < amount:
+                raise InvestmentError("Role attribution exceeds unassigned balance")
+            balances[source] -= amount
+            balances[target] = balances.get(target, ZERO) + amount
+            self.ids[value["id"]] = value.copy()
+            self.revision += 1
+            self.role_last_time = timestamp
+            return True
         if kind in ("cash_confirmation", "review_acknowledgement") and max(
                 self.latest_available_at, self.terms_latest_available_at) > timestamp:
             raise InvestmentError("Prior evidence was not available at the attestation clock")
@@ -582,6 +685,49 @@ class Ledger:
         key = (account, value.get("product_id"))
         amount = number(value["amount_gbp"]) if "amount_gbp" in value else ZERO
         before, _ = self.valuation(timestamp)
+        if self.spec["schema_version"] == 2:
+            if "role" in value:
+                self.activate_roles()
+            if self.role_active:
+                role = value.get("role", "unassigned")
+                cash_key = (account, role)
+                holding_key = (account, value.get("product_id"), role)
+                if kind in ("interest", "dividend") and "role_evidence" not in value:
+                    raise InvestmentError("Role income requires explicit allocation evidence")
+                if kind == "interest" and self.role_cash.get(cash_key, ZERO) <= 0:
+                    raise InvestmentError("Interest role requires evidenced role cash")
+                if kind == "dividend" and self.role_holdings.get(holding_key, ZERO) <= 0:
+                    raise InvestmentError("Dividend role requires an evidenced role holding")
+                if kind in ("contribution", "interest", "dividend"):
+                    self.role_cash[cash_key] = self.role_cash.get(cash_key, ZERO) + amount
+                elif kind == "withdrawal":
+                    self.role_cash[cash_key] = self.role_cash.get(cash_key, ZERO) - amount
+                elif kind == "transfer":
+                    destination = (value["destination_account_id"], role)
+                    self.role_cash[cash_key] = self.role_cash.get(cash_key, ZERO) - amount
+                    self.role_cash[destination] = self.role_cash.get(destination, ZERO) + amount
+                elif kind in ("buy", "sell"):
+                    quantity, price, fee = (number(value[k]) for k in
+                                            ("quantity", "price_gbp", "fee_gbp"))
+                    sign = 1 if kind == "buy" else -1
+                    self.role_cash[cash_key] = self.role_cash.get(cash_key, ZERO) - sign * quantity * price - fee
+                    self.role_holdings[holding_key] = self.role_holdings.get(holding_key, ZERO) + sign * quantity
+                elif kind == "split":
+                    product = next(item for item in self.spec["products"]
+                                   if item["id"] == value["product_id"])
+                    increment = number(product["quantity_increment"], positive=True)
+                    for role_name in ROLES:
+                        role_key = (account, value["product_id"], role_name)
+                        if role_key in self.role_holdings:
+                            self.role_holdings[role_key] *= number(value["ratio"])
+                            if self.role_holdings[role_key] % increment:
+                                raise InvestmentError("Split produces unsupported role quantity increment")
+                if (any(v < 0 for v in self.role_cash.values()) or
+                        any(v < 0 or v.normalize().as_tuple().exponent < -8
+                            for v in self.role_holdings.values())):
+                    raise InvestmentError("Insufficient role cash or holdings, or unsupported role quantity")
+                if kind in ROLE_EVENTS or kind == "split":
+                    self.role_last_time = timestamp
         if kind in ("contribution", "withdrawal"):
             self.observe(before)
             flow = amount if kind == "contribution" else -amount
@@ -659,10 +805,13 @@ def replay(spec, events, now=None, on_revision=None):
             group_timestamp = None
             same_clock_income = False
             unpriced_flow_holdings = set()
+            last_event = None
+            last_reversible = None
             for value in events:
                 if isinstance(value, dict) and value.get("id") in ledger.ids:
                     event(value, spec, now)
-                    if value != ledger.ids[value["id"]]:
+                    if json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) != json.dumps(
+                            ledger.ids[value["id"]], sort_keys=True, separators=(",", ":"), allow_nan=False):
                         raise InvestmentError("Conflicting duplicate event")
                     continue
                 timestamp = clock(value.get("timestamp")) if isinstance(value, dict) else None
@@ -672,18 +821,63 @@ def replay(spec, events, now=None, on_revision=None):
                     unpriced_flow_holdings = set()
                 kind = value.get("type") if isinstance(value, dict) else None
                 metadata_only = (isinstance(value, dict) and
-                                 kind == "savings_terms")
+                                 kind in ("savings_terms", "role_assignment"))
                 valuation_event = (not metadata_only and isinstance(value, dict) and
                                    kind != "cash_observation")
                 if isinstance(value, dict) and kind == "review_acknowledgement":
                     ledger.apply(value, now)
                     if on_revision is not None:
                         on_revision(ledger, previous)
+                    last_event = value
+                    last_reversible = None
                     continue
                 if previous is not None and timestamp != previous:
                     ledger.checkpoint(previous)
                     if history_relevant:
                         ledger.record_valuation(previous)
+                if kind == "correction":
+                    event(value, spec, now)
+                    replacement = value["replacement_event"]
+                    original = last_event
+                    if (last_reversible is None or original is None or
+                            original["id"] != value["original_event_id"] or
+                            replacement["id"] in ledger.ids or
+                            value["id"] in ledger.ids or
+                            original.get("type") not in CORRECTABLE_CASH_EVENTS or
+                            replacement["type"] != original["type"] or
+                            replacement["account_id"] != original["account_id"] or
+                            timestamp != clock(original["timestamp"])):
+                        raise InvestmentError("Only the latest cash flow or interest event can be corrected")
+                    unchanged = {key: item for key, item in replacement.items()
+                                 if key not in ("id", "available_at", "evidence", "amount_gbp")}
+                    original_unchanged = {key: item for key, item in original.items()
+                                          if key not in ("id", "available_at", "evidence", "amount_gbp")}
+                    if unchanged != original_unchanged:
+                        raise InvestmentError("Corrections may change only the recorded amount")
+                    state = last_reversible
+                    ledger.cash[original["account_id"]] = state["cash"]
+                    ledger.role_cash = state["role_cash"].copy()
+                    ledger.role_holdings = state["role_holdings"].copy()
+                    ledger.role_active = state["role_active"]
+                    ledger.role_last_time = state["role_last_time"]
+                    for name, saved in state["scalars"].items():
+                        setattr(ledger, name, saved)
+                    del ledger.valuation_history[state["history_length"]:]
+                    ledger.apply(replacement, now)
+                    ledger.revision += 1
+                    ledger.ids[value["id"]] = value.copy()
+                    ledger.superseded_ids.add(original["id"])
+                    if on_revision is not None:
+                        on_revision(ledger, previous)
+                    last_event = value
+                    last_reversible = None
+                    if not metadata_only:
+                        if timestamp != previous:
+                            history_relevant = valuation_event
+                        elif valuation_event:
+                            history_relevant = True
+                        previous = timestamp
+                    continue
                 if (spec["schema_version"] == 2 and kind in
                         ("contribution", "withdrawal")):
                     total, _ = ledger.valuation(timestamp)
@@ -691,6 +885,24 @@ def replay(spec, events, now=None, on_revision=None):
                         unpriced_flow_holdings.update(
                             key for key, quantity in ledger.holdings.items() if quantity > 0)
                 baseline_before = ledger.baseline_at if spec["schema_version"] == 2 else None
+                reversible = None
+                if (spec["schema_version"] == 2 and kind in CORRECTABLE_CASH_EVENTS):
+                    reversible = {
+                        "cash": ledger.cash[value["account_id"]],
+                        "role_cash": ledger.role_cash.copy(),
+                        "role_holdings": ledger.role_holdings.copy(),
+                        "role_active": ledger.role_active,
+                        "role_last_time": ledger.role_last_time,
+                        "history_length": len(ledger.valuation_history),
+                        "scalars": {
+                            name: getattr(ledger, name) for name in (
+                                "net", "fees", "revision", "last_time",
+                                "cash_valuation_at", "latest_available_at", "units",
+                                "unit_price", "peak", "drawdown", "performance_valid",
+                                "baseline_at", "baseline_value", "baseline_net",
+                            )
+                        },
+                    }
                 ledger.apply(value, now)
                 if (spec["schema_version"] == 2 and kind == "mark" and
                         (value["account_id"], value["product_id"]) in unpriced_flow_holdings):
@@ -705,6 +917,8 @@ def replay(spec, events, now=None, on_revision=None):
                     same_clock_income = True
                 if on_revision is not None:
                     on_revision(ledger, previous if metadata_only else timestamp)
+                last_event = value
+                last_reversible = reversible
                 if not metadata_only:
                     if timestamp != previous:
                         history_relevant = valuation_event
