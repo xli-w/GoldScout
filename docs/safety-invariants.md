@@ -121,6 +121,14 @@ These are development contracts, not a certification of live readiness. Current 
 
 ## Advisory and Shadow Intelligence
 
+- Opt-in [portfolio awareness](portfolio-automation.md) matches existing public
+  evidence to explicitly mapped positive recorded exposures only on the local
+  machine. Its profile and account/role/holding evidence never enter AI requests.
+  Reads do not start collection or mutate either store; future/missing/stale
+  evidence and unmapped exposure remain explicit. Review reminders are
+  operator-configured notifications, not policy or revision acknowledgements.
+  Provider discovery is not verified account-level permission or sync activation;
+  future observations/discrepancies must not automatically repair accounting.
 - Portfolio intelligence may support automated awareness and hypothesis creation
   under approved collection capabilities. Future calendar/AI-derived dynamic
   trading features require separate prospective signal/failure-policy approval;

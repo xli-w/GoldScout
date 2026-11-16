@@ -3,6 +3,70 @@ import { readFileSync } from "node:fs";
 
 const fixtures = JSON.parse(readFileSync(new URL("../../dashboard/fixtures.json", import.meta.url), "utf8"));
 
+test("portfolio awareness keeps matching local, shows evidence and fails closed on refresh", async ({ page }) => {
+  await page.clock.install();
+  const investment = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  const at = "2026-01-01T12:00:00Z";
+  const matches = [{ account_id: "broker", product_id: "global-fund", roles: ["core"],
+    mapping_evidence: "Operator-declared macro proxy; not fund look-through" }];
+  const awareness = {
+    enabled: true, schema_version: 1, source_mode: "recorded", portfolio_id: investment.portfolio_id,
+    portfolio_revision: investment.revision, intelligence_database_id: "synthetic-intelligence",
+    settings_revision: 1, profile_hash: "a".repeat(64), profile_observed_at: at, generated_at: at,
+    calendar_status: "available", calendar_available_at: at, calendar_revision: 1,
+    alerts: [{ event_id: "cpi", revision: 1, source: "bls", source_url: "https://www.bls.gov/schedule/",
+      category: "inflation", title: "Synthetic inflation release", scheduled_at: null,
+      available_at: at, status: "tentative", evidence_status: "unknown", matches }],
+    briefs: [{
+      brief_id: "brief", available_at: at, expires_at: "2026-01-01T12:30:00Z", status: "expired",
+      verification: "unverified", provider: "local", model: "synthetic", prompt_version: "news-extractive-v1",
+      input_hash: "b".repeat(64), interpretation: "Unverified synthetic interpretation.",
+      uncertainties: ["Limited source coverage."], recommendation: "review", symbols: ["SPY"], matches,
+      claims: [{ text: "Synthetic public statement.", evidence_ids: ["source-1"] }],
+      sources: [{ evidence_id: "source-1", source_url: "https://www.federalreserve.gov/",
+        title: "Public statement", published_at: at, received_at: at }],
+    }],
+    reminders: [{ id: "review", title: "Portfolio mandate check", last_reviewed_at: null,
+      interval_days: 30, evidence: "Operator-selected reminder only", due_at: null, status: "never_reviewed" }],
+    warnings: ["No complete UK/global source coverage is established."],
+    affects_trading: false, accounting_writes: false,
+  };
+  let requests = 0;
+  let unavailable = false;
+  await page.route("**/api/investment/v1/awareness", route => {
+    requests++;
+    return route.fulfill(unavailable ? { status: 503, json: { error: "unavailable" } } : { json: awareness });
+  });
+  await page.goto("/investment");
+  const section = page.getByRole("region", { name: "Portfolio awareness", exact: true });
+  await expect(section.getByText("Synthetic inflation release", { exact: false })).toBeVisible();
+  await expect(section.getByText(/Time unknown/)).toBeVisible();
+  await expect(section.getByText(/No complete UK\/global/)).toBeVisible();
+  await expect(section.getByRole("checkbox")).not.toBeChecked();
+  await page.clock.fastForward(61000);
+  expect(requests).toBe(1);
+  await section.getByRole("checkbox").check();
+  await page.clock.fastForward(61000);
+  await expect.poll(() => requests).toBeGreaterThan(1);
+  await section.getByRole("checkbox").uncheck();
+  await section.getByText(/Expired \/ unverified/).click();
+  await expect(section.getByText("Unverified synthetic interpretation.")).toBeVisible();
+  await expect(section.getByRole("link", { name: "Public statement" })).toHaveAttribute("href", "https://www.federalreserve.gov/");
+  await expect(section.getByText(/Portfolio mandate check/)).toBeVisible();
+  awareness.portfolio_revision++;
+  await section.getByRole("button", { name: "Refresh awareness" }).click();
+  await expect(section.getByRole("alert")).toContainText("Portfolio revision changed");
+  await expect(section.getByText("Synthetic inflation release", { exact: false })).toHaveCount(0);
+  awareness.portfolio_revision--;
+  awareness.affects_trading = true;
+  await section.getByRole("button", { name: "Refresh awareness" }).click();
+  await expect(section.getByRole("alert")).toHaveText("Portfolio awareness response failed validation.");
+  await expect(section.getByText("Synthetic inflation release", { exact: false })).toHaveCount(0);
+  unavailable = true;
+  await section.getByRole("button", { name: "Refresh awareness" }).click();
+  await expect(section.getByRole("alert")).toContainText("Portfolio awareness unavailable");
+});
+
 test("investment demo separates contributions, GBP valuation and export-only proposals", async ({ page }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));

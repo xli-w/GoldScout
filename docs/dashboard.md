@@ -23,7 +23,7 @@ Use `python -m dashboard --investment-database .\investment.sqlite3` only for an
 explicitly initialised, operator-selected investment store. It is mutually
 exclusive with the legacy `--database` and `--demo` sources; recorded investment
 mode never substitutes synthetic legacy accounts. No store is created or repaired
-by reporting. The frontend build binds the legacy, investment v1 and v2 response schemas.
+by reporting. The frontend build binds the legacy, investment v1/v2 and awareness response schemas.
 To enable manual recording for an existing v2 store, add
 `--investment-recording`; the operator enters a 12-character-minimum password
 at the terminal, not in command-line arguments. The server remains bound to
@@ -32,6 +32,14 @@ change must be reviewed and confirmed, and stale journal revisions are refused.
 See the [investment guide](investment.md#version-2-opening-evidence) for
 supported records and correction limits. Without this flag, all dashboard
 investment routes remain read-only.
+
+For [local portfolio awareness](portfolio-automation.md), additionally select an
+existing `--intelligence-database` and `--awareness-profile` JSON file. The
+investment page shows explicitly mapped calendar alerts, dated existing briefs
+and configured review reminders. Its local-read minute polling is opt-in; the
+page starts no collector/model, sends no account data to AI and cannot trade.
+Without that profile awareness is disabled. Read-only sync remains discovery,
+not an active broker/bank connection.
 
 This is an offline measurement/planning release, not full multi-currency research
 or a human-approved broker integration. See the investment guide's capability

@@ -29,6 +29,10 @@ def main(argv=None, stdout=None, stderr=None, now=None):
         command.add_argument("--database", required=True)
     status = commands.add_parser("review-status", help="read-only review clocks and valuation status")
     status.add_argument("--database", required=True)
+    awareness = commands.add_parser("awareness", help="local advisory alerts, briefs and reminder JSON; no collection")
+    awareness.add_argument("--database", required=True)
+    awareness.add_argument("--intelligence-database", required=True)
+    awareness.add_argument("--awareness-profile", required=True)
     acknowledge = commands.add_parser("acknowledge-review", help="record a manual review, not an order approval")
     acknowledge.add_argument("--database", required=True)
     acknowledge.add_argument("--kind", choices=("monthly", "annual"), required=True)
@@ -52,6 +56,10 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             value = snapshot(args.database, now)
         elif args.command == "review-status":
             value = review_status(args.database, requested_now)
+        elif args.command == "awareness":
+            from .awareness import awareness_snapshot
+            value = awareness_snapshot(args.database, args.intelligence_database,
+                                       args.awareness_profile, requested_now)
         elif args.command == "acknowledge-review":
             acknowledgement = acknowledge_review(args.database, args.id, args.kind,
                                                   args.reviewed_revision, args.evidence, requested_now)

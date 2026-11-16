@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {"type": "object", "additionalProperties": false, "required": ["enabled"], "properties": {"enabled": {"const": false}}},
+    {"$ref": "#/$defs/report"}
+  ],
+  "$defs": {
+    "time": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "nullableTime": {"oneOf": [{"$ref": "#/$defs/time"}, {"type": "null"}]},
+    "text": {"type": "string", "minLength": 1, "maxLength": 200},
+    "url": {"type": "string", "format": "uri", "maxLength": 2048, "pattern": "^https://"},
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account_id", "product_id", "roles", "mapping_evidence"],
+      "properties": {
+        "account_id": {"$ref": "#/$defs/text"}, "product_id": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "roles": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"enum": ["core", "dynamic", "unassigned"]}},
+        "mapping_evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "matches": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/$defs/target"}},
+    "alert": {
+      "type": "object", "additionalProperties": false,
+      "required": ["event_id", "revision", "source", "source_url", "category", "title", "scheduled_at", "available_at", "status", "evidence_status", "matches"],
+      "properties": {
+        "event_id": {"$ref": "#/$defs/text"}, "revision": {"type": "integer", "minimum": 0},
+        "source": {"$ref": "#/$defs/text"}, "source_url": {"$ref": "#/$defs/url"},
+        "category": {"enum": ["monetary_policy", "inflation", "employment", "growth", "energy"]},
+        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+        "scheduled_at": {"$ref": "#/$defs/nullableTime"}, "available_at": {"$ref": "#/$defs/time"},
+        "status": {"enum": ["scheduled", "tentative", "cancelled"]},
+        "evidence_status": {"enum": ["fresh", "unknown"]}, "matches": {"$ref": "#/$defs/matches"}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "source_url", "title", "published_at", "received_at"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/text"}, "source_url": {"$ref": "#/$defs/url"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+        "published_at": {"$ref": "#/$defs/nullableTime"}, "received_at": {"$ref": "#/$defs/time"}
+      }
+    },
+    "brief": {
+      "type": "object", "additionalProperties": false,
+      "required": ["brief_id", "available_at", "expires_at", "status", "verification", "provider", "model", "prompt_version", "input_hash", "interpretation", "uncertainties", "recommendation", "symbols", "matches", "claims", "sources"],
+      "properties": {
+        "brief_id": {"$ref": "#/$defs/text"}, "available_at": {"$ref": "#/$defs/time"}, "expires_at": {"$ref": "#/$defs/time"},
+        "status": {"enum": ["current", "expired", "disabled", "superseded", "source_unknown"]},
+        "verification": {"const": "unverified"}, "provider": {"$ref": "#/$defs/text"},
+        "model": {"$ref": "#/$defs/text"}, "prompt_version": {"$ref": "#/$defs/text"},
+        "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "interpretation": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "uncertainties": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+        "recommendation": {"enum": ["watch", "review", "wait"]},
+        "symbols": {"type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": {"enum": ["SPY", "QQQ", "BTC/USD", "GLD", "USO"]}},
+        "matches": {"$ref": "#/$defs/matches"},
+        "claims": {
+          "type": "array", "minItems": 1, "maxItems": 10,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["text", "evidence_ids"],
+            "properties": {
+              "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+              "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": {"$ref": "#/$defs/text"}}
+            }
+          }
+        },
+        "sources": {"type": "array", "minItems": 1, "maxItems": 200, "items": {"$ref": "#/$defs/source"}}
+      }
+    },
+    "reminder": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "last_reviewed_at", "interval_days", "evidence", "due_at", "status"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"}, "title": {"$ref": "#/$defs/text"},
+        "last_reviewed_at": {"$ref": "#/$defs/nullableTime"}, "due_at": {"$ref": "#/$defs/nullableTime"},
+        "interval_days": {"type": "integer", "minimum": 1, "maximum": 3660}, "evidence": {"$ref": "#/$defs/text"},
+        "status": {"enum": ["due", "upcoming", "never_reviewed"]}
+      }
+    },
+    "report": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "schema_version", "source_mode", "portfolio_id", "portfolio_revision", "intelligence_database_id", "settings_revision", "profile_hash", "profile_observed_at", "generated_at", "calendar_status", "calendar_available_at", "calendar_revision", "alerts", "briefs", "reminders", "warnings", "affects_trading", "accounting_writes"],
+      "properties": {
+        "enabled": {"const": true}, "schema_version": {"const": 1}, "source_mode": {"const": "recorded"},
+        "portfolio_id": {"$ref": "#/$defs/text"}, "portfolio_revision": {"type": "integer", "minimum": 0},
+        "intelligence_database_id": {"$ref": "#/$defs/text"}, "settings_revision": {"type": "integer", "minimum": 0},
+        "profile_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "profile_observed_at": {"$ref": "#/$defs/time"},
+        "generated_at": {"$ref": "#/$defs/time"}, "calendar_status": {"enum": ["available", "unavailable", "disabled"]},
+        "calendar_available_at": {"$ref": "#/$defs/nullableTime"},
+        "calendar_revision": {"type": ["integer", "null"], "minimum": 0},
+        "alerts": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/alert"}},
+        "briefs": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/brief"}},
+        "reminders": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/reminder"}},
+        "warnings": {"type": "array", "maxItems": 10000, "items": {"type": "string", "maxLength": 1000}},
+        "affects_trading": {"const": false}, "accounting_writes": {"const": false}
+      }
+    }
+  }
+}

@@ -6,7 +6,15 @@ AI briefs. It never places orders, changes stops or suppresses strategy signals.
 `shadow` produces hypothetical calendar observations only. Calendar completeness
 is unverified, so unknown coverage never becomes trading permission.
 
-## Portfolio-manager direction (planned, not enabled)
+## Portfolio-manager awareness
+
+The optional [local portfolio projection](portfolio-automation.md) now connects
+existing stored evidence to explicitly mapped recorded exposures, dated briefs
+and operator-configured review reminders. It performs local reads only, starts
+no service and sends no portfolio data to AI. Read-only sync remains provider
+discovery, not an enabled account connection.
+
+### Further direction (planned, not enabled)
 
 The [2026-11-16 mandate](investment-research-context.md) makes intelligence a
 central supporting capability for substantial long-term investment capital:
@@ -15,8 +23,8 @@ Reuse the existing service rather than building a parallel ungoverned AI trader.
 Current advisory/shadow contracts and opt-in launch/provider gates are unchanged.
 
 Prioritise automatic, source-linked portfolio briefs, thesis/watch records,
-economic-event awareness, uncertainty and research-hypothesis generation. A future
-local exposure projection may link relevant public events to approved instruments;
+economic-event awareness, uncertainty and research-hypothesis generation. The
+local exposure projection links explicitly mapped public context to recorded instruments;
 account balances, private identifiers and broker/account evidence must not become
 hosted AI inputs. Public research sources still need verified rights and relevance.
 Current BLS/BEA/Fed coverage is US-focused; BoE/UK/global calendars and issuer
@@ -45,8 +53,8 @@ or force core liquidation. A dependent dynamic strategy needs its own approved
 failure/suspension policy before admission.
 
 See the [portfolio roadmap and verified design sources](investment.md) and
-[research admission protocol](backtesting-protocol.md). This documentation change
-starts no service, calls no provider and grants no trading authority.
+[research admission protocol](backtesting-protocol.md). The local projection starts no service, calls no provider and grants no trading
+authority.
 
 ## Setup
 

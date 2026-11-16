@@ -33,9 +33,11 @@ MESSAGES = {
 
 def create_app(database=None, scenario="healthy_recorded", clock=None, static_directory=None, telemetry_path=None, process_check=None, serve_frontend=True,
                intelligence_database=None, intelligence_demo=False, analysis_password=None, analysis_profiles=(), investment_database=None,
-               investment_recording_password=None):
+               investment_recording_password=None, awareness_profile=None):
     if database is not None and investment_database is not None:
         raise ValueError("Select legacy trading or investment storage, not both")
+    if awareness_profile is not None and (investment_database is None or intelligence_database is None or intelligence_demo):
+        raise ValueError("Portfolio awareness requires explicit investment and intelligence stores")
     if serve_frontend:
         static_directory = verify_frontend(static_directory)
     clock = clock or (lambda: datetime.now(timezone.utc))
@@ -146,6 +148,22 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
             return JSONResponse(status_code=503, content={"error": "investment_unavailable", "message": str(exc)})
         except SchemaValidationError:
             return JSONResponse(status_code=409, content={"error": "investment_invalid", "message": "Investment report failed schema validation."})
+
+    @app.get("/api/investment/v1/awareness")
+    def investment_awareness():
+        if awareness_profile is None:
+            return {"enabled": False}
+        from investment import InvestmentError
+        from investment.awareness import awareness_snapshot
+        try:
+            result = awareness_snapshot(investment_database, intelligence_database, awareness_profile, clock())
+            schema = json.loads((ROOT.parent / "investment" / "awareness.schema.json").read_text(encoding="utf-8"))
+            Draft202012Validator(schema, format_checker=FormatChecker()).validate(result)
+            return result
+        except (InvestmentError, OSError):
+            return JSONResponse(status_code=503, content={"error": "portfolio_awareness_unavailable"})
+        except SchemaValidationError:
+            return JSONResponse(status_code=409, content={"error": "portfolio_awareness_invalid"})
 
     @app.get("/api/investment/v1/recording/session")
     def investment_recording_session(request: Request):

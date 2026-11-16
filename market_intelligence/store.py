@@ -884,28 +884,48 @@ class IntelligenceStore:
         if type(limit) is not int or not 1 <= limit <= 50:
             raise ValueError("Brief limit must be bounded")
         with connection(self.path, expected_id=self.database_id) as handle:
-            if handle.execute("PRAGMA user_version").fetchone()[0] < 4:
-                return ()
-            rows = handle.execute(f"SELECT {bounded_column('brief_id',128)},{bounded_column('reservation_id',128)},{bounded_column('payload',MAX_PAYLOAD)},{bounded_column('payload_hash',64)} FROM analysis_briefs ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
-            results=[]
-            for row in rows:
-                brief=decode(AnalysisBrief,row[2],row[3])
-                if brief.brief_id!=row[0] or brief.reservation_id!=row[1]:
-                    raise StoreError("storage_invalid")
-                reservation=handle.execute(f"SELECT accepted,{bounded_column('payload',32768)},{bounded_column('payload_hash',64)},{bounded_column('observed_at',32)} FROM analysis_reservations WHERE reservation_id=?",(brief.reservation_id,)).fetchone()
-                if not reservation or reservation[0]!=1 or not isinstance(reservation[1],str) or digest(reservation[1])!=reservation[2]:
-                    raise StoreError("storage_invalid")
-                context=json.loads(reservation[1])
-                if any(context[name]!=getattr(brief,name) for name in ("settings_revision","model","cluster_id","input_hash","prompt_version")) or context["profile"]!=brief.provider or parse_time(reservation[3])>brief.available_at:
-                    raise StoreError("storage_invalid")
-                archive=self._news(handle,context["acquisition_id"])
-                if archive is None or analysis_input(archive,brief.cluster_id)[2]!=brief.input_hash:
-                    raise StoreError("storage_invalid")
-                evidence={item.evidence_id:item for item in archive.batch.items}
-                for claim in brief.claims:
-                    for reference in claim.evidence_ids:
-                        item=evidence.get(reference)
-                        if item is None or not (claim.text in item.title or claim.text in item.snippet):
-                            raise StoreError("storage_invalid")
-                results.append(brief)
-            return tuple(results)
+            return tuple(record[0] for record in self._brief_records(handle, limit))
+
+    def _brief_records(self, handle, limit):
+        if handle.execute("PRAGMA user_version").fetchone()[0] < 4:
+            return ()
+        rows = handle.execute(f"SELECT {bounded_column('brief_id',128)},{bounded_column('reservation_id',128)},{bounded_column('payload',MAX_PAYLOAD)},{bounded_column('payload_hash',64)} FROM analysis_briefs ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
+        results=[]
+        for row in rows:
+            brief=decode(AnalysisBrief,row[2],row[3])
+            if brief.brief_id!=row[0] or brief.reservation_id!=row[1]:
+                raise StoreError("storage_invalid")
+            reservation=handle.execute(f"SELECT accepted,{bounded_column('payload',32768)},{bounded_column('payload_hash',64)},{bounded_column('observed_at',32)} FROM analysis_reservations WHERE reservation_id=?",(brief.reservation_id,)).fetchone()
+            if not reservation or reservation[0]!=1 or not isinstance(reservation[1],str) or digest(reservation[1])!=reservation[2]:
+                raise StoreError("storage_invalid")
+            context=json.loads(reservation[1])
+            if any(context[name]!=getattr(brief,name) for name in ("settings_revision","model","cluster_id","input_hash","prompt_version")) or context["profile"]!=brief.provider or parse_time(reservation[3])>brief.available_at:
+                raise StoreError("storage_invalid")
+            archive=self._news(handle,context["acquisition_id"])
+            if archive is None or analysis_input(archive,brief.cluster_id)[2]!=brief.input_hash:
+                raise StoreError("storage_invalid")
+            evidence={item.evidence_id:item for item in archive.batch.items}
+            cited={}
+            for claim in brief.claims:
+                for reference in claim.evidence_ids:
+                    item=evidence.get(reference)
+                    if item is None or not (claim.text in item.title or claim.text in item.snippet):
+                        raise StoreError("storage_invalid")
+                    cited[reference]=item
+            results.append((brief, tuple(cited.values()), context["source_attempt_id"]))
+        return tuple(results)
+
+    def portfolio_evidence(self):
+        """One read-only snapshot of public evidence; accepts no portfolio inputs."""
+        with connection(self.path, expected_id=self.database_id) as handle:
+            settings, observed_at = self._settings(handle)
+            row = None
+            if handle.execute("PRAGMA user_version").fetchone()[0] >= 3:
+                row = handle.execute(f"SELECT {bounded_column('attempt_id',128)} FROM news_observations "
+                                     "WHERE source='fed_monetary' ORDER BY revision DESC LIMIT 1").fetchone()
+            return {
+                "database_id": self.database_id, "settings": settings, "settings_at": observed_at,
+                "calendar": self._calendar(handle),
+                "news_status": self._news_observation(handle, row[0]) if row else None,
+                "briefs": self._brief_records(handle, 20),
+            }

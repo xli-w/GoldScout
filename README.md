@@ -81,7 +81,10 @@ Economic-calendar and AI news context is available through the separate
 are explicitly enabled by the operator; front-end analysis controls never place
 orders or alter risk settings. The initial release supports advisory/shadow use only.
 Reuse its source provenance, calendars, briefs and bounded provider infrastructure
-for future portfolio awareness, not as an unrestricted LLM-to-order connection.
+for [opt-in local portfolio awareness](docs/portfolio-automation.md), not as an
+unrestricted LLM-to-order connection. Explicit exposure mappings now support
+calendar alerts, dated briefs and review reminders without sending account data
+to AI. Sync remains provider discovery; no account provider is selected or connected.
 See the [portfolio-manager decision](docs/decisions/0004-core-dynamic-portfolio-manager.md)
 for the agreed direction and unchanged operational boundaries.
 

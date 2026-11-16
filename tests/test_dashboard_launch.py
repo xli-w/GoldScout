@@ -51,8 +51,11 @@ class DashboardLaunchTests(unittest.TestCase):
         investment_schema.write_text("{}")
         opening_schema = investment_schema.with_name("response-v2.schema.json")
         opening_schema.write_text("{}")
+        awareness_schema = investment_schema.with_name("awareness.schema.json")
+        awareness_schema.write_text("{}")
         self.manifest["investment_schema_sha256"] = self.digest(investment_schema)
         self.manifest["investment_v2_schema_sha256"] = self.digest(opening_schema)
+        self.manifest["awareness_schema_sha256"] = self.digest(awareness_schema)
         self.save_manifest()
         with patch("dashboard.assets.__file__", str(production_schema.with_name("assets.py"))):
             self.assertEqual(verify_frontend(self.static), self.static)
@@ -61,6 +64,10 @@ class DashboardLaunchTests(unittest.TestCase):
                 verify_frontend(self.static)
             investment_schema.write_text("{}")
             opening_schema.write_text('{"changed":true}')
+            with self.assertRaises(FrontendBuildError):
+                verify_frontend(self.static)
+            opening_schema.write_text("{}")
+            awareness_schema.write_text('{"changed":true}')
             with self.assertRaises(FrontendBuildError):
                 verify_frontend(self.static)
 
@@ -136,7 +143,7 @@ class DashboardLaunchTests(unittest.TestCase):
                                         static_directory=None, serve_frontend=False,
                                         intelligence_database=None, intelligence_demo=False,
                                         analysis_password=None, analysis_profiles=(), investment_database=None,
-                                        investment_recording_password=None)
+                                        investment_recording_password=None, awareness_profile=None)
         server.assert_called_once_with("synthetic-app", host="127.0.0.1", port=8766, proxy_headers=False, access_log=False)
 
     def test_invalid_modes_and_ports_fail_before_runtime_imports(self):

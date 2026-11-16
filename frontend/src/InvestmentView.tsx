@@ -6,6 +6,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import validate from "./investment-validator.js";
 import validateV2 from "./investment-validator-v2.js";
 import { label, timestamp } from "./api";
+import { PortfolioAwareness } from "./PortfolioAwareness";
 
 export type InvestmentSnapshot = {
   schema_version: 1; source_mode: "demo" | "recorded"; portfolio_id: string;
@@ -547,6 +548,7 @@ export function InvestmentView() {
             <div><span>Net contributions</span><strong>{pounds(data.net_contributions_gbp)}</strong><small>Deposits are not profit</small></div>
             <div><span>{data.schema_version === 2 ? "Gain since baseline" : "Investment gain"}</span><strong>{pounds(data.schema_version === 2 ? data.since_baseline_gain_gbp : data.gain_gbp)}</strong><small>Net of recorded fees</small></div>
           </section>
+          <PortfolioAwareness portfolioId={data.portfolio_id} revision={data.revision} />
           {data.schema_version === 2 && <section className="history-group" aria-label="Management role accounting">
             <h2>Management roles</h2>
             <p className="position-note">Roles are operator-attributed independently of account and asset class. Unassigned funds are not assumed to be core or dynamic. Role-to-role transfers and proposals are unavailable.</p>

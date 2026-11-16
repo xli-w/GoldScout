@@ -672,16 +672,22 @@ was accessed and no return comparison ran.
 
 ### Read-only synchronisation discovery
 
-[Trading 212's API key guidance](https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key)
-describes selectable permissions including read-only account-data access. Its
-[public API](https://docs.trading212.com/api) remains beta, supports Invest
-and Stocks ISA accounts, and reports account/position data in the primary
-account currency. This is a potential provider-enforced read-only route, not
-confirmation of the investor's account, exact endpoint scopes, historical
-completeness or current live behaviour. No provider has been chosen and no
-account or credentials have been accessed. Alpaca's genuinely read-only
-personal-account credential scope remains unverified; do not infer its absence
-or claim read-only protection solely because a client sends GET requests.
+The [automation guide](portfolio-automation.md#read-only-sync-provider-discovery)
+compares Trading 212, IBKR Flex, bank aggregation and operator records. It
+recommends a conditional combination based on existing accounts, not a platform
+migration or a claim that one provider covers everything. Discovery has verified
+public documentation only, not a credential's actual permissions. No provider
+has been selected or connected. Future sync stages observations/discrepancies;
+it must never automatically rewrite the accounting journal.
+
+### Local portfolio awareness
+
+[Portfolio awareness](portfolio-automation.md) implements explicit local
+exposure-to-source mappings, existing source-dated research briefs and configurable
+review reminders through CLI and the local dashboard. It starts no collector,
+calls no model or broker, and has no trading/accounting authority. Existing
+US-focused source coverage and AI launch gates are unchanged. Calendar absence,
+unknown coverage, stale briefs and unmapped exposures remain explicit.
 
 ## Explicit follow-on gates
 
@@ -700,8 +706,10 @@ following remain unsupported/unverified:
 - Licensed historical portfolio comparisons and the optional active challenger.
 - Core/dynamic risk/transfer budgets, matched
   all-core attribution and revocable standing-policy execution.
-- Automated portfolio-specific briefs, thesis/watch workflows, UK/global
-  calendar coverage and prospectively admitted intelligence-derived features.
+- New brief-generation workflows beyond the existing public-evidence pipeline,
+  thesis/watch persistence, UK/global calendar coverage and prospectively
+  admitted intelligence-derived trading features. Local matching/reminders are
+  implemented separately and confer no approval.
 
 ### Continuation order
 

@@ -21,6 +21,8 @@ def main(argv=None):
     parser.add_argument("--analysis-profiles",nargs="*",default=[],help="Registered nonsecret AI profile names")
     parser.add_argument("--investment-recording", action="store_true",
                         help="Enable authenticated manual edits to the selected v2 investment store")
+    parser.add_argument("--awareness-profile", type=Path,
+                        help="Operator-owned local exposure/reminder JSON; requires both investment and intelligence stores")
     args = parser.parse_args(argv)
     if args.intelligence_demo and (not args.demo or args.intelligence_database):
         parser.error("--intelligence-demo requires --demo without an intelligence database")
@@ -28,6 +30,8 @@ def main(argv=None):
         parser.error("--analysis-controls requires an existing intelligence database")
     if args.investment_recording and args.investment_database is None:
         parser.error("--investment-recording requires --investment-database")
+    if args.awareness_profile is not None and (args.investment_database is None or args.intelligence_database is None):
+        parser.error("--awareness-profile requires --investment-database and --intelligence-database")
     if not 1024 <= args.port <= 65535:
         parser.error("Port must be between 1024 and 65535")
     if args.database is None and args.telemetry is not None:
@@ -53,7 +57,8 @@ def main(argv=None):
                          analysis_profiles=tuple(args.analysis_profiles), investment_database=args.investment_database,
                          investment_recording_password=getpass.getpass(
                              "Local investment-recording password (12+ characters): ")
-                         if args.investment_recording else None)
+                         if args.investment_recording else None,
+                         awareness_profile=args.awareness_profile)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
     except ValueError as exc:
