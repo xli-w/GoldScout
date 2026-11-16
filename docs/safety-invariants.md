@@ -70,6 +70,18 @@ These are development contracts, not a certification of live readiness. Current 
 - V2 savings-terms updates are append-only display facts for included deposit
   accounts. Preserve observed/available clocks; they never accrue interest or
   change cash, valuation, performance, or product eligibility.
+- V2 valuation history is replay-derived and records one point after each
+  relevant same-clock event group. Preserve source availability; late or
+  incomplete clocks are explicit gaps, never zero-filled or interpolated.
+  Cash observations and savings-term updates do not create valuation points,
+  and cash observations cannot refresh valuation.
+- V2 preserves same-clock journal order but refuses ambiguous performance
+  sequencing: required marks precede same-clock external flows, and the first
+  complete baseline precedes same-clock interest or dividends. Never infer
+  this ordering from equal timestamps.
+- An external flow after the baseline without a complete contemporaneous
+  valuation invalidates linked TWR/drawdown; later marks cannot reconstruct
+  the missing flow-time value.
 - Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
 - Time-weighted unitization is flow-neutral and remains linked across complete withdrawals and later refunding. A zero-equity interval does not erase prior unit price/history or manufacture a drawdown from new capital.
 - External-deposit cash is part of recorded mandate value only when included by policy; it is never broker buying power. Scheduled contributions are not settled cash. Transfers between included accounts do not count as external investment performance flows.

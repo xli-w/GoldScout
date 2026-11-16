@@ -187,6 +187,21 @@ interest, deposits, withdrawals, fills and marks still require explicit supporte
 events; a mismatching balance is not automatically corrected or labelled as
 interest. The v2 report remains an offline manual record, not a verified bank
 statement, broker buying power or proof of investability.
+
+V2 also exposes a bounded `valuation_history` derived during journal replay.
+It contains one point for each relevant event clock after all same-clock
+evidence has been applied. Each point retains its source-availability clock;
+late evidence or an incomplete valuation is an explicit gap with no value or
+return. No values are interpolated between observations. Savings-term updates
+and cash observations do not create valuation points, and cash observations
+never refresh valuation. The dashboard charts at most the latest 500 points
+and lists the latest 20; the report retains up to 10,000 points. This history
+is evidence for recorded growth attribution, not proof of provider balances,
+product performance, suitability or future returns.
+After a baseline exists, an external flow without a complete contemporaneous
+valuation invalidates the linked TWR/drawdown series; later marks do not
+reconstruct the missing flow-time value.
+
 Readers verify every stored commit's replay hash for both versions; these
 unkeyed hashes detect inconsistencies, not malicious tampering by a party who
 can rewrite the entire database.
@@ -201,6 +216,15 @@ investigation; a later matching observation does not resolve or hide an earlier
 difference. No automatic repair or resolution workflow is implemented. Late
 evidence does not refresh an earlier complete valuation, and a later
 observation does not stand in for fresh holding marks.
+
+V2 preserves journal order for events sharing an effective timestamp. For
+unambiguous performance measurement, record the required existing-holding
+marks before same-clock contributions or withdrawals, and establish the first
+complete valuation before recording same-clock interest or dividends. An
+import that would make these clocks ambiguous is refused rather than assigning
+a return by guesswork. Because journal events are append-only, a flow already
+committed before its required same-clock marks cannot be reordered; record a
+later complete valuation instead.
 For example:
 
 ```json

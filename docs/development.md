@@ -24,6 +24,10 @@ these facts do not accrue interest or affect valuations. V2 has no policy or
 proposal export. V1 stores remain separate and are not automatically migrated.
 V2 performance begins only at an evidenced complete common-clock baseline, not
 an invented pre-inception transaction or return.
+The v2 report also retains bounded replay-derived valuation history: same-clock
+events are grouped, source availability is explicit, and incomplete clocks are
+gaps rather than zeroes or interpolated values. The dashboard limits the chart
+to recent points while retaining the bounded report history.
 
 The [current mandate](investment-research-context.md) is a substantial-capital
 core-plus-dynamic portfolio manager, excluding household cash/emergency budgeting.

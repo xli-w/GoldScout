@@ -37,6 +37,9 @@ accounting and explicit research/broker blockers.
   Cash observations preserve discrepancies without changing balances, and
   evidence-dated savings-term updates change only the displayed terms; neither
   action accrues interest or refreshes portfolio valuation.
+- V2 growth history is derived only from recorded event clocks. Late or
+  incomplete valuations remain visible as gaps; the dashboard does not
+  interpolate between observations.
 - Full FX, corporate-action entitlement/accrual, money-weighted/inflation returns,
   licensed historical comparisons and human-approved broker execution remain
   gated follow-ons. A valid import is not proof of investment suitability.

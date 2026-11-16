@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "twr_pct", "max_drawdown_pct", "accounts", "holdings", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "twr_pct", "max_drawdown_pct", "accounts", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -33,6 +33,10 @@
           "cash_observation": {"anyOf": [{"$ref": "#/$defs/cashObservation"}, {"type": "null"}]}
         }
       }
+    },
+    "valuation_history": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/valuationHistoryPoint"}
     },
     "holdings": {
       "type": "array", "maxItems": 5000,
@@ -102,6 +106,48 @@
         "source": {"$ref": "#/$defs/text"},
         "evidence": {"$ref": "#/$defs/text"}
       }
+    },
+    "valuationHistoryPoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["timestamp", "source_available_at", "as_of", "complete", "equity_gbp", "capital_basis_gbp", "net_contributions_gbp", "gain_since_baseline_gbp", "twr_pct", "max_drawdown_pct", "gap_reason"],
+      "properties": {
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "source_available_at": {"$ref": "#/$defs/utc"},
+        "as_of": {"$ref": "#/$defs/nullableUtc"},
+        "complete": {"type": "boolean"},
+        "equity_gbp": {"$ref": "#/$defs/nullableDecimal"},
+        "capital_basis_gbp": {"$ref": "#/$defs/nullableDecimal"},
+        "net_contributions_gbp": {"$ref": "#/$defs/nullableDecimal"},
+        "gain_since_baseline_gbp": {"$ref": "#/$defs/nullableDecimal"},
+        "twr_pct": {"$ref": "#/$defs/nullableDecimal"},
+        "max_drawdown_pct": {"$ref": "#/$defs/nullableDecimal"},
+        "gap_reason": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"complete": {"const": true}}},
+          "then": {
+            "properties": {
+              "as_of": {"$ref": "#/$defs/utc"},
+              "equity_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+              "capital_basis_gbp": {"$ref": "#/$defs/decimal"},
+              "net_contributions_gbp": {"$ref": "#/$defs/decimal"},
+              "gap_reason": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "as_of": {"type": "null"},
+              "equity_gbp": {"type": "null"},
+              "capital_basis_gbp": {"type": "null"},
+              "gain_since_baseline_gbp": {"type": "null"},
+              "twr_pct": {"type": "null"},
+              "max_drawdown_pct": {"type": "null"},
+              "gap_reason": {"$ref": "#/$defs/text"}
+            }
+          }
+        }
+      ]
     },
     "decimal": {"type": "string", "maxLength": 240, "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"},
     "nonnegativeDecimal": {"type": "string", "maxLength": 240, "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"},

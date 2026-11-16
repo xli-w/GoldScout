@@ -145,6 +145,7 @@ def opening_report(ledger, now, source_mode="recorded"):
                           "terms": ledger.account_terms[a["id"]],
                           "cash_observation": ledger.cash_observations.get(a["id"])}
                          for a in ledger.spec["accounts"]],
+            "valuation_history": ledger.valuation_history,
             "holdings": holdings,
             "proposal": {"status": "blocked", "reason": "Allocation and role policy are not implemented",
                          "expires_at": None, "orders": [], "manual_transfers": [],

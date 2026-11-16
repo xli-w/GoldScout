@@ -110,8 +110,54 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(result["lifetime_gain_gbp"], None)
         self.assertEqual(result["baseline_as_of"], iso(NOW))
         self.assertEqual(result["proposal"]["status"], "blocked")
+        self.assertEqual(result["valuation_history"], [{
+            "timestamp": iso(NOW), "source_available_at": iso(NOW), "as_of": iso(NOW),
+            "complete": True, "equity_gbp": "2000", "capital_basis_gbp": "2000",
+            "net_contributions_gbp": "0", "gain_since_baseline_gbp": "0",
+            "twr_pct": "0", "max_drawdown_pct": "0", "gap_reason": None,
+        }])
         self.assertFalse(result["proposal"]["execution_enabled"])
         self.assertEqual(read(self.database, NOW).cash["bank"], 1000)
+
+    def test_growth_history_separates_recorded_capital_from_gain_and_preserves_gaps(self):
+        initialize(self.database, profile(), NOW)
+        initial = opening()
+        initial["holdings"][0]["price_gbp"] = None
+        import_events(self.database, [initial], NOW)
+        first = snapshot(self.database, NOW)["valuation_history"][0]
+        self.assertFalse(first["complete"])
+        self.assertIsNone(first["equity_gbp"])
+        self.assertEqual(first["gap_reason"],
+                         "A complete contemporaneous valuation is unavailable.")
+
+        baseline_at = NOW + timedelta(days=1)
+        import_events(self.database, [
+            event("baseline-equity", "mark", baseline_at, "broker",
+                  product_id="equity", price_gbp="10"),
+            event("baseline-bond", "mark", baseline_at, "broker",
+                  product_id="bond", price_gbp="20"),
+        ], baseline_at)
+        growth_at = NOW + timedelta(days=2)
+        import_events(self.database, [
+            event("growth-equity", "mark", growth_at, "broker",
+                  product_id="equity", price_gbp="11"),
+            event("growth-bond", "mark", growth_at, "broker",
+                  product_id="bond", price_gbp="20"),
+            event("growth-contribution", "contribution", growth_at,
+                  "bank", amount_gbp="100"),
+        ], growth_at)
+
+        history = snapshot(self.database, growth_at)["valuation_history"]
+        self.assertEqual(len(history), 3)
+        self.assertFalse(history[0]["complete"])
+        self.assertEqual(history[1]["equity_gbp"], "2000")
+        self.assertEqual(history[1]["gain_since_baseline_gbp"], "0")
+        self.assertEqual(history[2]["equity_gbp"], "2150")
+        self.assertEqual(history[2]["capital_basis_gbp"], "2100")
+        self.assertEqual(history[2]["net_contributions_gbp"], "100")
+        self.assertEqual(history[2]["gain_since_baseline_gbp"], "50")
+        self.assertEqual(history[2]["twr_pct"], "2.5")
+        self.assertEqual(history[2]["source_available_at"], iso(growth_at))
 
     def test_complete_since_baseline_return_excludes_new_contribution(self):
         initialize(self.database, profile(), NOW)
@@ -174,6 +220,62 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(result["baseline_as_of"], iso(later))
         self.assertEqual(result["since_baseline_gain_gbp"], "100")
         self.assertEqual(result["twr_pct"], "5")
+
+    def test_same_clock_income_before_baseline_mark_is_refused(self):
+        initialize(self.database, profile(), NOW)
+        initial = opening()
+        for holding in initial["holdings"]:
+            holding["price_gbp"] = None
+        import_events(self.database, [initial], NOW)
+        later = NOW + timedelta(days=1)
+        with self.assertRaisesRegex(InvestmentError, "income must follow"):
+            import_events(self.database, [
+                event("interest-first", "interest", later, "bank", amount_gbp="100"),
+                event("equity-mark", "mark", later, "broker",
+                      product_id="equity", price_gbp="10"),
+                event("bond-mark", "mark", later, "broker",
+                      product_id="bond", price_gbp="20"),
+            ], later)
+        self.assertEqual(read(self.database, later).revision, 1)
+
+    def test_same_clock_flow_before_required_marks_is_refused(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        later = NOW + timedelta(days=1)
+        with self.assertRaisesRegex(InvestmentError, "marks for existing holdings"):
+            import_events(self.database, [
+                event("deposit-first", "contribution", later,
+                      "bank", amount_gbp="100"),
+                event("equity-mark", "mark", later, "broker",
+                      product_id="equity", price_gbp="11"),
+                event("bond-mark", "mark", later, "broker",
+                      product_id="bond", price_gbp="20"),
+            ], later)
+        result = snapshot(self.database, later)
+        self.assertEqual(result["revision"], 1)
+        self.assertEqual(result["net_contributions_gbp"], "0")
+        self.assertEqual(result["baseline_as_of"], iso(NOW))
+
+    def test_unpriced_post_baseline_flow_keeps_performance_unavailable(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        later = NOW + timedelta(days=1)
+        import_events(self.database, [
+            event("unpriced-flow", "contribution", later,
+                  "bank", amount_gbp="100"),
+        ], later)
+        complete_at = NOW + timedelta(days=2)
+        import_events(self.database, [
+            event("equity-mark", "mark", complete_at, "broker",
+                  product_id="equity", price_gbp="11"),
+            event("bond-mark", "mark", complete_at, "broker",
+                  product_id="bond", price_gbp="20"),
+        ], complete_at)
+        result = snapshot(self.database, complete_at)
+        self.assertTrue(result["complete"])
+        self.assertIsNotNone(result["since_baseline_gain_gbp"])
+        self.assertIsNone(result["twr_pct"])
+        self.assertIsNone(result["max_drawdown_pct"])
 
     def test_late_mark_requires_a_new_contemporaneous_baseline(self):
         initialize(self.database, profile(), NOW)

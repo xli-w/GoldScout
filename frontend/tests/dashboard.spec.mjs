@@ -66,6 +66,16 @@ test("opening records show since-baseline value without inventing lifetime gain"
     generated_at: at, as_of: at, baseline_as_of: at, currency: "GBP", complete: true,
     equity_gbp: "2000", net_contributions_gbp: "0", since_baseline_gain_gbp: "0",
     lifetime_gain_gbp: null, twr_pct: "0", max_drawdown_pct: "0",
+    valuation_history: [
+      { timestamp: at, source_available_at: at, as_of: at, complete: true,
+        equity_gbp: "2000", capital_basis_gbp: "2000", net_contributions_gbp: "0",
+        gain_since_baseline_gbp: "0", twr_pct: "0", max_drawdown_pct: "0",
+        gap_reason: null },
+      { timestamp: "2026-01-02T12:00:00Z", source_available_at: "2026-01-02T12:00:00Z",
+        as_of: null, complete: false, equity_gbp: null, capital_basis_gbp: null,
+        net_contributions_gbp: null, gain_since_baseline_gbp: null, twr_pct: null,
+        max_drawdown_pct: null, gap_reason: "Incomplete synthetic valuation." },
+    ],
     accounts: [{ id: "bank", name: "Savings", kind: "deposit", cash_gbp: "1000",
       cash_observation: { balance_gbp: "999", difference_gbp: "-1", timestamp: at,
         available_at: at, source: "synthetic statement", evidence: "synthetic evidence" },
@@ -82,9 +92,13 @@ test("opening records show since-baseline value without inventing lifetime gain"
   };
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
-  await expect(page.getByText("Gain since baseline")).toBeVisible();
+  const totals = page.getByRole("region", { name: "Investment totals" });
+  await expect(totals.getByText("Gain since baseline")).toBeVisible();
   await expect(page.getByText(/Lifetime gain and prior cost basis are unavailable/)).toBeVisible();
-  await expect(page.getByText("£2,000.00")).toBeVisible();
+  await expect(totals.getByText("£2,000.00")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recorded growth history" })).toBeVisible();
+  await expect(page.getByText("Gap: Incomplete synthetic valuation.")).toBeVisible();
+  await expect(page.getByText("Only recorded valuation event clocks are shown. Lines connect observations; no intermediate values are inferred. Incomplete clocks remain gaps.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Reported savings-account terms" })).toBeVisible();
   await expect(page.getByText(/4.25% AER/)).toBeVisible();
   await expect(page.getByText(/not current provider verification or an interest-accrual input/)).toBeVisible();

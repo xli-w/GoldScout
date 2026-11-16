@@ -23,6 +23,12 @@ export type InvestmentSnapshot = {
 type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | "allocation" | "holdings" | "accounts"> & {
   schema_version: 2; baseline_as_of: string | null; since_baseline_gain_gbp: string | null;
   lifetime_gain_gbp: null;
+  valuation_history: {
+    timestamp: string; source_available_at: string; as_of: string | null; complete: boolean;
+    equity_gbp: string | null; capital_basis_gbp: string | null;
+    net_contributions_gbp: string | null; gain_since_baseline_gbp: string | null;
+    twr_pct: string | null; max_drawdown_pct: string | null; gap_reason: string | null;
+  }[];
   accounts: { id: string; name: string; kind: "broker" | "deposit"; cash_gbp: string | null;
     cash_observation: { balance_gbp: string; difference_gbp: string; timestamp: string;
       available_at: string; source: string; evidence: string } | null;
@@ -57,6 +63,108 @@ function pounds(value: string | null) {
 }
 function percent(value: string | null) { return value === null ? "Unavailable" : `${new Decimal(value).toFixed(2)}%`; }
 
+function InvestmentGrowthHistory({ history }: { history: OpeningSnapshot["valuation_history"] }) {
+  const chartHistory = history.slice(-500);
+  const chartKnown = chartHistory.filter(point =>
+    point.complete && point.equity_gbp !== null && point.capital_basis_gbp !== null);
+  const values = chartKnown.flatMap(point =>
+    [new Decimal(point.equity_gbp!), new Decimal(point.capital_basis_gbp!)]);
+  const low = values.length
+    ? values.slice(1).reduce((value, candidate) => Decimal.min(value, candidate), values[0])
+    : new Decimal(0);
+  const high = values.length
+    ? values.slice(1).reduce((value, candidate) => Decimal.max(value, candidate), values[0])
+    : new Decimal(0);
+  const spread = high.minus(low);
+  const padding = spread.isZero() ? Decimal.max(high.abs().mul("0.05"), new Decimal(1)) : spread.mul("0.1");
+  const minimum = low.minus(padding), maximum = high.plus(padding);
+  const range = maximum.minus(minimum);
+  const firstTime = chartHistory.length ? Date.parse(chartHistory[0].timestamp) : 0;
+  const lastTime = chartHistory.length ? Date.parse(chartHistory[chartHistory.length - 1].timestamp) : firstTime;
+  const timeRange = Math.max(lastTime - firstTime, 1);
+  const left = 72, right = 780, top = 20, bottom = 220;
+  const x = (point: OpeningSnapshot["valuation_history"][number]) =>
+    left + (Date.parse(point.timestamp) - firstTime) / timeRange * (right - left);
+  const y = (value: string) =>
+    top + new Decimal(maximum.minus(value)).div(range).toNumber() * (bottom - top);
+  const lineSegments = (field: "equity_gbp" | "capital_basis_gbp") => {
+    const segments: string[][] = [];
+    let segment: string[] = [];
+    for (const point of chartHistory) {
+      const value = point.complete ? point[field] : null;
+      if (value === null) {
+        if (segment.length) segments.push(segment);
+        segment = [];
+      } else {
+        segment.push(`${x(point)},${y(value)}`);
+      }
+    }
+    if (segment.length) segments.push(segment);
+    return segments;
+  };
+  const latest = [...history].reverse().slice(0, 20);
+  const dateLabel = (value: string) => new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium", timeZone: "UTC",
+  }).format(Date.parse(value));
+
+  return <section className="history-group">
+    <h2>Recorded growth history</h2>
+    <p className="position-note">Only recorded valuation event clocks are shown. Lines connect observations; no intermediate values are inferred. Incomplete clocks remain gaps.</p>
+    {history.length === 0
+      ? <p>No valuation-relevant events are recorded yet.</p>
+      : <>
+        {chartKnown.length > 0 ? <figure className="history-chart">
+          <figcaption>Recorded value and baseline capital <span>{chartKnown.length} complete of {chartHistory.length} recent event clocks</span></figcaption>
+          <svg viewBox="0 0 800 260" role="img" aria-label="Recorded portfolio value and baseline capital; incomplete valuation clocks are gaps">
+            {[0, 1, 2, 3].map(index => {
+              const value = maximum.minus(range.mul(index).div(3));
+              const yAt = top + index / 3 * (bottom - top);
+              return <g key={index}>
+                <line x1={left} x2={right} y1={yAt} y2={yAt} className="chart-baseline" />
+                <text x={left - 8} y={yAt + 4} textAnchor="end" className="chart-label">{pounds(value.toFixed(2))}</text>
+              </g>;
+            })}
+            {lineSegments("equity_gbp").map((segment, index) =>
+              segment.length > 1 && <polyline key={`equity-${index}`} points={segment.join(" ")}
+                fill="none" stroke="#21745f" strokeWidth="2" />)}
+            {lineSegments("capital_basis_gbp").map((segment, index) =>
+              segment.length > 1 && <polyline key={`basis-${index}`} points={segment.join(" ")}
+                fill="none" stroke="#69777c" strokeWidth="2" strokeDasharray="5 4" />)}
+            {chartKnown.map(point => <g key={point.timestamp}>
+              <circle cx={x(point)} cy={y(point.equity_gbp!)} r="3" fill="#21745f">
+                <title>{`${dateLabel(point.timestamp)} · Value ${pounds(point.equity_gbp)}`}</title>
+              </circle>
+              <circle cx={x(point)} cy={y(point.capital_basis_gbp!)} r="2.5" fill="#69777c">
+                <title>{`${dateLabel(point.timestamp)} · Baseline capital ${pounds(point.capital_basis_gbp)}`}</title>
+              </circle>
+            </g>)}
+            {chartHistory.filter(point => !point.complete).map(point =>
+              <g key={point.timestamp}>
+                <line x1={x(point)} x2={x(point)} y1={top} y2={bottom}
+                  stroke="#a63747" strokeDasharray="3 4" />
+                <title>{`${dateLabel(point.timestamp)} · ${point.gap_reason}`}</title>
+              </g>)}
+            <text x={left} y="246" className="chart-label">{dateLabel(chartHistory[0].timestamp)}</text>
+            <text x={right} y="246" textAnchor="end" className="chart-label">{dateLabel(chartHistory[chartHistory.length - 1].timestamp)}</text>
+          </svg>
+          <div className="investment-chart-legend"><span><i className="investment-legend-value" />Recorded value</span><span><i className="investment-legend-capital" />Baseline capital</span><span><i className="investment-legend-gap" />Incomplete clock</span></div>
+        </figure> : <p>No complete contemporaneous valuation is available in the recent history.</p>}
+        <p className="position-note">The chart shows the latest {chartHistory.length} of {history.length} event clocks; the table shows the latest {latest.length}. Source-availability times and gaps are retained.</p>
+        <div className="table-scroll" tabIndex={0} aria-label="Recorded growth history">
+          <table>
+            <thead><tr><th>Event clock (UTC)</th><th>Status and gap reason</th><th>Available at</th><th>Value</th><th>Capital basis</th><th>Gain since baseline</th><th>TWR</th></tr></thead>
+            <tbody>{latest.map(point => <tr key={point.timestamp}>
+              <td>{timestamp(point.timestamp)}</td><td>{point.complete ? "Complete" : `Gap: ${point.gap_reason}`}</td>
+              <td>{timestamp(point.source_available_at)}</td><td>{pounds(point.equity_gbp)}</td>
+              <td>{pounds(point.capital_basis_gbp)}</td><td>{pounds(point.gain_since_baseline_gbp)}</td>
+              <td>{percent(point.twr_pct)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      </>}
+  </section>;
+}
+
 export function InvestmentView() {
   const query = useQuery({ queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal), refetchInterval: 60000 });
   const data = query.isError ? undefined : query.data;
@@ -83,6 +191,7 @@ export function InvestmentView() {
             <div><dt>Time-weighted return</dt><dd>{percent(data.twr_pct)}</dd></div>
             <div><dt>Flow-neutral maximum drawdown</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>
           </dl>
+          {data.schema_version === 2 && <InvestmentGrowthHistory history={data.valuation_history} />}
           {data.schema_version === 1 && <section className="history-group">
             <h2>Allocation and drift</h2>
             <div className="table-scroll" tabIndex={0} aria-label="Investment allocation" aria-describedby="table-scroll-instructions"><table>

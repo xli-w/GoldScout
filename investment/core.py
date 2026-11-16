@@ -339,6 +339,7 @@ class Ledger:
             self.baseline_at = None
             self.baseline_value = None
             self.baseline_net = None
+            self.valuation_history = []
 
     def valuation(self, timestamp=None):
         if self.spec["schema_version"] == 2 and not self.opened:
@@ -392,6 +393,47 @@ class Ledger:
             self.performance_valid = False
         else:
             self.observe(total)
+
+    def record_valuation(self, timestamp):
+        if self.spec["schema_version"] != 2:
+            return
+        timestamp = iso(timestamp)
+        if self.valuation_history and self.valuation_history[-1]["timestamp"] == timestamp:
+            return
+        at = clock(timestamp)
+        equity, as_of = self.valuation(at)
+        complete = equity is not None and as_of == at
+        available_at = self.latest_available_at
+        gain = None
+        capital_basis = None
+        twr = None
+        drawdown = None
+        if complete:
+            capital_basis = self.baseline_value + self.net - self.baseline_net
+            gain = equity - capital_basis
+            if self.performance_valid and self.units > 0 and self.baseline_at is not None:
+                twr = (self.unit_price - 1) * 100
+                drawdown = -self.drawdown * 100
+        if available_at > at:
+            gap_reason = "Some valuation evidence became available after this event clock."
+        elif not complete:
+            gap_reason = "A complete contemporaneous valuation is unavailable."
+        else:
+            gap_reason = None
+        self.valuation_history.append({
+            "timestamp": timestamp,
+            "source_available_at": iso(available_at),
+            "as_of": iso(as_of) if complete else None,
+            "complete": complete,
+            "equity_gbp": fmt(equity) if complete else None,
+            "capital_basis_gbp": fmt(capital_basis) if complete else None,
+            "net_contributions_gbp": (
+                fmt(self.net) if available_at <= at else None),
+            "gain_since_baseline_gbp": fmt(gain) if complete else None,
+            "twr_pct": fmt(twr),
+            "max_drawdown_pct": fmt(drawdown),
+            "gap_reason": gap_reason,
+        })
 
     def observe(self, total):
         if total is not None and self.units > 0:
@@ -613,6 +655,10 @@ def replay(spec, events, now=None, on_revision=None):
             if on_revision is not None:
                 on_revision(ledger, None)
             previous = None
+            history_relevant = False
+            group_timestamp = None
+            same_clock_income = False
+            unpriced_flow_holdings = set()
             for value in events:
                 if isinstance(value, dict) and value.get("id") in ledger.ids:
                     event(value, spec, now)
@@ -620,22 +666,55 @@ def replay(spec, events, now=None, on_revision=None):
                         raise InvestmentError("Conflicting duplicate event")
                     continue
                 timestamp = clock(value.get("timestamp")) if isinstance(value, dict) else None
+                if timestamp != group_timestamp:
+                    group_timestamp = timestamp
+                    same_clock_income = False
+                    unpriced_flow_holdings = set()
+                kind = value.get("type") if isinstance(value, dict) else None
                 metadata_only = (isinstance(value, dict) and
-                                 value.get("type") == "savings_terms")
-                if isinstance(value, dict) and value.get("type") == "review_acknowledgement":
+                                 kind == "savings_terms")
+                valuation_event = (not metadata_only and isinstance(value, dict) and
+                                   kind != "cash_observation")
+                if isinstance(value, dict) and kind == "review_acknowledgement":
                     ledger.apply(value, now)
                     if on_revision is not None:
                         on_revision(ledger, previous)
                     continue
                 if previous is not None and timestamp != previous:
                     ledger.checkpoint(previous)
+                    if history_relevant:
+                        ledger.record_valuation(previous)
+                if (spec["schema_version"] == 2 and kind in
+                        ("contribution", "withdrawal")):
+                    total, _ = ledger.valuation(timestamp)
+                    if total is None:
+                        unpriced_flow_holdings.update(
+                            key for key, quantity in ledger.holdings.items() if quantity > 0)
+                baseline_before = ledger.baseline_at if spec["schema_version"] == 2 else None
                 ledger.apply(value, now)
+                if (spec["schema_version"] == 2 and kind == "mark" and
+                        (value["account_id"], value["product_id"]) in unpriced_flow_holdings):
+                    raise InvestmentError(
+                        "Same-clock marks for existing holdings must precede external cash flows")
+                if (spec["schema_version"] == 2 and baseline_before is None and
+                        ledger.baseline_at is not None and same_clock_income):
+                    raise InvestmentError(
+                        "Same-clock income must follow the first complete valuation baseline")
+                if (spec["schema_version"] == 2 and kind in ("interest", "dividend") and
+                        baseline_before is None and ledger.baseline_at is None):
+                    same_clock_income = True
                 if on_revision is not None:
                     on_revision(ledger, previous if metadata_only else timestamp)
                 if not metadata_only:
+                    if timestamp != previous:
+                        history_relevant = valuation_event
+                    elif valuation_event:
+                        history_relevant = True
                     previous = timestamp
             if previous is not None:
                 ledger.checkpoint(previous)
+                if history_relevant:
+                    ledger.record_valuation(previous)
             return ledger
         except (InvalidOperation, OverflowError, TypeError, KeyError) as exc:
             raise InvestmentError("Invalid accounting evidence") from exc
