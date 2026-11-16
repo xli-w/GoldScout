@@ -3,8 +3,11 @@
 ## Long-term investment view
 
 The separate [investment path](investment.md) adds `/investment` and
-`/investment-guide`, showing GBP contributions, recorded valuations, sleeve drift
-and export-only allocation proposals. The legacy USD trading screens below remain
+`/investment-guide`, showing GBP contributions and recorded valuations. V1 adds
+sleeve drift and export-only proposals; v2 shows since-baseline growth, dated
+marks and unavailable lifetime gain, with no allocation policy or freshness
+threshold. It can show evidence-dated savings terms and statement cash
+observations; neither accrues interest nor adjusts recorded balances. The legacy USD trading screens below remain
 available and unchanged in authority. Neither set of account views places orders.
 Review status and acknowledgement are available only in the offline investment
 CLI; the dashboard neither records reviews nor approves trades.
@@ -14,7 +17,7 @@ Use `python -m dashboard --investment-database .\investment.sqlite3` only for an
 explicitly initialised, operator-selected investment store. It is mutually
 exclusive with the legacy `--database` and `--demo` sources; recorded investment
 mode never substitutes synthetic legacy accounts. No store is created or repaired
-by reporting. The frontend build now binds both response schemas.
+by reporting. The frontend build binds the legacy, investment v1 and v2 response schemas.
 
 This is an offline measurement/planning release, not full multi-currency research
 or a human-approved broker integration. See the investment guide's capability

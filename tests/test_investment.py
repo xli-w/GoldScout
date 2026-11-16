@@ -61,6 +61,25 @@ class InvestmentTests(unittest.TestCase):
         initialize(self.database, self.spec, NOW)
         import_events(self.database, demo_events(NOW), NOW)
 
+    def test_v1_store_refuses_forged_intermediate_commit(self):
+        self.init_demo()
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("INSERT INTO commits VALUES (1, ?)", ("invalid",))
+        with self.assertRaisesRegex(InvestmentError, "replay verification"):
+            read(self.database, NOW)
+
+    def test_v2_cash_observation_is_not_a_v1_accounting_event(self):
+        self.init_demo()
+        observation = {
+            "id": "cash-observation", "type": "cash_observation",
+            "timestamp": iso(NOW), "available_at": iso(NOW),
+            "evidence": "synthetic", "source": "synthetic",
+            "account_id": "broker", "balance_gbp": "1000",
+        }
+        with self.assertRaisesRegex(InvestmentError, "version 2"):
+            import_events(self.database, [observation], NOW)
+        self.assertEqual(snapshot(self.database, NOW)["revision"], 4)
+
     def synthetic_bar(self, product_id, session_number, open_price, close_price):
         day = NOW + timedelta(days=session_number)
         open_at = day.replace(hour=9)
@@ -772,14 +791,14 @@ class InvestmentTests(unittest.TestCase):
 
         def fail_late(ledger):
             calls.append(ledger.revision)
-            if len(calls) == 2:
+            if ledger.revision == 5:
                 raise sqlite3.OperationalError("Injected commit record failure")
             return real_digest(ledger)
 
         with patch("investment.store.state_digest", side_effect=fail_late):
             with self.assertRaises(InvestmentError):
                 import_events(self.database, [ev("new", "contribution", amount_gbp="1")], NOW)
-        self.assertEqual(calls, [4, 5])
+        self.assertEqual(calls[-1], 5)
         self.assertEqual(snapshot(self.database, NOW)["revision"], 4)
 
     def test_read_missing_and_init_existing_refused(self):
@@ -1970,6 +1989,11 @@ class InvestmentTests(unittest.TestCase):
             "0467843a04cc39608068bd2b1dd3e100c7b870ba4da7d7e40a4185c002dd3481")
         self.assertEqual(read(self.database, later).revision, 5)
         self.assertEqual(review_status(self.database, later)["last_monthly_review_at"], iso(later))
+        after = later + timedelta(hours=1)
+        import_events(self.database, [
+            ev("after-review", "mark", at=after, product_id="equity", price_gbp="11"),
+        ], after)
+        self.assertEqual(read(self.database, after).revision, 6)
 
     def test_parent_v1_uncommitted_review_is_refused_without_mutation(self):
         self.init_demo()

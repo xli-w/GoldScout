@@ -49,11 +49,18 @@ class DashboardLaunchTests(unittest.TestCase):
         investment_schema = self.root / "investment" / "response.schema.json"
         investment_schema.parent.mkdir()
         investment_schema.write_text("{}")
+        opening_schema = investment_schema.with_name("response-v2.schema.json")
+        opening_schema.write_text("{}")
         self.manifest["investment_schema_sha256"] = self.digest(investment_schema)
+        self.manifest["investment_v2_schema_sha256"] = self.digest(opening_schema)
         self.save_manifest()
         with patch("dashboard.assets.__file__", str(production_schema.with_name("assets.py"))):
             self.assertEqual(verify_frontend(self.static), self.static)
             investment_schema.write_text('{"changed":true}')
+            with self.assertRaises(FrontendBuildError):
+                verify_frontend(self.static)
+            investment_schema.write_text("{}")
+            opening_schema.write_text('{"changed":true}')
             with self.assertRaises(FrontendBuildError):
                 verify_frontend(self.static)
 

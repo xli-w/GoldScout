@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import validate from "./investment-validator.js";
+import validateV2 from "./investment-validator-v2.js";
 import { label, timestamp } from "./api";
 
 export type InvestmentSnapshot = {
@@ -19,12 +20,31 @@ export type InvestmentSnapshot = {
   warnings: string[]; limitations: string[];
 };
 
-async function loadInvestment(signal: AbortSignal): Promise<InvestmentSnapshot> {
+type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | "allocation" | "holdings" | "accounts"> & {
+  schema_version: 2; baseline_as_of: string | null; since_baseline_gain_gbp: string | null;
+  lifetime_gain_gbp: null;
+  accounts: { id: string; name: string; kind: "broker" | "deposit"; cash_gbp: string | null;
+    cash_observation: { balance_gbp: string; difference_gbp: string; timestamp: string;
+      available_at: string; source: string; evidence: string } | null;
+    terms: { annual_rate_pct: string | null; rate_basis: "AER" | "gross" | null;
+      effective_from: string; observed_at: string; available_at: string; source: string;
+      maturity_date: string | null; notice_days: number | null } | null }[];
+  holdings: { account_id: string; product_id: string; name: string; sleeve: "equity" | "bond";
+    quantity: string; value_gbp: string | null; mark_at: string | null; mark_available_at: string | null }[];
+};
+
+async function loadInvestment(signal: AbortSignal): Promise<InvestmentSnapshot | OpeningSnapshot> {
   const response = await fetch("/api/investment/v1/snapshot", {
     signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]), cache: "no-store",
   });
   const body: unknown = await response.json();
   if (!response.ok) throw new Error("Investment records are unavailable. Select a valid investment store or synthetic demo.");
+  if (typeof body !== "object" || body === null || !("schema_version" in body))
+    throw new Error("Investment response failed validation.");
+  if (body.schema_version === 2) {
+    if (!validateV2(body)) throw new Error("Investment response failed validation.");
+    return body as OpeningSnapshot;
+  }
   if (!validate(body)) throw new Error("Investment response failed validation.");
   return body as InvestmentSnapshot;
 }
@@ -56,26 +76,53 @@ export function InvestmentView() {
           <section className="metrics" aria-label="Investment totals">
             <div><span>Portfolio value</span><strong>{pounds(data.equity_gbp)}</strong><small>GBP, recorded valuation</small></div>
             <div><span>Net contributions</span><strong>{pounds(data.net_contributions_gbp)}</strong><small>Deposits are not profit</small></div>
-            <div><span>Investment gain</span><strong>{pounds(data.gain_gbp)}</strong><small>Net of recorded fees</small></div>
+            <div><span>{data.schema_version === 2 ? "Gain since baseline" : "Investment gain"}</span><strong>{pounds(data.schema_version === 2 ? data.since_baseline_gain_gbp : data.gain_gbp)}</strong><small>Net of recorded fees</small></div>
           </section>
+          {data.schema_version === 2 && <p className="position-note">Baseline as of {timestamp(data.baseline_as_of)}. Lifetime gain and prior cost basis are unavailable. No valuation freshness threshold is configured.</p>}
           <dl className="health-facts">
             <div><dt>Time-weighted return</dt><dd>{percent(data.twr_pct)}</dd></div>
             <div><dt>Flow-neutral maximum drawdown</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>
           </dl>
-          <section className="history-group">
+          {data.schema_version === 1 && <section className="history-group">
             <h2>Allocation and drift</h2>
             <div className="table-scroll" tabIndex={0} aria-label="Investment allocation" aria-describedby="table-scroll-instructions"><table>
               <thead><tr><th>Sleeve</th><th>Target</th><th>Recorded</th><th>Drift (percentage points)</th></tr></thead>
               <tbody>{data.allocation.map(row => <tr key={row.sleeve}><td>{label(row.sleeve)}</td><td>{percent(row.target_pct)}</td><td>{percent(row.actual_pct)}</td><td>{row.drift_pp === null ? "Unavailable" : new Decimal(row.drift_pp).toFixed(2)}</td></tr>)}</tbody>
             </table></div>
-          </section>
+          </section>}
           <section className="history-group"><h2>Cash accounts</h2><dl className="health-facts">
             {data.accounts.map(account => <div key={account.id}><dt>{account.name} ({label(account.kind)})</dt><dd>{pounds(account.cash_gbp)}</dd></div>)}
           </dl><p className="position-note">External savings are not broker buying power. Deposit protection and product eligibility require separate evidence.</p></section>
+          {data.schema_version === 2 && data.accounts.some(account => account.cash_observation !== null) &&
+            <section className="history-group"><h2>Observed cash balances</h2>
+              <p className="position-note">Operator-entered evidence, not provider verification. Differences compare with recorded cash at that timestamp; they are not corrections or proof of a later balance.</p>
+              <dl className="health-facts">{data.accounts.filter(account => account.cash_observation !== null).map(account => {
+                const observation = account.cash_observation;
+                if (observation === null) return null;
+                return <div key={account.id}><dt>{account.name} · Observed {timestamp(observation.timestamp)}</dt><dd>
+                  {pounds(observation.balance_gbp)} · Difference (observed minus recorded): {pounds(observation.difference_gbp)}
+                  {` · Available ${timestamp(observation.available_at)} · Source: ${observation.source} · Evidence: ${observation.evidence}`}
+                </dd></div>;
+              })}</dl>
+            </section>}
+          {data.schema_version === 2 && data.accounts.some(account => account.terms !== null) &&
+            <section className="history-group"><h2>Reported savings-account terms</h2>
+              <p className="position-note">Operator-recorded facts, not current provider verification or an interest-accrual input.</p>
+              <dl className="health-facts">{data.accounts.filter(account => account.terms !== null).map(account => {
+                const terms = account.terms;
+                if (terms === null) return null;
+                return <div key={account.id}><dt>{account.name}</dt><dd>
+                  {terms.annual_rate_pct === null ? "Rate unavailable" : `${percent(terms.annual_rate_pct)} ${terms.rate_basis}`}
+                  {` · Effective ${terms.effective_from} · Observed ${timestamp(terms.observed_at)} · Available ${timestamp(terms.available_at)} · Source: ${terms.source}`}
+                  {terms.maturity_date !== null && ` · Maturity ${terms.maturity_date}`}
+                  {terms.notice_days !== null && ` · Notice ${terms.notice_days} days`}
+                </dd></div>;
+              })}</dl>
+            </section>}
           <section className="history-group"><h2>Long-term holdings</h2>
             <div className="table-scroll" tabIndex={0} aria-label="Investment holdings" aria-describedby="table-scroll-instructions"><table>
-              <thead><tr><th>Fund</th><th>Account</th><th>Sleeve</th><th>Quantity</th><th>Value</th></tr></thead>
-              <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}><td>{holding.name}</td><td>{holding.account_id}</td><td>{label(holding.sleeve)}</td><td>{holding.quantity}</td><td>{pounds(holding.value_gbp)}</td></tr>)}</tbody>
+              <thead><tr><th>Fund</th><th>Account</th><th>Sleeve</th><th>Quantity</th><th>Value</th>{data.schema_version === 2 && <><th>Mark as of</th><th>Available at</th></>}</tr></thead>
+              <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}><td>{holding.name}</td><td>{holding.account_id}</td><td>{label(holding.sleeve)}</td><td>{holding.quantity}</td><td>{pounds(holding.value_gbp)}</td>{"mark_at" in holding && <><td>{timestamp(holding.mark_at)}</td><td>{timestamp(holding.mark_available_at)}</td></>}</tr>)}</tbody>
             </table></div>
           </section>
           <section className="history-group"><h2>Allocation proposal: {label(data.proposal.status)}</h2>

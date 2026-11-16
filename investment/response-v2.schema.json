@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Offline investment opening snapshot v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "twr_pct", "max_drawdown_pct", "accounts", "holdings", "proposal", "warnings", "limitations"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "source_mode": {"enum": ["recorded", "demo"]},
+    "portfolio_id": {"$ref": "#/$defs/text"},
+    "revision": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "generated_at": {"$ref": "#/$defs/utc"},
+    "as_of": {"$ref": "#/$defs/nullableUtc"},
+    "baseline_as_of": {"$ref": "#/$defs/nullableUtc"},
+    "currency": {"const": "GBP"},
+    "complete": {"type": "boolean"},
+    "equity_gbp": {"$ref": "#/$defs/nullableDecimal"},
+    "net_contributions_gbp": {"$ref": "#/$defs/decimal"},
+    "since_baseline_gain_gbp": {"$ref": "#/$defs/nullableDecimal"},
+    "lifetime_gain_gbp": {"type": "null"},
+    "twr_pct": {"$ref": "#/$defs/nullableDecimal"},
+    "max_drawdown_pct": {"$ref": "#/$defs/nullableDecimal"},
+    "accounts": {
+      "type": "array", "minItems": 1, "maxItems": 50,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "name", "kind", "cash_gbp", "terms", "cash_observation"],
+        "properties": {
+          "id": {"$ref": "#/$defs/text"}, "name": {"$ref": "#/$defs/text"},
+          "kind": {"enum": ["broker", "deposit"]},
+          "cash_gbp": {"anyOf": [{"$ref": "#/$defs/nonnegativeDecimal"}, {"type": "null"}]},
+          "terms": {"anyOf": [{"$ref": "#/$defs/accountTerms"}, {"type": "null"}]},
+          "cash_observation": {"anyOf": [{"$ref": "#/$defs/cashObservation"}, {"type": "null"}]}
+        }
+      }
+    },
+    "holdings": {
+      "type": "array", "maxItems": 5000,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["account_id", "product_id", "name", "sleeve", "quantity", "value_gbp", "mark_at", "mark_available_at"],
+        "properties": {
+          "account_id": {"$ref": "#/$defs/text"}, "product_id": {"$ref": "#/$defs/text"},
+          "name": {"$ref": "#/$defs/text"}, "sleeve": {"enum": ["equity", "bond"]},
+          "quantity": {"$ref": "#/$defs/nonnegativeDecimal"},
+          "value_gbp": {"$ref": "#/$defs/nullableDecimal"},
+          "mark_at": {"$ref": "#/$defs/nullableUtc"},
+          "mark_available_at": {"$ref": "#/$defs/nullableUtc"}
+        }
+      }
+    },
+    "proposal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "reason", "expires_at", "orders", "manual_transfers", "execution_enabled"],
+      "properties": {
+        "status": {"const": "blocked"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "expires_at": {"type": "null"},
+        "orders": {"type": "array", "maxItems": 0},
+        "manual_transfers": {"type": "array", "maxItems": 0},
+        "execution_enabled": {"const": false}
+      }
+    },
+    "warnings": {"$ref": "#/$defs/messages"},
+    "limitations": {"$ref": "#/$defs/messages"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"complete": {"const": true}}},
+      "then": {"properties": {"equity_gbp": {"$ref": "#/$defs/nonnegativeDecimal"}, "as_of": {"$ref": "#/$defs/utc"}}},
+      "else": {"properties": {"equity_gbp": {"type": "null"}, "as_of": {"type": "null"}, "since_baseline_gain_gbp": {"type": "null"}, "twr_pct": {"type": "null"}, "max_drawdown_pct": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"baseline_as_of": {"type": "null"}}},
+      "then": {"properties": {"since_baseline_gain_gbp": {"type": "null"}, "twr_pct": {"type": "null"}, "max_drawdown_pct": {"type": "null"}}}
+    }
+  ],
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 200},
+    "accountTerms": {
+      "type": "object", "additionalProperties": false,
+      "required": ["annual_rate_pct", "rate_basis", "effective_from", "observed_at", "available_at", "source", "maturity_date", "notice_days"],
+      "properties": {
+        "annual_rate_pct": {"anyOf": [{"type": "string", "maxLength": 24, "pattern": "^(100(\\.0+)?|([1-9][0-9]?|0)(\\.[0-9]+)?)$"}, {"type": "null"}]},
+        "rate_basis": {"anyOf": [{"enum": ["AER", "gross"]}, {"type": "null"}]},
+        "effective_from": {"type": "string", "format": "date"},
+        "observed_at": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "source": {"$ref": "#/$defs/text"},
+        "maturity_date": {"anyOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
+        "notice_days": {"anyOf": [{"type": "integer", "minimum": 0, "maximum": 3650}, {"type": "null"}]}
+      }
+    },
+    "cashObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["balance_gbp", "difference_gbp", "timestamp", "available_at", "source", "evidence"],
+      "properties": {
+        "balance_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "difference_gbp": {"$ref": "#/$defs/decimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "source": {"$ref": "#/$defs/text"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "decimal": {"type": "string", "maxLength": 240, "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"},
+    "nonnegativeDecimal": {"type": "string", "maxLength": 240, "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"},
+    "nullableDecimal": {"anyOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
+    "utc": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$", "maxLength": 27},
+    "nullableUtc": {"anyOf": [{"$ref": "#/$defs/utc"}, {"type": "null"}]},
+    "messages": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 2000}}
+  }
+}

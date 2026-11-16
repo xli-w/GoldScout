@@ -18,7 +18,7 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     commands = parser.add_subparsers(dest="command", required=True)
     demo = commands.add_parser("demo", help="pure synthetic GBP1000 report; no persistence")
     demo.add_argument("--contribution", action="store_true", help="demonstrate an extra GBP100")
-    init = commands.add_parser("init", help="create new explicitly bound v1 investment store")
+    init = commands.add_parser("init", help="create a new explicitly bound investment store")
     init.add_argument("--profile", required=True)
     init.add_argument("--database", required=True)
     events = commands.add_parser("import", help="atomically import explicit local event JSON array")

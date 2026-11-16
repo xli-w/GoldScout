@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from investment.service import demo_events, demo_profile, demo_snapshot, snapshot
 from investment.store import acknowledge_review, import_events, initialize
 from test_dashboard_api import MemoryEventLoop
+from test_investment_opening import (NOW as OPENING_NOW, opening, profile,
+                                     cash_observation, savings_terms)
 
 
 class InvestmentDashboardTests(unittest.TestCase):
@@ -58,6 +60,76 @@ class InvestmentDashboardTests(unittest.TestCase):
                 self.assertEqual(client.get("/api/v1/overview").status_code, 503)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
+    def test_v2_opening_snapshot_is_read_only_and_preserves_unknown_basis(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening()], self.now)
+        expected = snapshot(self.path, self.now)
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), expected)
+            self.assertEqual(response.json()["schema_version"], 2)
+            self.assertIsNone(response.json()["lifetime_gain_gbp"])
+            self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
+                                         headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
+    def test_v2_unopened_store_does_not_invent_zero_balances(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertFalse(response.json()["complete"])
+            self.assertTrue(all(account["cash_gbp"] is None
+                                for account in response.json()["accounts"]))
+
+    def test_v2_savings_terms_are_read_only_and_do_not_change_portfolio_value(self):
+        self.now = OPENING_NOW
+        spec = profile()
+        spec["accounts"][0]["terms"] = savings_terms()
+        initialize(self.path, spec, self.now)
+        import_events(self.path, [opening()], self.now)
+        expected = snapshot(self.path, self.now)
+        self.assertEqual(expected["equity_gbp"], "2000")
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), expected)
+            self.assertEqual(response.json()["accounts"][0]["terms"], savings_terms())
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_v2_cash_observation_is_displayed_without_a_dashboard_write(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening(), cash_observation()], self.now)
+        expected = snapshot(self.path, self.now)
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), expected)
+            bank = next(account for account in response.json()["accounts"]
+                        if account["id"] == "bank")
+            self.assertEqual(bank["cash_gbp"], "1000")
+            self.assertEqual(bank["cash_observation"]["difference_gbp"], "-1")
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_v2_invalid_lifetime_gain_is_not_a_success_response(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening()], self.now)
+        report = snapshot(self.path, self.now)
+        report["lifetime_gain_gbp"] = "0"
+        with patch("investment.service.snapshot", return_value=report), \
+                self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+        self.assertEqual(response.status_code, 409)
 
     def test_recorded_sell_proposal_is_read_only_and_schema_valid(self):
         spec = demo_profile(self.now)

@@ -1,6 +1,7 @@
-"""Separate explicit v1 SQLite store. Readers never initialize or repair."""
+"""Separate explicit investment SQLite store. Readers never initialize or repair."""
 
 from contextlib import closing
+from copy import copy
 import hashlib
 import json
 import os
@@ -91,6 +92,18 @@ def state_digest(ledger):
         }
     if ledger.has_portfolio_attestation:
         value["latest_available_at"] = iso(ledger.latest_available_at)
+    if ledger.spec["schema_version"] == 2:
+        value["opening"] = {
+            "opened": ledger.opened,
+            "baseline_at": iso(ledger.baseline_at) if ledger.baseline_at else None,
+            "baseline_value": fmt(ledger.baseline_value),
+            "baseline_net": fmt(ledger.baseline_net),
+        }
+        if ledger.cash_observations:
+            value["cash_observations"] = {
+                account: observation
+                for account, observation in sorted(ledger.cash_observations.items())
+            }
     return digest(canonical(value))
 
 
@@ -126,7 +139,7 @@ def initialize(database, spec, now=None):
     try:
         with closing(sqlite3.connect(path)) as connection:
             with connection:
-                connection.execute("PRAGMA user_version=1")
+                connection.execute(f"PRAGMA user_version={spec['schema_version']}")
                 for sql in TABLE_SQL.values():
                     connection.execute(sql)
                 for table in ("identity", "events", "commits"):
@@ -141,7 +154,8 @@ def initialize(database, spec, now=None):
 
 
 def _read(connection, now):
-    if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if version not in (1, 2):
         raise InvestmentError("Unsupported investment schema; no migrations")
     schema = connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master").fetchall()
     expected = {("table", table, table, sql) for table, sql in TABLE_SQL.items()}
@@ -159,6 +173,8 @@ def _read(connection, now):
     if len(encoded) > MAX_JSON_BYTES or digest(encoded) != previous:
         raise InvestmentError("Portfolio binding hash mismatch")
     spec = profile(parse_json(encoded))
+    if spec["schema_version"] != version:
+        raise InvestmentError("Investment profile and store version disagree")
     rows = connection.execute(
         "SELECT revision,id,payload,previous_hash,hash FROM events ORDER BY revision LIMIT ?",
         (MAX_EVENTS + 1,)).fetchall()
@@ -177,16 +193,28 @@ def _read(connection, now):
             raise InvestmentError("Investment event chain mismatch")
         events.append(value)
         previous = new_hash
-    ledger = replay(spec, events, now)
-    if ledger.revision != len(events):
-        raise InvestmentError("Duplicate source event in store")
     commits = connection.execute(
         "SELECT revision,state_hash FROM commits ORDER BY revision LIMIT ?",
         (MAX_EVENTS + 2,)).fetchall()
-    if not commits or commits[0][0] != 0 or commits[-1][0] != ledger.revision:
+    if not commits or commits[0][0] != 0 or commits[-1][0] != len(events):
         raise InvestmentError("Uncommitted investment revision")
-    if any(type(r) is not int or r < 0 or r > ledger.revision for r, _ in commits):
+    if any(type(r) is not int or r < 0 or r > len(events) for r, _ in commits):
         raise InvestmentError("Invalid commit revision")
+    hashes = dict(commits)
+
+    def verify_revision(current, timestamp):
+        if current.revision not in hashes:
+            return
+        # Checkpoint changes only scalars; preserve the ongoing replay state.
+        checkpoint = copy(current)
+        if timestamp is not None:
+            checkpoint.checkpoint(timestamp)
+        if state_digest(checkpoint) != hashes[current.revision]:
+            raise InvestmentError("Investment replay verification failed")
+
+    ledger = replay(spec, events, now, verify_revision)
+    if ledger.revision != len(events):
+        raise InvestmentError("Duplicate source event in store")
     if commits[-1][1] != state_digest(ledger):
         raise InvestmentError("Investment replay verification failed")
     committed = {revision for revision, _ in commits}

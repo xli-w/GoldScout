@@ -119,7 +119,9 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
             return JSONResponse(status_code=503, content={"error": "investment_not_configured"})
         try:
             report = snapshot(investment_database, now=clock()) if investment_database is not None else demo_snapshot(now=clock())
-            schema = json.loads((ROOT.parent / "investment" / "response.schema.json").read_text(encoding="utf-8"))
+            schema_name = ("response-v2.schema.json" if isinstance(report, dict)
+                           and report.get("schema_version") == 2 else "response.schema.json")
+            schema = json.loads((ROOT.parent / "investment" / schema_name).read_text(encoding="utf-8"))
             Draft202012Validator(schema, format_checker=FormatChecker()).validate(report)
             return report
         except (InvestmentError, OSError) as exc:

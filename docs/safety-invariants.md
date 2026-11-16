@@ -56,7 +56,17 @@ These are development contracts, not a certification of live readiness. Current 
   result, browser setting or this documentation change. Current per-task broker
   approval, durable intent, reconciliation and read-only route safeguards remain.
 - The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; dashboard/read-only commands never create, migrate, repair, or mutate it. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
-- The supported first-release history begins at an explicitly evidenced empty inception. Do not infer opening holdings, cost basis, FX, correction, corporate-action entitlement, unrecorded interest, or distribution completeness.
+- V1 begins at explicitly evidenced empty inception. V2 can start from an explicit
+  opening record of cash and long holdings without inferring prior transactions,
+  cost basis or lifetime gain. A performance baseline starts only at a complete
+  common valuation whose evidence was available at that clock. V2 is CLI-recorded
+  and locally viewable read-only, with no allocation policy, review approval,
+  proposal export or migration. No v2 freshness threshold is configured.
+  Never infer FX, correction, entitlement, unrecorded interest or distributions.
+- V2 cash observations are separate append-only evidence, never balance mutations.
+  Calculate any difference against recorded cash at that observation clock; preserve
+  the dated discrepancy and evidence source. A statement observation cannot refresh
+  valuation or resolve a mismatch, and late evidence cannot be used retrospectively.
 - Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
 - Time-weighted unitization is flow-neutral and remains linked across complete withdrawals and later refunding. A zero-equity interval does not erase prior unit price/history or manufacture a drawdown from new capital.
 - External-deposit cash is part of recorded mandate value only when included by policy; it is never broker buying power. Scheduled contributions are not settled cash. Transfers between included accounts do not count as external investment performance flows.

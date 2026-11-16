@@ -16,6 +16,13 @@ legacy trading ledger. Use temporary profiles/events/stores for development;
 unsupported FX, entitlement, corrections, historical research and execution must
 remain explicit rather than inferred from the legacy engine.
 
+An explicitly initialised v2 investment store additionally supports
+operator-evidenced opening cash and long holdings via CLI, with a read-only
+dashboard view and non-mutating cash observations that expose discrepancies.
+It has no policy or proposal export. V1 stores remain separate
+and are not automatically migrated. V2 performance begins only at an evidenced complete
+common-clock baseline, not an invented pre-inception transaction or return.
+
 The [current mandate](investment-research-context.md) is a substantial-capital
 core-plus-dynamic portfolio manager, excluding household cash/emergency budgeting.
 The illustrative 80-90% core / 10-20% dynamic range is not a default or approved

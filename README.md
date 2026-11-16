@@ -30,6 +30,10 @@ accounting and explicit research/broker blockers.
   not broker buying power; manual inputs are not broker verification.
 - The read-only dashboard includes `/investment` and `/investment-guide`.
   No dashboard account or trading route approves or executes orders.
+- A separate v2 opening-evidence contract can record existing GBP
+  balances and long holdings without fabricating past purchases; its reports
+  label lifetime gains unavailable and its policies/proposals are not implemented.
+  CLI imports are displayed in the local read-only investment dashboard.
 - Full FX, corporate-action entitlement/accrual, money-weighted/inflation returns,
   licensed historical comparisons and human-approved broker execution remain
   gated follow-ons. A valid import is not proof of investment suitability.

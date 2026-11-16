@@ -3,6 +3,7 @@
 from decimal import Decimal, localcontext
 from datetime import timedelta
 
+from . import InvestmentError
 from .core import MAX_EVENTS, ZERO, clock, fmt, iso, number, replay
 from .planner import plan, review_schedule
 from .store import canonical, digest, read, read_with_clock
@@ -28,6 +29,8 @@ LIMITATIONS = [
 
 
 def report(ledger, now, source_mode="recorded"):
+    if ledger.spec["schema_version"] == 2:
+        return opening_report(ledger, now, source_mode)
     with localcontext() as context:
         context.prec = 100
         equity, as_of = ledger.valuation()
@@ -79,6 +82,85 @@ def report(ledger, now, source_mode="recorded"):
         }
 
 
+def opening_report(ledger, now, source_mode="recorded"):
+    """Report version 2 opening evidence without inventing lifetime history."""
+    with localcontext() as context:
+        context.prec = 100
+        equity, as_of = ledger.valuation()
+        baseline = ledger.baseline_value
+        gain = (equity - baseline - (ledger.net - ledger.baseline_net)
+                if equity is not None and baseline is not None else None)
+        products = {item["id"]: item for item in ledger.spec["products"]}
+        holdings = []
+        for (account, product_id), quantity in sorted(ledger.holdings.items()):
+            if quantity <= 0:
+                continue
+            mark = ledger.marks.get((account, product_id))
+            product = products[product_id]
+            holdings.append({
+                "account_id": account, "product_id": product_id,
+                "name": product["name"], "sleeve": product["sleeve"],
+                "quantity": fmt(quantity), "value_gbp": fmt(quantity * mark[0]) if mark else None,
+                "mark_at": iso(mark[1]) if mark else None,
+                "mark_available_at": iso(mark[2]) if mark else None,
+            })
+        performance = (ledger.performance_valid and ledger.units > 0
+                       and equity is not None and ledger.baseline_at is not None)
+        warnings = ([] if equity is not None else
+                    ["A complete common-clock valuation is unavailable."])
+        for account, observations in sorted(ledger.cash_observation_history.items()):
+            discrepancies = [
+                observation for observation in observations
+                if Decimal(observation["difference_gbp"]) != 0
+            ]
+            if discrepancies:
+                first, latest = discrepancies[0], discrepancies[-1]
+                if first is latest:
+                    warnings.append(
+                        f"Recorded cash observation for account {account} differs by GBP "
+                        f"{first['difference_gbp']} at {first['timestamp']} (source: "
+                        f"{first['source']}; evidence: {first['evidence']}); no correction "
+                        "was applied, and later matching observations do not resolve it.")
+                else:
+                    warnings.append(
+                        f"{len(discrepancies)} recorded cash observations for account {account} "
+                        f"differ from recorded balances. Earliest: GBP {first['difference_gbp']} "
+                        f"at {first['timestamp']} (source: {first['source']}; evidence: "
+                        f"{first['evidence']}). Latest: GBP {latest['difference_gbp']} at "
+                        f"{latest['timestamp']} (source: {latest['source']}; evidence: "
+                        f"{latest['evidence']}); no correction was applied, and later matching "
+                        "observations do not resolve prior differences.")
+        return {
+            "schema_version": 2, "source_mode": source_mode,
+            "portfolio_id": ledger.spec["portfolio_id"], "revision": ledger.revision,
+            "generated_at": iso(now), "as_of": iso(as_of) if as_of else None,
+            "baseline_as_of": iso(ledger.baseline_at) if ledger.baseline_at else None,
+            "currency": "GBP", "complete": equity is not None,
+            "equity_gbp": fmt(equity), "net_contributions_gbp": fmt(ledger.net),
+            "since_baseline_gain_gbp": fmt(gain), "lifetime_gain_gbp": None,
+            "twr_pct": fmt((ledger.unit_price - 1) * 100) if performance else None,
+            "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
+            "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],
+                          "cash_gbp": fmt(ledger.cash[a["id"]]) if ledger.opened else None,
+                          "terms": a.get("terms"),
+                          "cash_observation": ledger.cash_observations.get(a["id"])}
+                         for a in ledger.spec["accounts"]],
+            "holdings": holdings,
+            "proposal": {"status": "blocked", "reason": "Allocation and role policy are not implemented",
+                         "expires_at": None, "orders": [], "manual_transfers": [],
+                         "execution_enabled": False},
+            "warnings": warnings,
+            "limitations": [
+                "Opening holdings and cash are operator-recorded evidence, not broker verification.",
+                "Lifetime cost basis and pre-baseline gain are unavailable.",
+                "Returns are since the first complete, contemporaneously evidenced baseline.",
+                "No valuation freshness threshold is configured; check the recorded dates.",
+                "Cash observations are evidence only; discrepancies do not update recorded balances.",
+                "Allocation policy, proposals and execution are not implemented for this store.",
+            ],
+        }
+
+
 def snapshot(database, now=None):
     now = clock(now)
     return report(read(database, now), now)
@@ -86,6 +168,8 @@ def snapshot(database, now=None):
 
 def review_status(database, now=None):
     ledger, now = read_with_clock(database, now)
+    if ledger.spec["schema_version"] == 2:
+        raise InvestmentError("Review status requires an implemented allocation policy")
     result = report(ledger, now)
     schedule = review_schedule(ledger, now, result["allocation"])
     valuation_status = ledger.valuation_status(now)
@@ -151,6 +235,8 @@ def proposal_export(database, now=None):
     """Binding envelope; never an executable instruction."""
     now = clock(now)
     ledger = read(database, now)
+    if ledger.spec["schema_version"] == 2:
+        raise InvestmentError("Proposal export requires an implemented allocation policy")
     result = report(ledger, now)
     return {"schema_version": 1, "portfolio_id": result["portfolio_id"],
             "revision": result["revision"], "policy_id": ledger.spec["policy"]["id"],

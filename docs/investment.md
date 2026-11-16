@@ -30,9 +30,9 @@ Exact product/account/wrapper/protection eligibility must be verified.
 Leverage, shorts, crypto and speculative options remain unapproved.
 
 The end goal includes extensive automation: research, monitoring, reporting,
-policy-bound core maintenance and admitted dynamic strategies. This chat approves
-the documentation/strategy direction only. The released code still uses fixed
-human targets and export-only proposals, with no autonomous investment execution.
+policy-bound core maintenance and admitted dynamic strategies. The released v1
+code uses fixed human targets and export-only proposals; v2 has no allocation
+policy yet. Neither enables autonomous investment execution.
 See the [mandate](investment-research-context.md) and
 [architecture decision](decisions/0004-core-dynamic-portfolio-manager.md).
 
@@ -154,7 +154,80 @@ valuations; incomplete history is unavailable, not a zero return. Decimal
 quantities and GBP prices are explicit. Foreign currency and unsupported events
 are refused rather than converted by assumption.
 
-### Recorded input formats
+### Version 2 opening evidence
+
+The explicit `init`, `import` and `report` CLI commands also accept a new
+version-2 profile for evidenced opening balances and existing long holdings.
+This is a **separate newly created store**: it does not migrate an existing v1
+store, change valid v1 accounting, import broker data, enable browser recording or trade.
+The local dashboard can display a selected v2 store read-only; recording remains
+CLI-only. V2 has no configured valuation-freshness threshold, so check the
+displayed observation dates rather than treating completeness as freshness.
+V2 allocation policies, review acknowledgements and proposal exports are not
+implemented; policy-dependent commands explicitly refuse them.
+
+Use the v1 account and product fields described below with `schema_version: 2`
+and `"policy": null`. Import one first event with type `opening`, a unique
+`id`, UTC `timestamp`, `available_at`, nonempty `evidence`, `balances_gbp`
+mapping every included account ID to its exact decimal-string balance, and
+`holdings` containing `{account_id, product_id, quantity, price_gbp}` entries.
+Each nonzero holding must be in a broker account, uniquely identified and
+increment-aligned; `price_gbp` is a positive decimal string or null when unknown.
+Opening amounts are evidenced positions, not invented buys or contributions.
+Pre-inception cost basis and lifetime gains are not reconstructed.
+
+The first fully evidenced, common-clock valuation establishes the performance
+baseline. If evidence was available later than its effective clock, or required
+marks are missing, the valuation and baseline remain unavailable. A later
+supported common-clock valuation can start measurement from that later clock;
+the report distinguishes `since_baseline_gain_gbp` from unavailable
+`lifetime_gain_gbp`. `net_contributions_gbp` records subsequent supported
+external funding, including any events before a later baseline. Actual
+interest, deposits, withdrawals, fills and marks still require explicit supported
+events; a mismatching balance is not automatically corrected or labelled as
+interest. The v2 report remains an offline manual record, not a verified bank
+statement, broker buying power or proof of investability.
+Readers verify every stored commit's replay hash for both versions; these
+unkeyed hashes detect inconsistencies, not malicious tampering by a party who
+can rewrite the entire database.
+
+After opening, a v2 `cash_observation` event records one included account's
+`balance_gbp`, effective `timestamp`, `available_at`, `source` and `evidence`.
+Its reported difference is observed minus ledger-recorded cash at that event
+clock. Append all other same-clock events first; multiple account observations
+may then share the clock. Observations never change cash, contributions, return
+or the baseline. Nonzero differences stay visible in warnings for explicit
+investigation; a later matching observation does not resolve or hide an earlier
+difference. No automatic repair or resolution workflow is implemented. Late
+evidence does not refresh an earlier complete valuation, and a later
+observation does not stand in for fresh holding marks.
+For example:
+
+```json
+{
+  "id": "bank-statement-2026-11",
+  "type": "cash_observation",
+  "timestamp": "2026-11-15T12:00:00Z",
+  "available_at": "2026-11-15T12:00:00Z",
+  "evidence": "November statement balance",
+  "source": "operator-entered bank statement",
+  "account_id": "savings",
+  "balance_gbp": "1000.25"
+}
+```
+
+A v2 deposit account may include an optional profile `terms` object with
+`annual_rate_pct`, `rate_basis` (`"AER"` or `"gross"`), `effective_from`
+(date), `observed_at`, `available_at`, `source`, and optional
+`maturity_date`/`notice_days`. Rate, source and dates are operator-entered facts
+bound to the explicit profile, not verified provider data. The read-only
+dashboard shows the reported basis and evidence clocks. Terms do not change
+cash, valuation or returns; rate changes, interest accrual and later term corrections are not implemented. Do not edit
+immutable profile evidence or reinitialise a portfolio merely to change terms;
+preserving an existing portfolio's opening evidence and event history remains
+an explicit offline operation, not an automatic migration.
+
+### Version 1 recorded input formats
 
 The profile is one JSON object containing exactly `schema_version` (integer 1),
 `portfolio_id`, `currency` (`"GBP"`), `created_at`, `accounts`, `products` and
@@ -383,9 +456,9 @@ sources are explicitly selected and are not combined into a fictional account.
 Recorded investment mode leaves legacy-account endpoints unavailable, not
 synthetic. A selected legacy ledger does not implicitly become an investment store.
 
-The investment response has a separate strict schema and compiled browser
-validator. Production assets are bound to both legacy and investment schema
-checksums. Missing, incomplete or invalid values stay unavailable in the UI.
+The investment responses have separate strict v1/v2 schemas and compiled
+browser validators. Production assets are bound to both investment schemas and
+the legacy schema checksums. Missing, incomplete or invalid values stay unavailable in the UI.
 Refreshes only read reports; there is no browser approval or execution route.
 
 ## Research and provider screen
@@ -472,6 +545,19 @@ history and vintages. If that cannot be evidenced within the approved
 public/user-supplied-only scope, stop rather than acquire paid data. No product
 price-history dataset was downloaded or analyzed as return evidence, no account
 was accessed and no return comparison ran.
+
+### Read-only synchronisation discovery
+
+[Trading 212's API key guidance](https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key)
+describes selectable permissions including read-only account-data access. Its
+[public API](https://docs.trading212.com/api) remains beta, supports Invest
+and Stocks ISA accounts, and reports account/position data in the primary
+account currency. This is a potential provider-enforced read-only route, not
+confirmation of the investor's account, exact endpoint scopes, historical
+completeness or current live behaviour. No provider has been chosen and no
+account or credentials have been accessed. Alpaca's genuinely read-only
+personal-account credential scope remains unverified; do not infer its absence
+or claim read-only protection solely because a client sends GET requests.
 
 ## Explicit follow-on gates
 

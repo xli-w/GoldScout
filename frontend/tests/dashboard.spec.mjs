@@ -59,6 +59,45 @@ test("investment browser rejects invalid money instead of displaying an invented
   await expect(page.getByText("Portfolio value", { exact: true })).toHaveCount(0);
 });
 
+test("opening records show since-baseline value without inventing lifetime gain", async ({ page }) => {
+  const at = "2026-01-01T12:00:00Z";
+  const report = {
+    schema_version: 2, source_mode: "recorded", portfolio_id: "synthetic", revision: 1,
+    generated_at: at, as_of: at, baseline_as_of: at, currency: "GBP", complete: true,
+    equity_gbp: "2000", net_contributions_gbp: "0", since_baseline_gain_gbp: "0",
+    lifetime_gain_gbp: null, twr_pct: "0", max_drawdown_pct: "0",
+    accounts: [{ id: "bank", name: "Savings", kind: "deposit", cash_gbp: "1000",
+      cash_observation: { balance_gbp: "999", difference_gbp: "-1", timestamp: at,
+        available_at: at, source: "synthetic statement", evidence: "synthetic evidence" },
+      terms: { annual_rate_pct: "4.25", rate_basis: "AER", effective_from: "2026-01-01",
+        observed_at: at, available_at: at, source: "synthetic statement",
+        maturity_date: "2027-01-01", notice_days: 90 } },
+      { id: "broker", name: "Broker", kind: "broker", cash_gbp: "500",
+        cash_observation: null, terms: null }],
+    holdings: [{ account_id: "broker", product_id: "fund", name: "Fund", sleeve: "equity",
+      quantity: "50", value_gbp: "500", mark_at: at, mark_available_at: at }],
+    proposal: { status: "blocked", reason: "Policy is not implemented", expires_at: null,
+      orders: [], manual_transfers: [], execution_enabled: false },
+    warnings: [], limitations: ["Synthetic test evidence."],
+  };
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+  await expect(page.getByText("Gain since baseline")).toBeVisible();
+  await expect(page.getByText(/Lifetime gain and prior cost basis are unavailable/)).toBeVisible();
+  await expect(page.getByText("£2,000.00")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reported savings-account terms" })).toBeVisible();
+  await expect(page.getByText(/4.25% AER/)).toBeVisible();
+  await expect(page.getByText(/not current provider verification or an interest-accrual input/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Observed cash balances" })).toBeVisible();
+  await expect(page.getByText(/Difference \(observed minus recorded\): -£1.00/)).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Mark as of" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
+  await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
+  report.lifetime_gain_gbp = "0";
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(page.getByText("Investment response failed validation.")).toBeVisible();
+});
+
 test("trading guide works from the footer and without account data", async ({ page }) => {
   await page.route("**/api/v1/**", route => route.abort());
   await page.goto("/");
