@@ -67,6 +67,8 @@ These are development contracts, not a certification of live readiness. Current 
   Calculate any difference against recorded cash at that observation clock; preserve
   the dated discrepancy and evidence source. A statement observation cannot refresh
   valuation or resolve a mismatch, and late evidence cannot be used retrospectively.
+  Preserve the full bounded observation history in read-only reports; a newer
+  matching observation must not hide an older difference or alter recorded cash.
 - V2 savings-terms updates are append-only display facts for included deposit
   accounts. Preserve observed/available clocks; they never accrue interest or
   change cash, valuation, performance, or product eligibility.

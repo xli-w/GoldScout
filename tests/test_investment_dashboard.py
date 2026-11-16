@@ -11,7 +11,7 @@ from investment.service import demo_events, demo_profile, demo_snapshot, snapsho
 from investment.store import acknowledge_review, import_events, initialize
 from test_dashboard_api import MemoryEventLoop
 from test_investment_opening import (NOW as OPENING_NOW, opening, profile,
-                                     cash_observation, savings_terms,
+                                     cash_observation, iso, savings_terms,
                                      savings_terms_event)
 
 
@@ -142,6 +142,40 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(bank["cash_gbp"], "1000")
             self.assertEqual(bank["cash_observation"]["difference_gbp"], "-1")
         self.assertEqual(self.path.read_bytes(), original)
+
+    def test_v2_snapshot_normalizes_utc_offset_evidence_for_schema(self):
+        self.now = OPENING_NOW
+        spec = profile()
+        spec["accounts"][0]["terms"] = savings_terms()
+        for field in ("observed_at", "available_at"):
+            spec["accounts"][0]["terms"][field] = (
+                spec["accounts"][0]["terms"][field].replace("Z", "+00:00"))
+        initialize(self.path, spec, self.now)
+        observation = cash_observation()
+        observation["timestamp"] = observation["timestamp"].replace("Z", "+00:00")
+        observation["available_at"] = observation["available_at"].replace("Z", "+00:00")
+        next_day = OPENING_NOW + timedelta(days=1)
+        terms_update = savings_terms_event(next_day)
+        terms_update["timestamp"] = terms_update["timestamp"].replace("Z", "+00:00")
+        terms_update["available_at"] = terms_update["available_at"].replace("Z", "+00:00")
+        self.now = next_day
+        import_events(self.path, [opening(), observation, terms_update], self.now)
+
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+        self.assertEqual(response.status_code, 200, response.text)
+        report = response.json()
+        self.assertEqual(report["cash_observations"][0]["timestamp"], iso(OPENING_NOW))
+        self.assertEqual(report["cash_observations"][0]["available_at"], iso(OPENING_NOW))
+        bank = next(account for account in report["accounts"] if account["id"] == "bank")
+        self.assertEqual(bank["cash_observation"]["timestamp"], iso(OPENING_NOW))
+        self.assertEqual(bank["cash_observation"]["available_at"], iso(OPENING_NOW))
+        self.assertEqual(bank["terms"]["observed_at"], iso(next_day))
+        self.assertEqual(bank["terms"]["available_at"], iso(next_day))
+        self.assertTrue(any(f"at {iso(OPENING_NOW)}" in warning
+                            for warning in report["warnings"]))
+        self.assertFalse(any(OPENING_NOW.isoformat() in warning
+                             for warning in report["warnings"]))
 
     def test_v2_invalid_lifetime_gain_is_not_a_success_response(self):
         self.now = OPENING_NOW

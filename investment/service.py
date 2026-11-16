@@ -28,6 +28,15 @@ LIMITATIONS = [
 ]
 
 
+def _reported_timestamps(value, fields):
+    if value is None:
+        return None
+    result = value.copy()
+    for field in fields:
+        result[field] = iso(clock(result[field]))
+    return result
+
+
 def report(ledger, now, source_mode="recorded"):
     if ledger.spec["schema_version"] == 2:
         return opening_report(ledger, now, source_mode)
@@ -118,18 +127,23 @@ def opening_report(ledger, now, source_mode="recorded"):
                 if first is latest:
                     warnings.append(
                         f"Recorded cash observation for account {account} differs by GBP "
-                        f"{first['difference_gbp']} at {first['timestamp']} (source: "
+                        f"{first['difference_gbp']} at {iso(clock(first['timestamp']))} (source: "
                         f"{first['source']}; evidence: {first['evidence']}); no correction "
                         "was applied, and later matching observations do not resolve it.")
                 else:
                     warnings.append(
                         f"{len(discrepancies)} recorded cash observations for account {account} "
-                        f"differ from recorded balances. Earliest: GBP {first['difference_gbp']} "
-                        f"at {first['timestamp']} (source: {first['source']}; evidence: "
+                        f"differ from recorded balances. Earliest: GBP {first['difference_gbp']} at "
+                        f"{iso(clock(first['timestamp']))} (source: {first['source']}; evidence: "
                         f"{first['evidence']}). Latest: GBP {latest['difference_gbp']} at "
-                        f"{latest['timestamp']} (source: {latest['source']}; evidence: "
+                        f"{iso(clock(latest['timestamp']))} (source: {latest['source']}; evidence: "
                         f"{latest['evidence']}); no correction was applied, and later matching "
                         "observations do not resolve prior differences.")
+        cash_observations = sorted(
+            ((account, observation)
+             for account, observations in ledger.cash_observation_history.items()
+             for observation in observations),
+            key=lambda item: (clock(item[1]["timestamp"]), item[0]))
         return {
             "schema_version": 2, "source_mode": source_mode,
             "portfolio_id": ledger.spec["portfolio_id"], "revision": ledger.revision,
@@ -142,9 +156,18 @@ def opening_report(ledger, now, source_mode="recorded"):
             "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],
                           "cash_gbp": fmt(ledger.cash[a["id"]]) if ledger.opened else None,
-                          "terms": ledger.account_terms[a["id"]],
-                          "cash_observation": ledger.cash_observations.get(a["id"])}
+                          "terms": _reported_timestamps(
+                              ledger.account_terms[a["id"]],
+                              ("observed_at", "available_at")),
+                          "cash_observation": _reported_timestamps(
+                              ledger.cash_observations.get(a["id"]),
+                              ("timestamp", "available_at"))}
                          for a in ledger.spec["accounts"]],
+            "cash_observations": [
+                {"account_id": account, **_reported_timestamps(
+                    observation, ("timestamp", "available_at"))}
+                for account, observation in cash_observations
+            ],
             "valuation_history": ledger.valuation_history,
             "holdings": holdings,
             "proposal": {"status": "blocked", "reason": "Allocation and role policy are not implemented",

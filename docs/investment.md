@@ -215,7 +215,11 @@ or the baseline. Nonzero differences stay visible in warnings for explicit
 investigation; a later matching observation does not resolve or hide an earlier
 difference. No automatic repair or resolution workflow is implemented. Late
 evidence does not refresh an earlier complete valuation, and a later
-observation does not stand in for fresh holding marks.
+observation does not stand in for fresh holding marks. The v2 report retains
+all observations in timestamp order in `cash_observations`; each account also
+shows its latest observation. The dashboard lists the latest 100 while older
+records remain available in the bounded report. These records are reconciliation
+evidence, not balance corrections.
 
 V2 preserves journal order for events sharing an effective timestamp. For
 unambiguous performance measurement, record the required existing-holding

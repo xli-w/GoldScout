@@ -37,6 +37,8 @@ accounting and explicit research/broker blockers.
   Cash observations preserve discrepancies without changing balances, and
   evidence-dated savings-term updates change only the displayed terms; neither
   action accrues interest or refreshes portfolio valuation.
+- The v2 read-only report retains cash-observation history for reconciliation;
+  it does not apply balance corrections.
 - V2 growth history is derived only from recorded event clocks. Late or
   incomplete valuations remain visible as gaps; the dashboard does not
   interpolate between observations.

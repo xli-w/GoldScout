@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "twr_pct", "max_drawdown_pct", "accounts", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -33,6 +33,10 @@
           "cash_observation": {"anyOf": [{"$ref": "#/$defs/cashObservation"}, {"type": "null"}]}
         }
       }
+    },
+    "cash_observations": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/cashObservationRecord"}
     },
     "valuation_history": {
       "type": "array", "maxItems": 10000,
@@ -99,6 +103,19 @@
       "type": "object", "additionalProperties": false,
       "required": ["balance_gbp", "difference_gbp", "timestamp", "available_at", "source", "evidence"],
       "properties": {
+        "balance_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "difference_gbp": {"$ref": "#/$defs/decimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "source": {"$ref": "#/$defs/text"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "cashObservationRecord": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account_id", "balance_gbp", "difference_gbp", "timestamp", "available_at", "source", "evidence"],
+      "properties": {
+        "account_id": {"$ref": "#/$defs/text"},
         "balance_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
         "difference_gbp": {"$ref": "#/$defs/decimal"},
         "timestamp": {"$ref": "#/$defs/utc"},

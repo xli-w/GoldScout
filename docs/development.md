@@ -24,6 +24,8 @@ these facts do not accrue interest or affect valuations. V2 has no policy or
 proposal export. V1 stores remain separate and are not automatically migrated.
 V2 performance begins only at an evidenced complete common-clock baseline, not
 an invented pre-inception transaction or return.
+The v2 snapshot retains the bounded cash-observation history for reconciliation;
+the dashboard displays its latest records without applying corrections.
 The v2 report also retains bounded replay-derived valuation history: same-clock
 events are grouped, source availability is explicit, and incomplete clocks are
 gaps rather than zeroes or interpolated values. The dashboard limits the chart

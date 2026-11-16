@@ -594,6 +594,10 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertTrue(any("no correction was applied" in warning for warning in result["warnings"]))
         self.assertTrue(any("GBP -1" in warning and "synthetic bank statement" in warning
                             for warning in result["warnings"]))
+        self.assertEqual([
+            (item["account_id"], item["timestamp"], item["difference_gbp"])
+            for item in result["cash_observations"]
+        ], [("bank", iso(NOW), "-1"), ("broker", iso(NOW), "-1")])
         broker = next(item for item in result["accounts"] if item["id"] == "broker")
         self.assertEqual(broker["cash_observation"]["difference_gbp"], "-1")
         self.assertEqual(read(self.database, NOW).cash["bank"], 1000)
@@ -612,6 +616,12 @@ class InvestmentOpeningTests(unittest.TestCase):
         result = snapshot(self.database, later)
         bank = next(account for account in result["accounts"] if account["id"] == "bank")
         self.assertEqual(bank["cash_observation"]["difference_gbp"], "0")
+        self.assertEqual([
+            (item["timestamp"], item["difference_gbp"])
+            for item in result["cash_observations"]
+        ], [(iso(NOW), "-1"), (iso(later), "0")])
+        self.assertEqual(result["cash_observations"][0]["evidence"],
+                         mismatch["evidence"])
         self.assertTrue(any("2026-01-01T12:00:00Z" in warning and
                             "no correction was applied" in warning and
                             "later matching observations do not resolve it" in warning

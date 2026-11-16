@@ -23,6 +23,8 @@ export type InvestmentSnapshot = {
 type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | "allocation" | "holdings" | "accounts"> & {
   schema_version: 2; baseline_as_of: string | null; since_baseline_gain_gbp: string | null;
   lifetime_gain_gbp: null;
+  cash_observations: { account_id: string; balance_gbp: string; difference_gbp: string;
+    timestamp: string; available_at: string; source: string; evidence: string }[];
   valuation_history: {
     timestamp: string; source_available_at: string; as_of: string | null; complete: boolean;
     equity_gbp: string | null; capital_basis_gbp: string | null;
@@ -205,14 +207,19 @@ export function InvestmentView() {
           {data.schema_version === 2 && data.accounts.some(account => account.cash_observation !== null) &&
             <section className="history-group"><h2>Observed cash balances</h2>
               <p className="position-note">Operator-entered evidence, not provider verification. Differences compare with recorded cash at that timestamp; they are not corrections or proof of a later balance.</p>
-              <dl className="health-facts">{data.accounts.filter(account => account.cash_observation !== null).map(account => {
-                const observation = account.cash_observation;
-                if (observation === null) return null;
-                return <div key={account.id}><dt>{account.name} · Observed {timestamp(observation.timestamp)}</dt><dd>
-                  {pounds(observation.balance_gbp)} · Difference (observed minus recorded): {pounds(observation.difference_gbp)}
-                  {` · Available ${timestamp(observation.available_at)} · Source: ${observation.source} · Evidence: ${observation.evidence}`}
-                </dd></div>;
-              })}</dl>
+              <p className="position-note">Showing the latest {Math.min(data.cash_observations.length, 100)} of {data.cash_observations.length} recorded observations.</p>
+              <div className="table-scroll" tabIndex={0} aria-label="Cash reconciliation history">
+                <table>
+                  <thead><tr><th>Observed at (UTC)</th><th>Account</th><th>Balance</th><th>Difference (observed minus recorded)</th><th>Available at</th><th>Source and evidence</th></tr></thead>
+                  <tbody>{[...data.cash_observations].reverse().slice(0, 100).map((observation, index) =>
+                    <tr key={`${observation.account_id}:${observation.timestamp}:${index}`}>
+                      <td>{timestamp(observation.timestamp)}</td><td>{observation.account_id}</td>
+                      <td>{pounds(observation.balance_gbp)}</td><td>{pounds(observation.difference_gbp)}</td>
+                      <td>{timestamp(observation.available_at)}</td>
+                      <td>{observation.source} · {observation.evidence}</td>
+                    </tr>)}</tbody>
+                </table>
+              </div>
             </section>}
           {data.schema_version === 2 && data.accounts.some(account => account.terms !== null) &&
             <section className="history-group"><h2>Reported savings-account terms</h2>
