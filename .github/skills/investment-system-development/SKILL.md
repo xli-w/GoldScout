@@ -20,9 +20,11 @@ historical simulation/selection, also use
 - The released contract is GBP-only and operator-recorded, with explicit empty
   inception. Corrections, FX, automatic accrual/entitlement, MWR, inflation,
   historical portfolio research, and broker execution are not implied capabilities.
-- Allocation proposals are buy-only and export-only. Dashboard routes remain
-  read-only. Proposed notionals do not prove fees, settlement, or executable
-  funding. Do not add a broker path as a convenience to an accounting change.
+- Allocation proposals are export-only. Sales are bounded by recorded overweight
+  holdings and sleeve excess at annual/drift reviews; proposed proceeds cannot
+  fund buys. Dashboard routes remain read-only. Proposed notionals do not prove
+  fees, settlement, or executable funding. Do not add a broker path as a
+  convenience to an accounting change.
 - Human-selected targets and the fixed comparison set are not optimized by
   historical returns. Do not promise profit, safety, maximum drawdown, or a
   winning allocation.
@@ -33,7 +35,8 @@ historical simulation/selection, also use
   split events known by modeled session opens. Split quantities must preserve
   the declared increment. Synthetic per-unit distributions are known by a
   modeled ex-open, use holdings before that open's fills, and become cash at a
-  later modeled close; receivables are included in value in the interim. A
+  later modeled close; receivables are included in portfolio/allocation
+  valuation but cannot fund buys before payment. A
   same-product split at ex-open is rejected, and caller prices must not already
   include the distribution adjustment. It accepts explicit synthetic rate
   events at modeled opens/closes using simple ACT/365 accrual only; the first

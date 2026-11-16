@@ -403,6 +403,41 @@ class InvestmentTests(unittest.TestCase):
             Decimal(result["curve"][4]["cash_gbp"]), expected_cash,
             msg=f"cash={result['curve'][4]['cash_gbp']} expected={expected_cash}")
 
+    def test_synthetic_contribution_allocation_values_unpaid_distribution_receivable(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "10", "9"),
+            self.synthetic_bar("equity", 3, "9", "9"),
+            self.synthetic_bar("equity", 4, "9", "9"),
+        ]
+        contribution_at = bars[2]["close_at"]
+        ex_at = bars[2]["open_at"]
+        pay_at = bars[4]["close_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "80"}, bars,
+            contributions=[{"id": "new-cash", "timestamp": contribution_at,
+                            "available_at": contribution_at, "amount_gbp": "100"}],
+            cash_rates=self.zero_cash_rates(bars),
+            distributions=[{"id": "unpaid-distribution", "product_id": "equity",
+                            "ex_at": ex_at, "pay_at": pay_at, "available_at": ex_at,
+                            "amount_per_unit_gbp": "1"}])
+
+        self.assertEqual(result["curve"][2]["equity_gbp"], "1100")
+        self.assertEqual(result["curve"][2]["distribution_receivables_gbp"], "80")
+        self.assertEqual(result["curve"][3]["fills"][0]["quantity"], "17")
+        self.assertEqual(result["curve"][3]["fills"][0]["notional_gbp"], "153")
+        self.assertEqual(result["curve"][3]["equity_gbp"], "1100")
+        self.assertEqual(result["curve"][3]["cash_gbp"], "147")
+        self.assertEqual(result["curve"][3]["distribution_receivables_gbp"], "80")
+        self.assertEqual(result["curve"][4]["cash_gbp"], "227")
+        self.assertEqual(result["curve"][4]["distribution_receivables_gbp"], "0")
+        self.assertEqual(result["curve"][4]["equity_gbp"], "1100")
+        self.assertEqual(result["summary"]["holdings"], [
+            {"product_id": "equity", "quantity": "97"}])
+
     def test_synthetic_full_cash_withdrawal_and_refunding_preserve_unit_link(self):
         products = [{"id": "equity", "quantity_increment": "1",
                      "minimum_notional_gbp": "2000"}]
@@ -1169,6 +1204,109 @@ class InvestmentTests(unittest.TestCase):
             ev("larger", "contribution", amount_gbp="100")]
         rejected = report(replay(minimum, minimum_values, NOW), NOW)
         self.assertEqual(rejected["proposal"]["status"], "no_trade")
+
+    def test_sell_rebalance_waits_for_recorded_proceeds_before_buying(self):
+        spec = deepcopy(self.spec)
+        spec["policy"]["targets"] = {"equity": "60", "bond": "20", "cash": "20"}
+        spec["products"].append(dict(spec["products"][0], id="bond", sleeve="bond"))
+        values = demo_events(NOW) + [
+            ev("bond-reference", "mark", product_id="bond", price_gbp="10")]
+        proposal = report(replay(spec, values, NOW), NOW)["proposal"]
+        self.assertEqual(proposal["status"], "review")
+        self.assertEqual(proposal["orders"], [{
+            "account_id": "broker", "product_id": "equity", "side": "sell",
+            "quantity": "20", "estimated_notional_gbp": "200",
+        }])
+        self.assertFalse(proposal["execution_enabled"])
+        self.assertIn("recorded", proposal["reason"].lower())
+
+        values.append(ev("actual-sale", "sell", product_id="equity",
+                         quantity="20", price_gbp="10", fee_gbp="0"))
+        after = report(replay(spec, values, NOW), NOW)["proposal"]
+        self.assertEqual(after["orders"], [{
+            "account_id": "broker", "product_id": "bond", "side": "buy",
+            "quantity": "20", "estimated_notional_gbp": "200",
+        }])
+
+    def test_sell_rebalance_requires_review_and_respects_increment_and_minimum(self):
+        later = NOW + timedelta(days=31)
+        values = demo_events(NOW) + [
+            ev("fresh", "mark", at=later, product_id="equity", price_gbp="11")]
+        monthly = report(replay(self.spec, values, later), later)["proposal"]
+        self.assertEqual(monthly["orders"], [])
+
+        annual = NOW.replace(year=2027)
+        values[-1] = ev("annual", "mark", at=annual, product_id="equity", price_gbp="11")
+        proposal = report(replay(self.spec, values, annual), annual)["proposal"]
+        self.assertEqual(proposal["orders"][0]["side"], "sell")
+        self.assertEqual(proposal["orders"][0]["quantity"], "1")
+        self.assertEqual(proposal["orders"][0]["estimated_notional_gbp"], "11")
+        expensive_minimum = deepcopy(self.spec)
+        expensive_minimum["products"][0]["minimum_notional_gbp"] = "12"
+        self.assertEqual(report(replay(expensive_minimum, values, annual), annual)
+                         ["proposal"]["orders"], [])
+
+    def test_sell_rebalance_conserves_excess_across_accounts_and_blocks_incomplete_marks(self):
+        spec = deepcopy(self.spec)
+        spec["accounts"].append(dict(spec["accounts"][0], id="broker-2",
+                                     binding="synthetic-broker-2"))
+        spec["policy"]["targets"] = {"equity": "75", "bond": "0", "cash": "25"}
+        values = [
+            ev("fund-a", "contribution", amount_gbp="30"),
+            ev("fund-b", "contribution", account="broker-2", amount_gbp="770"),
+            ev("fund-savings", "contribution", account="savings", amount_gbp="200"),
+            ev("mark-a", "mark", product_id="equity", price_gbp="10"),
+            ev("mark-b", "mark", account="broker-2", product_id="equity", price_gbp="10"),
+            ev("buy-a", "buy", product_id="equity", quantity="3", price_gbp="10", fee_gbp="0"),
+            ev("buy-b", "buy", account="broker-2", product_id="equity", quantity="77",
+               price_gbp="10", fee_gbp="0"),
+        ]
+        result = report(replay(spec, values, NOW), NOW)
+        self.assertEqual(result["proposal"]["orders"], [
+            {"account_id": "broker", "product_id": "equity", "side": "sell",
+             "quantity": "3", "estimated_notional_gbp": "30"},
+            {"account_id": "broker-2", "product_id": "equity", "side": "sell",
+             "quantity": "2", "estimated_notional_gbp": "20"},
+        ])
+        later = NOW + timedelta(hours=1)
+        values.append(ev("only-one-fresh", "mark", at=later, product_id="equity",
+                         price_gbp="10"))
+        blocked = report(replay(spec, values, later), later)["proposal"]
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked["orders"], [])
+        self.assertIsNone(blocked["expires_at"])
+
+    def test_sell_rebalance_with_partial_buy_reference_uses_only_recorded_cash(self):
+        spec = deepcopy(self.spec)
+        spec["policy"]["targets"] = {"equity": "60", "bond": "20", "cash": "20"}
+        spec["products"].extend([
+            dict(spec["products"][0], id="unmarked-bond", sleeve="bond"),
+            dict(spec["products"][0], id="bond", sleeve="bond"),
+        ])
+        values = demo_events(NOW) + [
+            ev("extra-cash", "contribution", amount_gbp="100"),
+            ev("bond-reference", "mark", product_id="bond", price_gbp="10"),
+        ]
+        proposal = report(replay(spec, values, NOW), NOW)["proposal"]
+        self.assertEqual(proposal["orders"], [
+            {"account_id": "broker", "product_id": "bond", "side": "buy",
+             "quantity": "8", "estimated_notional_gbp": "80"},
+            {"account_id": "broker", "product_id": "equity", "side": "sell",
+             "quantity": "14", "estimated_notional_gbp": "140"},
+        ])
+        self.assertIn("partial-reference", proposal["reason"])
+        self.assertIn("proposed sale proceeds do not fund purchases", proposal["reason"])
+
+    def test_sell_rebalance_remains_blocked_when_funded_target_product_is_missing(self):
+        spec = deepcopy(self.spec)
+        spec["policy"]["targets"] = {"equity": "60", "bond": "20", "cash": "20"}
+        values = demo_events(NOW) + [
+            ev("extra-cash", "contribution", amount_gbp="100")]
+        proposal = report(replay(spec, values, NOW), NOW)["proposal"]
+        self.assertEqual(proposal["status"], "blocked")
+        self.assertIn("Missing product", proposal["reason"])
+        self.assertEqual(proposal["orders"], [])
+        self.assertIsNone(proposal["expires_at"])
 
     def test_multiple_products_accounts_common_clock_and_projected_funding(self):
         spec = deepcopy(self.spec)

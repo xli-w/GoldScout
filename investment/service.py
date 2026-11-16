@@ -18,11 +18,12 @@ LIMITATIONS = [
     "No opening-position cost basis or inception is invented; empty evidenced inception required.",
     "Actual fill fees reduce cash/equity and gain; no forecast fees or automatic income adjustments.",
     "MWR is unavailable; inflation, tax, research, broker features and automatic execution deferred.",
-    "Proposals are expiring export-only suggestions. Fees/slippage for future purchases are not "
+    "Proposals are expiring export-only suggestions. Fees/slippage for future trades are not "
     "estimated; a human must recheck funding, costs, product suitability and prices.",
     "Broker cash covers estimated purchase notionals only; unknown fees and settlement mean "
     "full funding/executability remains unverified. Scheduled contributions are not spendable cash.",
-    "Monthly reviews use profile inception; review acknowledgements and sell rebalancing deferred.",
+    "Monthly reviews use profile inception; review acknowledgements are deferred. "
+    "Proposed sales do not fund purchases; actual settlement is not verified.",
 ]
 
 

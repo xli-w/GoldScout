@@ -27,7 +27,9 @@ task-specific operator approval and verified venue recovery semantics.
 
 Rebalancing is contribution-first; monthly review and annual/five-point drift rules
 implement the investor's chosen policy, not an optimality claim. The first slice
-generates buys only; sales and review acknowledgement/reset are deferred.
+generated buys only. The current planner also suggests bounded sales at annual or
+drift reviews, without using hypothetical proceeds to fund purchases; review
+acknowledgement/reset remains deferred.
 Unsupported purchase references are excluded, while independently supported
 purchases can produce a labelled partial correction. No AI/news, leverage,
 crypto or active forecasting dependency enters the core.

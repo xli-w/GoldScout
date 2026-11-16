@@ -59,6 +59,24 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
 
+    def test_recorded_sell_proposal_is_read_only_and_schema_valid(self):
+        spec = demo_profile(self.now)
+        spec["policy"]["targets"] = {"equity": "60", "bond": "20", "cash": "20"}
+        spec["products"].append(dict(spec["products"][0], id="bond", sleeve="bond"))
+        initialize(self.path, spec, self.now)
+        import_events(self.path, demo_events(self.now), self.now)
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            proposal = response.json()["proposal"]
+            self.assertEqual([(order["side"], order["quantity"])
+                              for order in proposal["orders"]], [("sell", "20")])
+            self.assertFalse(proposal["execution_enabled"])
+            self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
+                                         headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+        self.assertEqual(self.path.read_bytes(), original)
+
     def test_legacy_source_does_not_implicitly_supply_investment_records(self):
         with self.client(database=self.path) as client:
             self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 503)

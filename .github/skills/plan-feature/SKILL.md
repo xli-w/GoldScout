@@ -10,6 +10,6 @@ For strategy/portfolio research, read [investor context](../../../docs/investmen
 
 For changes under `investment/`, also use
 [`investment-system-development`](../investment-system-development/SKILL.md).
-Distinguish the implemented GBP-only recorded accounting/buy-only export path
+Distinguish the implemented GBP-only recorded accounting/export-only proposal path
 from the planned continuous simulator and broker execution. Synthetic simulation
 tests are engineering evidence only; do not describe them as performance research.

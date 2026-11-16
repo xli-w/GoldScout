@@ -86,6 +86,32 @@ def plan(ledger, now, equity, as_of, allocation):
                 budget -= notional
                 need -= notional
                 expires = min(expires, mark[1] + maximum)
+    if annual or drift:
+        products = {product["id"]: product for product in ledger.spec["products"]}
+        excesses = {
+            sleeve: max(ZERO, sum(
+                quantity * ledger.marks[key][0]
+                for key, quantity in ledger.holdings.items()
+                if quantity > 0 and products[key[1]]["sleeve"] == sleeve
+            ) - equity * number(policy["targets"][sleeve]) / 100)
+            for sleeve in ("equity", "bond")
+        }
+        for (account_id, product_id), held in sorted(ledger.holdings.items()):
+            product = products[product_id]
+            excess = excesses[product["sleeve"]]
+            if held <= 0 or excess <= 0:
+                continue
+            price = ledger.marks[(account_id, product_id)][0]
+            increment = number(product["quantity_increment"])
+            quantity = (min(held, excess / price) / increment).to_integral_value(
+                rounding=ROUND_FLOOR) * increment
+            notional = quantity * price
+            if quantity <= 0 or notional < number(product["minimum_notional_gbp"]):
+                continue
+            orders.append({"account_id": account_id, "product_id": product_id,
+                           "side": "sell", "quantity": fmt(quantity),
+                           "estimated_notional_gbp": fmt(notional)})
+            excesses[product["sleeve"]] -= notional
     manual = []
     if sum(ledger.cash[a["id"]] for a in ledger.spec["accounts"] if a["kind"] == "deposit"):
         manual.append("External bank deposits are not broker order funding. Record an actual "
@@ -93,7 +119,8 @@ def plan(ledger, now, equity, as_of, allocation):
     base.update(manual_transfers=manual)
     if orders:
         base.update(status="review", orders=orders, expires_at=iso(expires),
-                    reason=f"Human policy {policy['id']}: contribution-first cash-backed notionals; "
+                    reason=f"Human policy {policy['id']}: purchases use recorded broker cash only; "
+                    "proposed sale proceeds do not fund purchases; "
                     "eligibility, ownership, settlement and venue costs unverified; "
                     "manual review of prices, fees and product suitability required")
         if stale_reference:
@@ -105,5 +132,5 @@ def plan(ledger, now, equity, as_of, allocation):
                     expires_at=None)
     elif annual or drift:
         base["reason"] = ("Annual or >=5 percentage-point sleeve review due; no funded purchases. "
-                          "Sales/rebalancing requiring external funding are not proposed.")
+                          "No eligible sale meets the declared increment and minimum.")
     return base

@@ -13,9 +13,16 @@ research sources and unresolved gates.
 Prioritise accurate GBP measurement and contribution-first discipline. Use
 monthly reviews and annual/five-percentage-point drift proposals; the investor
 chooses the allocation rather than optimising it against historical returns.
-Interest-bearing eligible GBP savings is the primary cash comparator; keep
-NatWest's applicable 0% counterfactual for context, not as sufficient investment
-justification. Exact product/account/data rights remain to be verified.
+The investor selected a Bank of England quoted household instant-access deposit
+rate for a GBP 1,000 balance as the primary cash **proxy**, using the
+excluding-guaranteed-bonus series; show the bonus-inclusive series as a
+sensitivity. These monthly advertised-rate averages are gross of tax, omit
+account fees and are not the investor's own available or realized savings rate.
+Keep NatWest's applicable 0% current-account counterfactual distinct, not as
+sufficient investment justification. The exact BoE series identifier/vintage,
+operator-held account, and investment product/account eligibility remain to be
+verified. Historical market data stays public or operator-supplied only; no paid
+feed or authenticated broker data is authorized.
 
 The earlier six-month return aspiration, stop-based risk profiles, leverage/crypto
 challengers and +5-point NatWest gate below are **historical campaign assumptions**,
@@ -24,8 +31,8 @@ history. The 60-candidate ceiling, predeclaration, adverse costs, causal account
 and single-use report-only holdout remain controls for future research. A changed
 mandate cannot erase previously exposed samples.
 
-The current engineering release is offline GBP tracking and buy-only export-only
-proposals, not a historical performance campaign or full sell rebalancer. The
+The current engineering release is offline GBP tracking and export-only buy/sell
+proposals, not a historical performance campaign or broker execution system. The
 next research phase starts with external feasibility and synthetic-only simulator
 engineering; it must not produce product-performance results until the gates in
 the protocol are met. The no-later-flow GBP 1,000 comparison remains a primary

@@ -8,7 +8,7 @@ agents: []
 
 Follow [safety invariants](../../docs/safety-invariants.md). You have read/search tools only: never edit, execute commands, access secrets, or contact the broker.
 
-For investment accounting/planning, use [investment-system-development](../skills/investment-system-development/SKILL.md) as a checklist and verify the actual implementation, especially mark availability, zero-capital unitization, transfer/contribution neutrality, partial proposal coverage, and buy-only execution-disabled output.
+For investment accounting/planning, use [investment-system-development](../skills/investment-system-development/SKILL.md) as a checklist and verify the actual implementation, especially mark availability, zero-capital unitization, transfer/contribution neutrality, partial proposal coverage, bounded sales, recorded-cash-only buys, and execution-disabled output.
 
 Review the supplied change and nearby controlling code; use the relevant domain skills as checklists. Trace callers and tests only as needed to establish a finding. Treat review reports as historical hypotheses, not current truth.
 

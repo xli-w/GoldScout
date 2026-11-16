@@ -26,6 +26,23 @@ test("investment guide remains usable when recorded investment data is unavailab
   await page.locator(".record-toolbar").getByRole("link", { name: "Investment guide" }).click();
   await expect(page.getByRole("heading", { name: "Ownership, not short-term prediction" })).toBeVisible();
   await expect(page.getByText(/Losses can be large, prolonged or permanent/)).toBeVisible();
+  await expect(page.getByText(/Proposed sale proceeds never fund purchases/)).toBeVisible();
+});
+
+test("investment view displays a non-executable sell proposal", async ({ page }) => {
+  const response = await page.request.get("/api/investment/v1/snapshot");
+  expect(response.ok()).toBeTruthy();
+  const report = await response.json();
+  report.proposal.status = "review";
+  report.proposal.reason = "Proposed sale proceeds do not fund purchases.";
+  report.proposal.orders = [{ account_id: "broker", product_id: "equity", side: "sell",
+    quantity: "20", estimated_notional_gbp: "200" }];
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+  const row = page.getByLabel("Proposed investment changes").getByRole("row").nth(1);
+  await expect(row).toContainText("Sell");
+  await expect(row).toContainText("20");
+  await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
 });
 
 test("investment browser rejects invalid money instead of displaying an invented total", async ({ page }) => {

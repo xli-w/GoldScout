@@ -11,7 +11,7 @@ In VS Code, check the chat customization UI/diagnostics for the two agents, four
 ## Research and Intelligence Scope
 
 The separate [investment path](investment.md) provides GBP-only recorded
-accounting and buy-only, export-only allocation proposals. Its store is not the
+accounting and export-only buy/sell allocation proposals. Its store is not the
 legacy trading ledger. Use temporary profiles/events/stores for development;
 unsupported FX, entitlement, corrections, historical research and execution must
 remain explicit rather than inferred from the legacy engine.

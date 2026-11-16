@@ -47,10 +47,13 @@ Before any portfolio performance comparison:
 
 Primary future comparison: one initial GBP 1,000 without later flows. Optional
 contribution scenarios must be labelled and matched; deposits are not performance.
-Use eligible interest-bearing GBP savings and diversified passive references,
-with NatWest retained only as additional context. Short product histories or
-missing regimes must be labelled limited/inconclusive, not repaired with synthetic
-or unlicensed proxy data. No comparison guarantees profitability.
+Use the investor-selected Bank of England instant-access quoted-rate proxy for
+GBP 1,000 balances, excluding guaranteed bonuses as primary and including them
+as a sensitivity, alongside diversified passive references. This is a market
+average, not an account-specific savings return; retain NatWest only as
+additional 0% context. Short product histories or missing regimes must be
+labelled limited/inconclusive, not repaired with synthetic or unlicensed proxy
+data. No comparison guarantees profitability.
 
 ## Historical trading protocol and runner evidence
 
@@ -147,7 +150,7 @@ From the repository root, `python -m bot.experiments prepare .\experiment.json` 
 1. **Importer integrity:** retain focused regressions for a handled write failure and simultaneous identical imports. They verify staging cleanup and atomic publication, but do not simulate abrupt process termination or establish cross-process filesystem behavior.
 2. **Feasibility evidence:** before building product-specific checks, identify the intended eligible products, public/user-supplied licensed sources, and applicable terms for the selected GBP cash comparator. These are external facts; stop if they cannot be substantiated.
 3. **Data-readiness audit:** the separate importer offers scoped `readiness` checks for XLON daily GBP units, sessions and declared bar/cash-rate availability, plus a read-only `normalize` view. The separate `fx-readiness` audit checks declared FX publication and maximum age only at supplied clocks; `fx-view` returns the complete selected observations at those clocks or rejects the view. Generic synthetic fixtures validate these engineering contracts; they do not prove complete event clocks or historical vintages, provide executable FX prices, or close external gates. See the [GBP](campaign-dataset.md#scoped-gbp-daily-readiness-audit) and [FX](campaign-dataset.md#complete-fx-observation-view) contracts. Price-basis truth/action reconciliation and foreign-currency conversion remain unsupported/unverified; never fill gaps or infer source facts.
-4. **Synthetic simulator mechanics:** `investment.simulation.simulate_synthetic_fixture` checks synchronized GBP observations, event-time availability, next-session-open buy-only fills, contribution/withdrawal unitization, quantity/minimum handling, an explicit proportional cost assumption, increment-preserving splits, per-unit distributions based on ex-open holdings and paid at a later modeled close, and explicit synthetic annual rates (0-1) accruing by simple ACT/365 between modeled boundaries. Withdrawals use available cash only; they do not liquidate holdings, and a cash shortfall fails closed. Distribution receivables contribute to value from the ex-open until payment; same-product splits at the ex-open are rejected. Price bars must be unadjusted for the supplied distribution, but provenance and basis cannot be verified. Unit value remains linked through full cash redemption and later contribution. The first open requires a rate; rate changes take effect only at modeled opens/closes, after interest through that clock is accrued. It is not connected to the campaign importer or any product history. It omits sales/liquidation, distribution source/entitlement verification, taxes/withholding, actual cash-product terms/accrual conventions, FX, inflation, fixed fees, spreads, slippage and real calendar/execution behavior. Its output is engineering-only and cannot support product returns or close a feasibility gate.
+4. **Synthetic simulator mechanics:** `investment.simulation.simulate_synthetic_fixture` checks synchronized GBP observations, event-time availability, next-session-open buy-only fills, contribution/withdrawal unitization, quantity/minimum handling, an explicit proportional cost assumption, increment-preserving splits, per-unit distributions based on ex-open holdings and paid at a later modeled close, and explicit synthetic annual rates (0-1) accruing by simple ACT/365 between modeled boundaries. Withdrawals use available cash only; they do not liquidate holdings, and a cash shortfall fails closed. Distribution receivables contribute to portfolio and contribution-allocation target value from the ex-open until payment, but are not spendable cash. Same-product splits at the ex-open are rejected. Price bars must be unadjusted for the supplied distribution, but provenance and basis cannot be verified. Unit value remains linked through full cash redemption and later contribution. The first open requires a rate; rate changes take effect only at modeled opens/closes, after interest through that clock is accrued. It is not connected to the campaign importer or any product history. It omits sales/liquidation, distribution source/entitlement verification, taxes/withholding, actual cash-product terms/accrual conventions, FX, inflation, fixed fees, spreads, slippage and real calendar/execution behavior. Its output is engineering-only and cannot support product returns or close a feasibility gate.
 5. **Accounting contract:** the separate pure fill helper checks ordered GBP-normalized long-only fill events, cash conservation and quantity conservation. It is not a portfolio valuation/accounting system; cash accrual, market marks/equity, distributions/actions, FX, risk, performance and costs beyond supplied fill fees remain unsupported. Any further accounting implementation must retain explicit action entitlement/payment and cash-rate conventions; no feasibility or performance claim follows from the helper.
 6. **Campaign integration:** only after those prerequisites are independently validated, assess integration and enforcement of the registered candidate budget, adverse-cost selection, and closed-unless-selected holdout. This order does not authorize a campaign run.
 
@@ -237,6 +240,104 @@ these choices do not establish product/account eligibility, usable FX and
 market histories, data rights, or action coverage. The 30% six-month return
 aspiration remains an aspiration, not a pass criterion. Public API
 documentation does not clear these gates or establish safe order recovery.
+
+### GBP passive-product feasibility follow-up (2026-11-16)
+
+This is a public-source follow-up for the new long-term GBP portfolio question;
+it does not replace the historical campaign's NatWest counterfactual or change
+its candidate ledger. No account, credentials, data feed or broker API was
+accessed. Issuer pages returned product facts and limited displayed price rows;
+these were not downloaded, retained or analyzed as return inputs.
+
+- **User-set cash benchmark and data boundary:** the investor selected the Bank
+  of England's monthly quoted household instant-access deposit rate for a
+  £1,000 balance, excluding guaranteed bonuses as the primary cash proxy and
+  showing the bonus-inclusive series as a sensitivity. The [BoE methodology](https://www.bankofengland.co.uk/statistics/details/further-details-about-quoted-household-interest-rates-data)
+  says these are weighted advertised rates, gross of tax, with fees omitted; the
+  product sample changes and values can be revised. This is not an account the
+  investor necessarily has or the rate they would have earned. Instant-access
+  rates are selected for £1,000 balances; both bonus treatments have series
+  from January 2011. The BoE [Database terms](https://www.bankofengland.co.uk/legal)
+  state that statistical data may be reused under the UK Open Government
+  Licence, subject to its terms/attribution. No rate series was downloaded; the
+  exact series identifier and vintage convention must be frozen before data
+  use. The investor confirmed the existing public/user-supplied-only market-data
+  policy; paid-data licensing research or acquisition is not authorized.
+- **Fund candidates (not selections):** issuer pages identify VWRP
+  (IE00BK5BQT80; accumulating, Irish UCITS, global developed/emerging large/mid
+  caps, USD base, GBP listing, 0.14% displayed ongoing charge, share-class
+  inception 2019-07-23) and VAGS (IE00BG47K971; accumulating, Irish UCITS,
+  global investment-grade/government bonds, GBP-hedged, 0.08% displayed ongoing
+  charge, share-class inception 2019-06-18). Both have only post-2019 live
+  share-class history. A GBP trading line does not hedge equity currency
+  exposure; bond hedging does not remove duration/credit risk. Issuer factsheets
+  and KIDs are linked from the [VWRP](https://www.vanguard.co.uk/professional/product/etf/equity/9679/ftse-all-world-ucits-etf-usd-accumulating)
+  and [VAGS](https://www.vanguard.co.uk/professional/product/etf/bond/9685/global-aggregate-bond-ucits-etf-gbp-hedged-accumulating)
+  pages. Confirm exact ISIN/share-class terms before use.
+- **Account/provider economics:** Trading 212's published
+  [Invest/ISA/SIPP tariff](https://helpcentre.trading212.com/hc/en-us/articles/11471996799517-What-are-the-fees-in-the-Invest-ISAs-and-SIPP)
+  lists free dealing commission/custody and a 0.15% FX fee. Its public API is
+  beta, supports Invest/Stocks ISA only, uses the account's primary currency
+  and does not support API multi-currency. Trading 212 says most instruments
+  can be fractional, with permitted precision varying by instrument/position;
+  that does not establish access to either fund or its fractional terms in the
+  investor's account. API market-order submissions are explicitly
+  non-idempotent, so this is not cleared for unattended execution. Vanguard's
+  [self-managed fee page](https://www.vanguardinvestor.co.uk/what-we-offer/fees-explained)
+  lists £4 monthly below £32,000 invested, before fund costs: £48 is 4.8% of
+  £1,000 in year one. This is a platform-cost finding, not a judgement on
+  Vanguard funds held elsewhere. The investor also requested an Alpaca screen:
+  [its public non-US account guide](https://alpaca.markets/learn/live-trading-account-non-us)
+  includes UK applicants, but the existing Alpaca API path is USD-oriented and
+  does not establish GBP cash, ISA access or access to VWRP/VAGS. The separate
+  [Europe Broker API](https://docs.alpaca.markets/eu/docs/about-broker-api)
+  is intended for fintech/investment-service partners; its documented initial
+  account types are taxable and margin, not a direct retail ISA. Neither
+  provider's exact account/product access was checked.
+- **Cash and protection:** NatWest Select remains a 0%-interest current-account
+  counterfactual, not the primary interest-bearing savings benchmark. Marcus's
+  [official page](https://www.marcus.co.uk/uk/en/savings/online-savings-account)
+  displays a variable 3.75% AER including a first-12-month bonus, but explicitly
+  dates its information 2025-08-13; it is not a verified current rate or a
+  historical account-rate series. No personal savings product is selected: the
+  BoE proxy above is used instead. FSCS confirms eligible bank deposits
+  are protected up to £120,000 per person per authorised firm from 2025-12-01;
+  investment protection is distinct and does not reimburse market losses.
+- **Tax:** GOV.UK lists 2026/27 ISA allowance/eligibility rules, but the
+  investor's eligibility and provider access are unconfirmed. HMRC's
+  [reporting-fund guidance](https://www.gov.uk/hmrc-internal-manuals/investment-funds/ifm13100)
+  explains UK tax on distributions and reported income, including undistributed
+  amounts. The current monthly [HMRC list](https://www.gov.uk/government/publications/approved-offshore-reporting-funds)
+  was updated 2026-11-04, but exact VWRP/VAGS ISIN status and periods have not
+  been independently checked in the published ODS. Do not assume an ISA or
+  taxable-account scenario.
+- **Data rights and history:** Vanguard's
+  [website terms](https://www.vanguard.co.uk/uk-fund-directory/terms-and-conditions)
+  permit only personal, informational, non-commercial use of site materials
+  (unless otherwise authorised) and prohibit repeated automated access and
+  copying/exploitation without permission. This is not a licence for scraping
+  or maintaining the research dataset. No persistent-use rights have been
+  confirmed for daily prices/NAV or total return, actions/distributions, GBP
+  FX, historical vintages or derived research series. A vendor/exchange source
+  may require a separate agreement; no dataset or agreement has been acquired.
+- **Portfolio-data and modelling gap:** a live accumulating ETF history cannot
+  provide pre-inception returns for those share classes. Any total-return input
+  must not double-count retained fund income/charges. Actions, price basis,
+  distribution treatment, FX availability, spreads and comparable costs must
+  be evidenced together on a chronological GBP clock; no proxy splicing is
+  approved.
+
+**Outcome: public feasibility screen complete; performance gate remains
+blocked.** The user-set BoE benchmark convention and public/user-supplied-only
+data boundary are recorded. Trading 212 has the stronger public fit for a GBP
+ISA-shaped screen; Alpaca remains a USD-oriented alternative with no established
+access to the selected funds. Neither account nor instrument access has been
+confirmed. Verify exact HMRC entries and an expressly permitted retained
+product-history source before loading any market history; if unavailable within
+the approved data boundary, stop. Do not run comparative returns, acquire
+product prices, or infer suitability from public tariffs. See the [investment
+guide](investment.md#feasibility-follow-up-2026-11-16) for the corresponding
+provider matrix.
 
 ### Phase 1: offline data and simulator validation
 

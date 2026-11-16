@@ -13,8 +13,9 @@ accounting and explicit research/broker blockers.
 - A human chooses the allocation across global equities, high-quality bonds and
   GBP cash; there is no automatic "best backtest" selection.
 - Contribution-first planning, monthly review and annual/five-percentage-point
-  drift reviews aim to limit unnecessary turnover. First-release proposals are
-  buy-only; sales and review acknowledgements are deferred. No trade is valid.
+  drift reviews aim to limit unnecessary turnover. Export-only sales can be
+  suggested at annual/drift reviews; proposed proceeds do not fund purchases.
+  Review acknowledgements are deferred. No trade is valid.
 - GBP contributions are separated from investment gains. External savings are
   not broker buying power; manual inputs are not broker verification.
 - The read-only dashboard includes `/investment` and `/investment-guide`.

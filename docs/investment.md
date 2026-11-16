@@ -20,9 +20,12 @@ protection eligibility must be verified separately.
 The investor chooses the target allocation. Compare a small fixed set such as
 100% savings, 100% global equities, 80/20 and 60/40 equity/cash, 80/20 and 60/40
 equity/bonds, and 80/10/10 equity/bonds/cash. These are research recipes, not
-proven optima or product recommendations. Retain NatWest's published 0% current-
-account counterfactual for context, but verify applicable terms; use a genuinely
-eligible interest-bearing GBP savings alternative in the primary comparison.
+proven optima or product recommendations. Use the investor-selected Bank of
+England quoted instant-access rate for a GBP 1,000 balance, excluding guaranteed
+bonuses, as the primary cash proxy; show the bonus-inclusive series as a
+sensitivity. This is a market average, not a rate the investor necessarily
+receives. Retain NatWest's published 0% current-account counterfactual for
+context, but verify applicable terms.
 
 ## First offline release
 
@@ -115,12 +118,15 @@ implemented. Do not put credentials or private identifiers in shared example fil
 
 Monthly reviews use the human's fixed sleeve targets. Direct settled new cash to
 underweights first. Annual review or at least five absolute percentage points of
-sleeve drift flags review. This first release generates **buy-only** proposals,
-subject to recorded per-account cash and declared product increments/minimums.
-It does not generate sales to fund rebalancing. Retained cash/partial correction
-and no trade are legitimate outcomes. Review clocks are relative to profile
-inception; persistent reminders have no acknowledgement/reset workflow yet.
-Scheduled contributions are metadata, not spendable cash.
+sleeve drift flags review. At those annual/drift reviews, the planner can also
+suggest selling overweight holdings, bounded by recorded holdings and sleeve
+excess, using declared increments and minimum notionals. It processes holdings
+in account/product ID order; this is not tax optimisation. Proposed sale
+proceeds never fund buys in the same proposal. Record actual proceeds before
+considering another purchase and independently verify settlement. Retained
+cash/partial correction and no trade are legitimate outcomes. Review clocks are
+relative to profile inception; persistent reminders have no acknowledgement/reset
+workflow yet. Scheduled contributions are metadata, not spendable cash.
 
 An external deposit account cannot fund a broker purchase without an actual,
 recorded internal transfer. A transfer suggestion is not an instruction to a bank.
@@ -131,9 +137,11 @@ purchase remaining, the proposal is blocked. Unused zero-target products do not
 need purchase references. Exported proposals have expiry/revision information
 and **execution disabled**. They are not blanket authorisation for future trades.
 
-Purchase funding covers estimated notionals only. Future fees, slippage,
-settlement and venue permissions are not verified; a funded proposal is not proof
-of executable funding. A human must recheck those conditions and prices.
+Purchase funding covers estimated notionals only. Sale quantities and notionals
+are estimates based on recorded holdings and marks, not broker-verified
+availability. Future fees, slippage, settlement and venue permissions are not
+verified; a funded proposal is not proof of executable funding. A human must
+recheck those conditions and prices.
 
 No tight ATR stops are imposed on the new passive core. This is not a change to
 legacy stops or a guarantee against losses. Market drawdowns, missing evidence
@@ -158,9 +166,10 @@ availability no later than the ex-open, and a positive GBP amount per unit.
 Entitlement uses the holding before any fill at the ex-open. A same-product
 split at that open is rejected. The gross amount is recognized as a receivable
 from ex-open and converted to cash at the pay-close, before close-time external
-flows. Inputs must use unadjusted ex-distribution prices; the harness cannot
-verify that basis. This is not a tax, withholding, settlement, or historical
-entitlement model.
+flows. An unpaid receivable contributes to portfolio and contribution-allocation
+target valuation, but is not spendable cash until payment. Inputs must use
+unadjusted ex-distribution prices; the harness cannot verify that basis. This is
+not a tax, withholding, settlement, or historical entitlement model.
 
 Synthetic annual cash rates must be explicitly supplied at modeled open/close
 clocks, available by their effective time, and accrue by simple ACT/365 between
@@ -234,6 +243,40 @@ Read current product documents and verify exact broker availability, increments,
 wrapper/tax status and data rights before approval. The share classes began in
 2019: they do not supply direct 2008 product evidence. Do not splice proxy history
 into an allegedly executable series. A public chart/CSV is not a research licence.
+
+### Feasibility follow-up (2026-11-16)
+
+This follow-up verifies public product pages and published fee/terms pages only.
+It does not access an account, inspect the HMRC reporting-funds spreadsheet by
+ISIN, obtain a data licence, download a price-history dataset or establish
+eligibility. Issuer pages were not used as research return inputs.
+The investor selected the Bank of England's GBP 1,000 instant-access quoted-rate
+proxy, excluding guaranteed bonuses as the primary series and showing the
+bonus-inclusive series only as a sensitivity. Paid-data research is not
+authorized; the existing public/user-supplied-only boundary remains.
+
+| Gate | Public evidence | Status and consequence |
+| --- | --- | --- |
+| Equity candidate | Vanguard identifies VWRP, ISIN IE00BK5BQT80, as an accumulating Irish UCITS tracking developed/emerging large- and mid-cap equities; the page displays 0.14%, USD base currency, a GBP listing, and a 23 July 2019 share-class inception. | Candidate only. Its USD base means a GBP dealing line does not remove underlying currency risk. The short product life cannot support a long-period product-specific comparison. |
+| Bond candidate | Vanguard identifies VAGS, ISIN IE00BG47K971, as an accumulating GBP-hedged Irish UCITS global investment-grade/government bond fund; the page displays 0.08% and an 18 June 2019 share-class inception. | Candidate only. GBP hedging does not remove duration or credit risk; no product-specific performance run is authorized. |
+| Provider fit | [Trading 212's public API](https://docs.trading212.com/api) is beta, supports Invest and Stocks ISA accounts, and operates in the primary account currency without API multi-currency support. Its [fractional-share guidance](https://helpcentre.trading212.com/hc/en-us/articles/9511997937437-Can-I-trade-with-fractional-shares) says most Invest/ISA instruments support fractional dealing, with precision depending on instrument and position. [Alpaca's non-US onboarding guide](https://alpaca.markets/learn/live-trading-account-non-us) includes UK applicants, but its separate [Europe Broker API](https://docs.alpaca.markets/eu/docs/about-broker-api) is a partner service; its [account-opening documentation](https://docs.alpaca.markets/eu/docs/account-opening) says initial European account types are taxable and margin, not tax-advantaged registered accounts. | Trading 212 is the more plausible public candidate for a GBP/ISA-shaped review, not a selection. Alpaca's existing API path is USD-oriented and public sources do not establish GBP cash, ISA access, or access to VWRP/VAGS. Exact account approval, product listings, fractional precision and terms remain operator-confirmation items. Trading 212's [market-order API](https://docs.trading212.com/api/orders/placemarketorder) is non-idempotent, a separate blocker for automated execution. |
+| Platform costs | Trading 212's published tariff lists free commission/custody and a 0.15% FX fee. Vanguard's self-managed service lists £4 monthly below £32,000 invested, plus fund costs. | At £1,000, Vanguard's £48 annual account fee is 4.8% of initial capital before fund costs. Exact Trading 212 instrument availability and applicable account terms require operator confirmation. |
+| Cash comparator | NatWest Select remains a 0% current-account counterfactual, not an interest-bearing savings product. Marcus publicly displays 3.75% AER with a 0.49% first-year bonus, but its own page says the rates are correct as of 13 August 2025 and variable. The [Bank of England's quoted-rate methodology](https://www.bankofengland.co.uk/statistics/details/further-details-about-quoted-household-interest-rates-data) describes monthly quoted household rates, including instant-access deposits selected for £1,000 balances. | The selected primary proxy is the instant-access series excluding guaranteed bonuses; show the bonus-inclusive series as a sensitivity. Rates are advertised, gross of tax, do not include account fees, and reflect changing products/institutions—not the investor's own account. Do not use Marcus's stale-dated headline as a current or historical rate. Freeze the exact BoE series identifier and vintage convention before any data use. |
+| Deposit protection | FSCS states the deposit limit is £120,000 per eligible person, per authorised firm from 1 December 2025; investment protection is separate and does not cover poor market performance. | Protection is conditional on eligible deposit/account/institution status; it is not inflation protection or a fund-value guarantee. |
+| Tax and wrapper | GOV.UK confirms the 2026/27 ISA allowance and general age/residency eligibility. HMRC says reporting-fund income can include undistributed excess reported income. Its reporting-funds list is monthly; the exact candidate ISIN entries and periods have not been independently checked in the ODS list. | Do not assume the investor's ISA eligibility/allowance or a taxable-account treatment. Keep pre-tax comparisons distinct; exact share-class status, tax assumptions and personal circumstances remain unverified. |
+| Historical data rights | The [Bank of England Database terms](https://www.bankofengland.co.uk/legal) state that its statistical data may be reused under the UK Open Government Licence, subject to attribution; its quoted-rate methodology describes monthly weighted advertised rates and revisions. Vanguard's website terms limit use of site material to personal, informational, non-commercial use (or written authorisation) and prohibit repeated automated access and copying/exploitation absent authorisation. | The BoE cash-rate source is a public-data candidate under OGL; no rate data was acquired, and the precise series/vintage still needs to be frozen. No source is cleared for a retained, checksummed product-history dataset with prices/NAV, total-return or distribution treatment, actions, GBP FX and point-in-time vintages. Do not scrape issuer pages or treat public display as a research licence. Paid licensing remains outside the approved boundary. |
+
+**Gate result: blocked.** The cash benchmark convention and public-data boundary
+are now specified, but the proxy is not a personal savings product and neither
+fund is selected. Trading 212 and Alpaca are public-screen candidates only; the
+operator must confirm the intended provider/account and product availability
+outside this work. Exact HMRC share-class reporting status remains unchecked.
+Most importantly, no public or operator-supplied source has been established
+with permitted persistent use of complete product price/total-return/action/FX
+history and vintages. If that cannot be evidenced within the approved
+public/user-supplied-only scope, stop rather than acquire paid data. No product
+price-history dataset was downloaded or analyzed as return evidence, no account
+was accessed and no return comparison ran.
 
 ## Explicit follow-on gates
 
