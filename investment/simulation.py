@@ -8,14 +8,14 @@ from .core import clock, fields, fmt, iso, number, text
 MAX_PRODUCTS = 25
 MAX_SESSIONS = 10000
 MAX_BARS = 250000
-MAX_CONTRIBUTIONS = 10000
+MAX_CASH_FLOWS = 10000
 MAX_ACTIONS = 10000
 MAX_VALUE = Decimal("1e24")
 
 LIMITATIONS = [
     "Callers must supply synthetic fixtures; input provenance is not verified. Output is not product-performance evidence or an investment recommendation.",
     "All products must have synchronized GBP open/close observations; calendars and source rights are not verified.",
-    "Only positive external contributions and buy-only fixed-target allocation are modeled; no sales or withdrawals.",
+    "Only positive contributions, cash-funded withdrawals, and buy-only fixed-target allocation are modeled; no sales or withdrawal-funded liquidation.",
     "Only synthetic splits at modeled opens and cash rates at modeled opens/closes are supported; cash accrual uses declared simple ACT/365 assumptions, not verified account terms.",
     "Dividends/distributions, FX, taxes, inflation, fixed fees, spreads and slippage are unsupported.",
     "The proportional variable-cost input is an assumption, not a validated execution-cost estimate.",
@@ -116,30 +116,38 @@ def _sessions(rows, products):
     return ordered
 
 
-def _contributions(values, close_times):
-    if not isinstance(values, (list, tuple)) or len(values) > MAX_CONTRIBUTIONS:
-        raise InvestmentError(f"At most {MAX_CONTRIBUTIONS} synthetic contributions are supported")
+def _cash_flows(contributions, withdrawals, close_times):
+    if (not isinstance(contributions, (list, tuple))
+            or not isinstance(withdrawals, (list, tuple))
+            or len(contributions) + len(withdrawals) > MAX_CASH_FLOWS):
+        raise InvestmentError(f"At most {MAX_CASH_FLOWS} synthetic cash flows are supported")
     required = ("id", "timestamp", "available_at", "amount_gbp")
     parsed = {}
     identifiers = set()
-    previous_key = None
-    for row in values:
-        fields(row, required)
-        identifier = text(row["id"])
-        timestamp = clock(row["timestamp"])
-        available_at = clock(row["available_at"])
-        amount = _bounded(row["amount_gbp"], positive=True)
-        key = (timestamp, identifier)
-        if identifier in identifiers:
-            raise InvestmentError("Duplicate synthetic contribution ID")
-        if previous_key is not None and key <= previous_key:
-            raise InvestmentError("Contributions must be ordered by timestamp and ID")
-        if timestamp not in close_times or available_at > timestamp:
-            raise InvestmentError("Contribution must be available by a modeled close clock")
-        identifiers.add(identifier)
-        parsed.setdefault(timestamp, Decimal(0))
-        parsed[timestamp] += amount
-        previous_key = key
+    for flow_name, values in (("contribution", contributions), ("withdrawal", withdrawals)):
+        previous_key = None
+        for row in values:
+            fields(row, required)
+            identifier = text(row["id"])
+            timestamp = clock(row["timestamp"])
+            available_at = clock(row["available_at"])
+            amount = _bounded(row["amount_gbp"], positive=True)
+            key = (timestamp, identifier)
+            if identifier in identifiers:
+                raise InvestmentError("Duplicate synthetic cash-flow ID")
+            if previous_key is not None and key <= previous_key:
+                raise InvestmentError(
+                    f"Synthetic {flow_name}s must be ordered by timestamp and ID")
+            if timestamp not in close_times or available_at > timestamp:
+                raise InvestmentError(
+                    f"Synthetic {flow_name} must be available by a modeled close clock")
+            identifiers.add(identifier)
+            flow = parsed.setdefault(timestamp, {
+                "contributions": Decimal(0),
+                "withdrawals": Decimal(0),
+            })
+            flow[flow_name + "s"] += amount
+            previous_key = key
     return parsed
 
 
@@ -305,14 +313,15 @@ def _allocation_budgets(products, holdings, prices, cash, flow):
 
 def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                                contributions=(), variable_cost_bps="0", splits=(),
-                               cash_rates=()):
+                               cash_rates=(), withdrawals=()):
     """Run a bounded synthetic buy-only portfolio clock for engineering tests.
 
-    A close-time contribution creates allocation budgets for the next common
-    session's open. Cash interest uses synthetic rates and simple ACT/365
-    accrual between modeled open/close clocks. This function loads no external
-    data; callers must provide synthetic fixtures, whose provenance it cannot
-    independently verify.
+    Close-time net contributions create allocation budgets for the next common
+    session's open. Withdrawals use only available cash; sales are unsupported.
+    Cash interest uses synthetic rates and simple ACT/365 accrual between
+    modeled open/close clocks. This function loads no external data; callers
+    must provide synthetic fixtures, whose provenance it cannot independently
+    verify.
     """
     initial_cash = _bounded(initial_cash_gbp, positive=True)
     fee_bps = _bounded(variable_cost_bps)
@@ -323,7 +332,7 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     sessions = _sessions(bars, product_state)
     close_times = {session["close_at"] for _, session in sessions}
     open_times = {session["open_at"] for _, session in sessions}
-    external_flows = _contributions(contributions, close_times)
+    external_flows = _cash_flows(contributions, withdrawals, close_times)
     split_events = _splits(splits, product_state, open_times)
     rate_events = _cash_rates(cash_rates, open_times, close_times)
 
@@ -335,6 +344,7 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     peak = Decimal(1)
     worst_drawdown = Decimal(0)
     total_contributions = Decimal(0)
+    total_withdrawals = Decimal(0)
     total_fees = Decimal(0)
     total_cash_interest = Decimal(0)
     pending = {}
@@ -401,19 +411,27 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 peak = max(peak, unit_value)
                 worst_drawdown = min(worst_drawdown, unit_value / peak - 1)
 
-            flow = external_flows.get(session["close_at"], Decimal(0))
+            flows = external_flows.get(session["close_at"], {})
+            contribution = flows.get("contributions", Decimal(0))
+            withdrawal = flows.get("withdrawals", Decimal(0))
             if index == 0:
-                flow += initial_cash
+                contribution += initial_cash
+            flow = contribution - withdrawal
+            total_contributions += contribution
+            total_withdrawals += withdrawal
             if flow:
-                if units:
-                    units += flow / unit_value
-                else:
-                    units = flow
-                    unit_value = Decimal(1)
+                if cash + flow < 0:
+                    raise InvestmentError(
+                        "Synthetic withdrawal exceeds available cash; sales are unsupported")
+                units += flow / unit_value
+                if units < 0:
+                    raise InvestmentError("Synthetic withdrawal exceeds invested unit value")
                 cash += flow
-                total_contributions += flow
+            if flow > 0:
                 pending = _allocation_budgets(
                     product_state, holdings, prices, cash, flow)
+            elif flow < 0:
+                pending = {}
 
             close_rate_event = rate_events.get(session["close_at"])
             if close_rate_event is not None:
@@ -434,7 +452,9 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 "known_at": iso(session["close_at"]),
                 "equity_gbp": fmt(equity),
                 "cash_gbp": fmt(cash),
-                "net_contributions_gbp": fmt(total_contributions),
+                "total_contributions_gbp": fmt(total_contributions),
+                "total_withdrawals_gbp": fmt(total_withdrawals),
+                "net_contributions_gbp": fmt(total_contributions - total_withdrawals),
                 "unit_value": fmt(unit_value),
                 "twr_pct": fmt((unit_value - 1) * 100),
                 "drawdown_pct": fmt(-worst_drawdown * 100),
@@ -448,7 +468,8 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     with localcontext() as context:
         context.prec = 100
         ending_equity = _portfolio_value(cash, holdings, prices)
-        total_gain = ending_equity - total_contributions
+        net_contributions = total_contributions - total_withdrawals
+        total_gain = ending_equity - net_contributions
         total_return_pct = (unit_value - 1) * 100
         max_drawdown_pct = -worst_drawdown * 100
     return {
@@ -461,7 +482,9 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
         "summary": {
             "ending_equity_gbp": fmt(ending_equity),
             "cash_gbp": fmt(cash),
-            "net_contributions_gbp": fmt(total_contributions),
+            "total_contributions_gbp": fmt(total_contributions),
+            "total_withdrawals_gbp": fmt(total_withdrawals),
+            "net_contributions_gbp": fmt(net_contributions),
             "gain_gbp": fmt(total_gain),
             "twr_pct": fmt(total_return_pct),
             "max_drawdown_pct": fmt(max_drawdown_pct),

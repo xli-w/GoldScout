@@ -145,9 +145,11 @@ and operational failures are different concerns.
 harness intended only for caller-supplied synthetic fixtures; it does not verify
 their provenance. It requires synchronized GBP open/close observations whose
 availability equals the event time. It models fixed human-selected product
-weights, positive contributions at a close, buy-only allocation at the next
-session open, quantity increments, minimum notionals, an explicit proportional
-cost assumption, cash conservation, and a flow-neutral unitized curve. Synthetic
+weights, positive contributions and cash-funded withdrawals at a close,
+buy-only allocation at the next session open, quantity increments, minimum
+notionals, an explicit proportional cost assumption, cash conservation, and a
+flow-neutral unitized curve. Withdrawals cannot trigger sales; a cash shortfall
+fails closed. Synthetic
 split actions are accepted only at modeled session opens, with availability no
 later than effective time; a split must preserve the declared quantity increment.
 Synthetic annual cash rates must be explicitly supplied at modeled open/close
@@ -164,9 +166,10 @@ interest before that inception clock.
 This validates mechanics, not actual returns. The harness is not connected to
 the campaign dataset, investment store, dashboard, broker, or product research.
 Its synthetic label is not evidence that an input's provenance is synthetic.
-It does not model sales/withdrawals, dividends/distributions, account-specific
-cash terms/interest conventions, FX, taxes, inflation, fixed fees, spreads,
-slippage, venue calendars, or real execution. Apart from the narrow synthetic
+It does not model sales or liquidating holdings to fund a withdrawal,
+dividends/distributions, account-specific cash terms/interest conventions, FX,
+taxes, inflation, fixed fees, spreads, slippage, venue calendars, or real
+execution. Apart from the narrow synthetic
 split rule, other corporate actions remain unsupported. Its output is explicitly marked as synthetic-only and
 unsupported for product-performance claims. External research gates remain open.
 

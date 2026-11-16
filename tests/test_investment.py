@@ -189,6 +189,134 @@ class InvestmentTests(unittest.TestCase):
                 simulate_synthetic_fixture(
                     "1000", products, {"equity": "100"}, bars, cash_rates=schedule)
 
+    def test_synthetic_cash_withdrawal_is_flow_neutral_and_does_not_sell(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "11"),
+            self.synthetic_bar("equity", 2, "11", "12"),
+        ]
+        withdrawal_at = bars[1]["close_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "80"}, bars,
+            withdrawals=[{"id": "cash-withdrawal", "timestamp": withdrawal_at,
+                          "available_at": withdrawal_at, "amount_gbp": "100"}],
+            cash_rates=self.zero_cash_rates(bars))
+
+        self.assertEqual(result["curve"][1]["cash_gbp"], "100")
+        self.assertEqual(
+            [(fill["product_id"], fill["quantity"]) for fill in result["curve"][1]["fills"]],
+            [("equity", "80")])
+        self.assertEqual(result["curve"][1]["unit_value"], "1.08")
+        self.assertEqual(result["curve"][1]["net_contributions_gbp"], "900")
+        self.assertEqual(result["summary"]["ending_equity_gbp"], "1060")
+        self.assertEqual(result["summary"]["total_contributions_gbp"], "1000")
+        self.assertEqual(result["summary"]["total_withdrawals_gbp"], "100")
+        self.assertEqual(result["summary"]["net_contributions_gbp"], "900")
+        self.assertEqual(result["summary"]["gain_gbp"], "160")
+        self.assertEqual(result["summary"]["holdings"], [
+            {"product_id": "equity", "quantity": "80"}])
+
+    def test_synthetic_same_close_contribution_and_withdrawal_net_before_unitization(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+        ]
+        flow_at = bars[0]["close_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars,
+            contributions=[{"id": "same-clock-in", "timestamp": flow_at,
+                            "available_at": flow_at, "amount_gbp": "100"}],
+            withdrawals=[{"id": "same-clock-out", "timestamp": flow_at,
+                          "available_at": flow_at, "amount_gbp": "1050"}],
+            cash_rates=self.zero_cash_rates(bars))
+
+        self.assertEqual(result["curve"][0]["cash_gbp"], "50")
+        self.assertEqual(result["curve"][0]["unit_value"], "1")
+        self.assertEqual(result["curve"][0]["net_contributions_gbp"], "50")
+        self.assertEqual(result["summary"]["total_contributions_gbp"], "1100")
+        self.assertEqual(result["summary"]["total_withdrawals_gbp"], "1050")
+        self.assertEqual(result["summary"]["net_contributions_gbp"], "50")
+
+    def test_synthetic_full_cash_withdrawal_and_refunding_preserve_unit_link(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "2000"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "10", "10"),
+        ]
+        first_open = NOW.replace(hour=8)
+        modeled_clocks = (
+            (first_open, first_open + timedelta(hours=1)),
+            (first_open + timedelta(days=1, hours=1),
+             first_open + timedelta(days=1, hours=2)),
+            (first_open + timedelta(days=2, hours=1),
+             first_open + timedelta(days=2, hours=2)),
+        )
+        for bar, (open_at, close_at) in zip(bars, modeled_clocks):
+            bar["open_at"] = bar["open_available_at"] = iso(open_at)
+            bar["close_at"] = bar["close_available_at"] = iso(close_at)
+        expected_unit_value = Decimal("1.001")
+        withdrawal_amount = "1001"
+        withdrawal_at = bars[1]["close_at"]
+        contribution_at = bars[2]["close_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars,
+            contributions=[{"id": "refunding", "timestamp": contribution_at,
+                            "available_at": contribution_at, "amount_gbp": "1000"}],
+            withdrawals=[{"id": "full-redemption", "timestamp": withdrawal_at,
+                          "available_at": withdrawal_at, "amount_gbp": withdrawal_amount}],
+            cash_rates=[
+                {"id": "initial-rate", "effective_at": bars[0]["open_at"],
+                 "available_at": bars[0]["open_at"], "annual_rate": "0.365"},
+                {"id": "zero-rate", "effective_at": bars[1]["open_at"],
+                 "available_at": bars[1]["open_at"], "annual_rate": "0"},
+            ])
+
+        self.assertEqual(result["curve"][1]["cash_gbp"], "0")
+        self.assertEqual(Decimal(result["curve"][1]["unit_value"]), expected_unit_value)
+        self.assertLess(
+            abs(Decimal(result["curve"][2]["unit_value"]) - expected_unit_value),
+            Decimal("1e-90"))
+        self.assertEqual(result["summary"]["total_contributions_gbp"], "2000")
+        self.assertEqual(result["summary"]["total_withdrawals_gbp"], withdrawal_amount)
+        self.assertEqual(
+            Decimal(result["summary"]["net_contributions_gbp"]),
+            Decimal(999))
+        self.assertEqual(Decimal(result["summary"]["gain_gbp"]), Decimal(1))
+
+    def test_synthetic_cash_withdrawal_refuses_implicit_sales_and_late_events(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+        ]
+        withdrawal_at = bars[1]["close_at"]
+        unsupported_sale = [{"id": "unfunded", "timestamp": withdrawal_at,
+                             "available_at": withdrawal_at, "amount_gbp": "1"}]
+        with self.assertRaisesRegex(InvestmentError, "cash.*sales are unsupported"):
+            simulate_synthetic_fixture(
+                "1000", products, {"equity": "100"}, bars,
+                withdrawals=unsupported_sale, cash_rates=self.zero_cash_rates(bars))
+
+        invalid_events = (
+            [{"id": "off-clock", "timestamp": bars[1]["open_at"],
+              "available_at": bars[1]["open_at"], "amount_gbp": "1"}],
+            [{"id": "late", "timestamp": withdrawal_at,
+              "available_at": iso(NOW + timedelta(days=1, hours=5)),
+              "amount_gbp": "1"}],
+        )
+        for event in invalid_events:
+            with self.subTest(event=event), self.assertRaises(InvestmentError):
+                simulate_synthetic_fixture(
+                    "1000", products, {"equity": "100"}, bars,
+                    withdrawals=event, cash_rates=self.zero_cash_rates(bars))
+
     def test_synthetic_simulator_reports_minimum_notional_skips(self):
         products = [{"id": "equity", "quantity_increment": "1",
                      "minimum_notional_gbp": "1001"}]
