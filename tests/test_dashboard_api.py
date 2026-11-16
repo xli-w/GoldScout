@@ -57,7 +57,7 @@ class MemoryEventLoop(asyncio.SelectorEventLoop):
         self._selector.ready.set()
 
 
-class DashboardReaderTests(unittest.TestCase):
+class DashboardTestCase(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -91,6 +91,8 @@ class DashboardReaderTests(unittest.TestCase):
                                (payload, "2026-11-13T14:59:30+00:00"))
             connection.commit()
 
+
+class DashboardReaderTests(DashboardTestCase):
     def test_reads_do_not_modify_database_or_create_files(self):
         self.create_database()
         before = hashlib.sha256(self.database.read_bytes()).hexdigest()
@@ -169,7 +171,7 @@ class DashboardReaderTests(unittest.TestCase):
 
 
 @unittest.skipIf(TestClient is None, "Install requirements-dashboard-dev.txt for in-process API tests")
-class DashboardAPITests(DashboardReaderTests):
+class DashboardAPITests(DashboardTestCase):
     def client(self, database=None, scenario="healthy_recorded", process_check=None):
         return TestClient(create_app(database=database, scenario=scenario, clock=lambda: self.now, process_check=process_check, serve_frontend=False),
                           base_url="http://127.0.0.1", raise_server_exceptions=False,

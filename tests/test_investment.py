@@ -704,11 +704,28 @@ class InvestmentTests(unittest.TestCase):
             ev("annual", "mark", at=anniversary, product_id="equity", price_gbp="10")]
         annual = report(replay(self.spec, annual_values, anniversary), anniversary)
         self.assertIn("Annual", annual["proposal"]["reason"])
+
+        drift_time = NOW + timedelta(hours=1)
+        for price, expected_status in (("7.51", "no_trade"), ("7.5", "review"),
+                                       ("7.49", "review")):
+            drift_values = demo_events(NOW) + [
+                ev("drift-funding", "transfer", at=drift_time, account="savings",
+                   amount_gbp="40", destination_account_id="broker"),
+                ev("drift-mark", "mark", at=drift_time, product_id="equity",
+                   price_gbp=price)]
+            with self.subTest(price=price):
+                drift = report(replay(self.spec, drift_values, drift_time), drift_time)
+                self.assertEqual(drift["proposal"]["status"], expected_status)
+                if expected_status == "review":
+                    self.assertTrue(drift["proposal"]["orders"])
+                else:
+                    self.assertIn("below 5 percentage points", drift["proposal"]["reason"])
+
         minimum = deepcopy(self.spec)
         minimum["products"][0]["minimum_notional_gbp"] = "1000"
-        drift_values = demo_events(NOW) + [
+        minimum_values = demo_events(NOW) + [
             ev("larger", "contribution", amount_gbp="100")]
-        rejected = report(replay(minimum, drift_values, NOW), NOW)
+        rejected = report(replay(minimum, minimum_values, NOW), NOW)
         self.assertEqual(rejected["proposal"]["status"], "no_trade")
 
     def test_multiple_products_accounts_common_clock_and_projected_funding(self):
