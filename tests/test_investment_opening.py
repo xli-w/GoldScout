@@ -119,6 +119,27 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertFalse(result["proposal"]["execution_enabled"])
         self.assertEqual(read(self.database, NOW).cash["bank"], 1000)
 
+    def test_v2_report_attributes_only_recorded_fees_and_income(self):
+        initialize(self.database, profile(), NOW)
+        events = [
+            opening(),
+            event("recorded-buy", "buy", NOW, "broker", product_id="equity",
+                  quantity="1", price_gbp="10", fee_gbp="2"),
+            event("recorded-interest", "interest", NOW, "bank", amount_gbp="5"),
+            event("recorded-dividend", "dividend", NOW, "broker",
+                  product_id="equity", amount_gbp="3"),
+        ]
+        import_events(self.database, events, NOW)
+
+        result = snapshot(self.database, NOW)
+        self.assertEqual(result["equity_gbp"], "2006")
+        self.assertEqual(result["recorded_fees_gbp"], "2")
+        self.assertEqual(result["recorded_interest_gbp"], "5")
+        self.assertEqual(result["recorded_dividends_gbp"], "3")
+        self.assertEqual(result["recorded_income_gbp"], "8")
+        self.assertEqual(import_events(self.database, events[1:], NOW), result["revision"])
+        self.assertEqual(snapshot(self.database, NOW), result)
+
     def test_growth_history_separates_recorded_capital_from_gain_and_preserves_gaps(self):
         initialize(self.database, profile(), NOW)
         initial = opening()

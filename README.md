@@ -42,6 +42,8 @@ accounting and explicit research/broker blockers.
 - V2 growth history is derived only from recorded event clocks. Late or
   incomplete valuations remain visible as gaps; the dashboard does not
   interpolate between observations.
+- V2 fee and income attribution shows explicitly recorded events only; it
+  does not infer interest accrual or unrecorded income.
 - Full FX, corporate-action entitlement/accrual, money-weighted/inflation returns,
   licensed historical comparisons and human-approved broker execution remain
   gated follow-ons. A valid import is not proof of investment suitability.

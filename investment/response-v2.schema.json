@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -18,6 +18,10 @@
     "net_contributions_gbp": {"$ref": "#/$defs/decimal"},
     "since_baseline_gain_gbp": {"$ref": "#/$defs/nullableDecimal"},
     "lifetime_gain_gbp": {"type": "null"},
+    "recorded_fees_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+    "recorded_interest_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+    "recorded_dividends_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+    "recorded_income_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
     "twr_pct": {"$ref": "#/$defs/nullableDecimal"},
     "max_drawdown_pct": {"$ref": "#/$defs/nullableDecimal"},
     "accounts": {

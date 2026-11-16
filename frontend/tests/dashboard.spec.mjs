@@ -66,6 +66,8 @@ test("opening records show since-baseline value without inventing lifetime gain"
     generated_at: at, as_of: at, baseline_as_of: at, currency: "GBP", complete: true,
     equity_gbp: "2000", net_contributions_gbp: "0", since_baseline_gain_gbp: "0",
     lifetime_gain_gbp: null, twr_pct: "0", max_drawdown_pct: "0",
+    recorded_fees_gbp: "0", recorded_interest_gbp: "0",
+    recorded_dividends_gbp: "0", recorded_income_gbp: "0",
     cash_observations: [
       { account_id: "bank", balance_gbp: "990", difference_gbp: "-10",
         timestamp: "2025-12-01T12:00:00Z", available_at: "2025-12-01T12:00:00Z",
@@ -107,6 +109,11 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByRole("heading", { name: "Recorded growth history" })).toBeVisible();
   await expect(page.getByText("Gap: Incomplete synthetic valuation.")).toBeVisible();
   await expect(page.getByText("Only recorded valuation event clocks are shown. Lines connect observations; no intermediate values are inferred. Incomplete clocks remain gaps.")).toBeVisible();
+  const attribution = page.getByRole("region", { name: "Recorded fees and income" });
+  await expect(attribution.getByText("Recorded transaction fees")).toBeVisible();
+  await expect(attribution.getByText("Recorded interest")).toBeVisible();
+  await expect(attribution.getByText("Recorded dividends")).toBeVisible();
+  await expect(attribution.getByText("Recorded income total")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Reported savings-account terms" })).toBeVisible();
   await expect(page.getByText(/4.25% AER/)).toBeVisible();
   await expect(page.getByText(/not current provider verification or an interest-accrual input/)).toBeVisible();

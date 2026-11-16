@@ -23,6 +23,8 @@ export type InvestmentSnapshot = {
 type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | "allocation" | "holdings" | "accounts"> & {
   schema_version: 2; baseline_as_of: string | null; since_baseline_gain_gbp: string | null;
   lifetime_gain_gbp: null;
+  recorded_fees_gbp: string; recorded_interest_gbp: string; recorded_dividends_gbp: string;
+  recorded_income_gbp: string;
   cash_observations: { account_id: string; balance_gbp: string; difference_gbp: string;
     timestamp: string; available_at: string; source: string; evidence: string }[];
   valuation_history: {
@@ -188,6 +190,16 @@ export function InvestmentView() {
             <div><span>Net contributions</span><strong>{pounds(data.net_contributions_gbp)}</strong><small>Deposits are not profit</small></div>
             <div><span>{data.schema_version === 2 ? "Gain since baseline" : "Investment gain"}</span><strong>{pounds(data.schema_version === 2 ? data.since_baseline_gain_gbp : data.gain_gbp)}</strong><small>Net of recorded fees</small></div>
           </section>
+          {data.schema_version === 2 && <section className="history-group" aria-label="Recorded fees and income">
+            <h2>Recorded fees and income</h2>
+            <p className="position-note">Totals cover explicit journal events, including any before the baseline; coverage, tax and entitlement are not verified.</p>
+            <dl className="health-facts">
+              <div><dt>Recorded transaction fees</dt><dd>{pounds(data.recorded_fees_gbp)}</dd></div>
+              <div><dt>Recorded interest</dt><dd>{pounds(data.recorded_interest_gbp)}</dd></div>
+              <div><dt>Recorded dividends</dt><dd>{pounds(data.recorded_dividends_gbp)}</dd></div>
+              <div><dt>Recorded income total</dt><dd>{pounds(data.recorded_income_gbp)}</dd></div>
+            </dl>
+          </section>}
           {data.schema_version === 2 && <p className="position-note">Baseline as of {timestamp(data.baseline_as_of)}. Lifetime gain and prior cost basis are unavailable. No valuation freshness threshold is configured.</p>}
           <dl className="health-facts">
             <div><dt>Time-weighted return</dt><dd>{percent(data.twr_pct)}</dd></div>

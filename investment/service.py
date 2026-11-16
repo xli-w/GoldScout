@@ -99,6 +99,12 @@ def opening_report(ledger, now, source_mode="recorded"):
         baseline = ledger.baseline_value
         gain = (equity - baseline - (ledger.net - ledger.baseline_net)
                 if equity is not None and baseline is not None else None)
+        recorded_interest = sum(
+            (number(value["amount_gbp"]) for value in ledger.ids.values()
+             if value.get("type") == "interest"), ZERO)
+        recorded_dividends = sum(
+            (number(value["amount_gbp"]) for value in ledger.ids.values()
+             if value.get("type") == "dividend"), ZERO)
         products = {item["id"]: item for item in ledger.spec["products"]}
         holdings = []
         for (account, product_id), quantity in sorted(ledger.holdings.items()):
@@ -152,6 +158,10 @@ def opening_report(ledger, now, source_mode="recorded"):
             "currency": "GBP", "complete": equity is not None,
             "equity_gbp": fmt(equity), "net_contributions_gbp": fmt(ledger.net),
             "since_baseline_gain_gbp": fmt(gain), "lifetime_gain_gbp": None,
+            "recorded_fees_gbp": fmt(ledger.fees),
+            "recorded_interest_gbp": fmt(recorded_interest),
+            "recorded_dividends_gbp": fmt(recorded_dividends),
+            "recorded_income_gbp": fmt(recorded_interest + recorded_dividends),
             "twr_pct": fmt((ledger.unit_price - 1) * 100) if performance else None,
             "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],
@@ -180,6 +190,7 @@ def opening_report(ledger, now, source_mode="recorded"):
                 "Returns are since the first complete, contemporaneously evidenced baseline.",
                 "No valuation freshness threshold is configured; check the recorded dates.",
                 "Cash observations are evidence only; discrepancies do not update recorded balances.",
+                "Fee and income totals include only explicitly recorded events; completeness, tax and entitlement are not verified.",
                 "Allocation policy, proposals and execution are not implemented for this store.",
             ],
         }

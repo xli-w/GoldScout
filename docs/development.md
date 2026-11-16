@@ -26,6 +26,8 @@ V2 performance begins only at an evidenced complete common-clock baseline, not
 an invented pre-inception transaction or return.
 The v2 snapshot retains the bounded cash-observation history for reconciliation;
 the dashboard displays its latest records without applying corrections.
+Recorded fee and income attribution includes only explicit journaled fills and
+payments; it does not infer accrued cash interest or unrecorded entitlements.
 The v2 report also retains bounded replay-derived valuation history: same-clock
 events are grouped, source availability is explicit, and incomplete clocks are
 gaps rather than zeroes or interpolated values. The dashboard limits the chart
