@@ -31,15 +31,20 @@ historical simulation/selection, also use
   positive contributions, cash-funded close-time withdrawals (no liquidation),
   an assumed proportional fee, and synthetic
   split events known by modeled session opens. Split quantities must preserve
-  the declared increment. It accepts explicit synthetic rate events at modeled
-  opens/closes using simple ACT/365 accrual only; the first open needs a rate,
-  overnight uses the prior rate, and changes apply after accrual at their
-  effective boundary. Cash shortfalls on withdrawals fail closed. Unit value
-  remains linked through complete cash redemption and later contributions.
-  Initial capital enters at the first modeled close and earns no earlier
-  interest. This does not establish cash provider terms. It does not verify
-  input provenance and is not connected to the campaign dataset, store, CLI, or
-  product research. Preserve its
+  the declared increment. Synthetic per-unit distributions are known by a
+  modeled ex-open, use holdings before that open's fills, and become cash at a
+  later modeled close; receivables are included in value in the interim. A
+  same-product split at ex-open is rejected, and caller prices must not already
+  include the distribution adjustment. It accepts explicit synthetic rate
+  events at modeled opens/closes using simple ACT/365 accrual only; the first
+  open needs a rate, overnight uses the prior rate, and changes apply after
+  accrual at their effective boundary. Cash shortfalls on withdrawals fail
+  closed. Unit value remains linked through complete cash redemption and later
+  contributions. Initial capital enters at the first modeled close and earns no
+  earlier interest. This does not establish source entitlement, price basis,
+  tax treatment, or cash provider terms. It does not verify input provenance
+  and is not connected to the campaign dataset, store, CLI, or product research.
+  Preserve its
   synthetic-only output label and do not use it to imply a performance result;
   callers must not provide real product history.
 

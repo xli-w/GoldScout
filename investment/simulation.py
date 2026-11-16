@@ -16,8 +16,8 @@ LIMITATIONS = [
     "Callers must supply synthetic fixtures; input provenance is not verified. Output is not product-performance evidence or an investment recommendation.",
     "All products must have synchronized GBP open/close observations; calendars and source rights are not verified.",
     "Only positive contributions, cash-funded withdrawals, and buy-only fixed-target allocation are modeled; no sales or withdrawal-funded liquidation.",
-    "Only synthetic splits at modeled opens and cash rates at modeled opens/closes are supported; cash accrual uses declared simple ACT/365 assumptions, not verified account terms.",
-    "Dividends/distributions, FX, taxes, inflation, fixed fees, spreads and slippage are unsupported.",
+    "Only synthetic splits and distributions at modeled opens and cash rates at modeled opens/closes are supported; cash accrual uses declared simple ACT/365 assumptions, not verified account terms.",
+    "Distributions require unadjusted synthetic prices, accrue from modeled ex-open holdings, and pay at the supplied later close; price basis, taxes, FX, inflation, fixed fees, spreads and slippage are not verified.",
     "The proportional variable-cost input is an assumption, not a validated execution-cost estimate.",
     "No CLI, campaign dataset, broker, account, or live investment store is connected.",
 ]
@@ -30,10 +30,11 @@ def _bounded(value, positive=False):
     return result
 
 
-def _portfolio_value(cash, holdings, prices):
+def _portfolio_value(cash, holdings, prices, receivables):
     total = cash
     for product_id, quantity in holdings.items():
         total += quantity * prices[product_id]
+    total += sum(receivables.values(), Decimal(0))
     if total < 0 or total > MAX_VALUE:
         raise InvestmentError("Simulated portfolio value exceeds its bound")
     return total
@@ -189,6 +190,60 @@ def _splits(values, products, open_times):
     return parsed
 
 
+def _distributions(values, products, open_times, close_times, split_events):
+    if not isinstance(values, (list, tuple)) or len(values) > MAX_ACTIONS:
+        raise InvestmentError(f"At most {MAX_ACTIONS} synthetic distributions are supported")
+    required = ("id", "product_id", "ex_at", "pay_at", "available_at",
+                "amount_per_unit_gbp")
+    ex_events = {}
+    pay_events = {}
+    records = {}
+    identifiers = set()
+    previous_key = None
+    product_ex_clocks = set()
+    split_clocks = {
+        (effective_at, action["product_id"])
+        for effective_at, actions in split_events.items()
+        for action in actions
+    }
+    for row in values:
+        fields(row, required)
+        identifier = text(row["id"])
+        product_id = text(row["product_id"])
+        if product_id not in products:
+            raise InvestmentError("Distribution references an unconfigured product")
+        ex_at = clock(row["ex_at"])
+        pay_at = clock(row["pay_at"])
+        available_at = clock(row["available_at"])
+        amount_per_unit = _bounded(row["amount_per_unit_gbp"], positive=True)
+        key = (ex_at, product_id, identifier)
+        if identifier in identifiers:
+            raise InvestmentError("Duplicate synthetic distribution ID")
+        if previous_key is not None and key <= previous_key:
+            raise InvestmentError("Synthetic distributions must be in stable ex-time order")
+        if (ex_at not in open_times or pay_at not in close_times or pay_at <= ex_at
+                or available_at > ex_at
+                or (ex_at, product_id) in product_ex_clocks
+                or (ex_at, product_id) in split_clocks):
+            raise InvestmentError(
+                "Distribution must be known by a unique modeled ex-open and paid at a later modeled close")
+        identifiers.add(identifier)
+        product_ex_clocks.add((ex_at, product_id))
+        event = {
+            "id": identifier,
+            "product_id": product_id,
+            "ex_at": ex_at,
+            "pay_at": pay_at,
+            "available_at": available_at,
+            "amount_per_unit_gbp": amount_per_unit,
+        }
+        ex_events.setdefault(ex_at, []).append(event)
+        pay_events.setdefault(pay_at, []).append(identifier)
+        records[identifier] = event.copy()
+        previous_key = key
+    return ex_events, pay_events, records
+
+
 def _cash_rates(values, open_times, close_times):
     if not isinstance(values, (list, tuple)) or not values or len(values) > MAX_ACTIONS:
         raise InvestmentError(f"Between 1 and {MAX_ACTIONS} synthetic cash rates are required")
@@ -283,10 +338,10 @@ def _buy_at_open(product_id, budget, price, product, fee_rate, cash, holdings):
     }, None
 
 
-def _allocation_budgets(products, holdings, prices, cash, flow):
+def _allocation_budgets(products, holdings, prices, cash, flow, receivables):
     if flow <= 0 or cash <= 0:
         return {}
-    equity = _portfolio_value(cash, holdings, prices)
+    equity = _portfolio_value(cash, holdings, prices, receivables)
     deficits = {}
     for product_id, product in products.items():
         target_value = equity * product["weight"] / Decimal(100)
@@ -313,11 +368,12 @@ def _allocation_budgets(products, holdings, prices, cash, flow):
 
 def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                                contributions=(), variable_cost_bps="0", splits=(),
-                               cash_rates=(), withdrawals=()):
+                               cash_rates=(), withdrawals=(), distributions=()):
     """Run a bounded synthetic buy-only portfolio clock for engineering tests.
 
     Close-time net contributions create allocation budgets for the next common
     session's open. Withdrawals use only available cash; sales are unsupported.
+    Synthetic distributions accrue at a modeled ex-open and pay at a later close.
     Cash interest uses synthetic rates and simple ACT/365 accrual between
     modeled open/close clocks. This function loads no external data; callers
     must provide synthetic fixtures, whose provenance it cannot independently
@@ -334,17 +390,22 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     open_times = {session["open_at"] for _, session in sessions}
     external_flows = _cash_flows(contributions, withdrawals, close_times)
     split_events = _splits(splits, product_state, open_times)
+    distribution_events, distribution_payments, distribution_records = _distributions(
+        distributions, product_state, open_times, close_times, split_events)
     rate_events = _cash_rates(cash_rates, open_times, close_times)
 
     cash = Decimal(0)
     holdings = {}
     prices = {}
+    receivables = {}
     units = Decimal(0)
     unit_value = Decimal(1)
     peak = Decimal(1)
     worst_drawdown = Decimal(0)
     total_contributions = Decimal(0)
     total_withdrawals = Decimal(0)
+    total_distributions = Decimal(0)
+    total_distributions_paid = Decimal(0)
     total_fees = Decimal(0)
     total_cash_interest = Decimal(0)
     pending = {}
@@ -374,6 +435,20 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
             for action in applied_splits:
                 _apply_split(action, product_state, holdings)
                 applied_split_ids.append(action["id"])
+            accrued_distributions = []
+            for event in distribution_events.get(session["open_at"], []):
+                quantity = holdings.get(event["product_id"], Decimal(0))
+                if quantity <= 0:
+                    raise InvestmentError(
+                        "Synthetic distribution requires a positive ex-time holding")
+                amount = quantity * event["amount_per_unit_gbp"]
+                if amount <= 0 or amount > MAX_VALUE:
+                    raise InvestmentError("Synthetic distribution amount exceeds its bound")
+                receivables[event["id"]] = amount
+                distribution_records[event["id"]]["entitlement_quantity"] = quantity
+                distribution_records[event["id"]]["amount_gbp"] = amount
+                total_distributions += amount
+                accrued_distributions.append(event["id"])
             prices = {product_id: session_bars[product_id]["open"]
                       for product_id in product_state}
             fills = []
@@ -405,7 +480,15 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
 
             prices = {product_id: session_bars[product_id]["close"]
                       for product_id in product_state}
-            before_flow = _portfolio_value(cash, holdings, prices)
+            paid_distributions = []
+            for identifier in distribution_payments.get(session["close_at"], []):
+                amount = receivables.pop(identifier, None)
+                if amount is None:
+                    raise InvestmentError("Synthetic distribution payment has no accrued entitlement")
+                cash += amount
+                total_distributions_paid += amount
+                paid_distributions.append(identifier)
+            before_flow = _portfolio_value(cash, holdings, prices, receivables)
             if units:
                 unit_value = before_flow / units
                 peak = max(peak, unit_value)
@@ -429,7 +512,7 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 cash += flow
             if flow > 0:
                 pending = _allocation_budgets(
-                    product_state, holdings, prices, cash, flow)
+                    product_state, holdings, prices, cash, flow, receivables)
             elif flow < 0:
                 pending = {}
 
@@ -438,7 +521,7 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 active_rate = close_rate_event
             previous_close = session["close_at"]
 
-            equity = _portfolio_value(cash, holdings, prices)
+            equity = _portfolio_value(cash, holdings, prices, receivables)
             if units:
                 unit_value = equity / units
             if unit_value > peak:
@@ -452,6 +535,10 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 "known_at": iso(session["close_at"]),
                 "equity_gbp": fmt(equity),
                 "cash_gbp": fmt(cash),
+                "distribution_receivables_gbp": fmt(
+                    sum(receivables.values(), Decimal(0))),
+                "distributions_gbp": fmt(total_distributions),
+                "distributions_paid_gbp": fmt(total_distributions_paid),
                 "total_contributions_gbp": fmt(total_contributions),
                 "total_withdrawals_gbp": fmt(total_withdrawals),
                 "net_contributions_gbp": fmt(total_contributions - total_withdrawals),
@@ -462,12 +549,14 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 "cash_interest_gbp": fmt(total_cash_interest),
                 "fills": fills,
                 "splits": [action["id"] for action in applied_splits],
+                "distributions": accrued_distributions,
+                "distribution_payments": paid_distributions,
                 "unfilled_allocations": unfilled,
             })
 
     with localcontext() as context:
         context.prec = 100
-        ending_equity = _portfolio_value(cash, holdings, prices)
+        ending_equity = _portfolio_value(cash, holdings, prices, receivables)
         net_contributions = total_contributions - total_withdrawals
         total_gain = ending_equity - net_contributions
         total_return_pct = (unit_value - 1) * 100
@@ -482,6 +571,10 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
         "summary": {
             "ending_equity_gbp": fmt(ending_equity),
             "cash_gbp": fmt(cash),
+            "distribution_receivables_gbp": fmt(
+                sum(receivables.values(), Decimal(0))),
+            "distributions_gbp": fmt(total_distributions),
+            "distributions_paid_gbp": fmt(total_distributions_paid),
             "total_contributions_gbp": fmt(total_contributions),
             "total_withdrawals_gbp": fmt(total_withdrawals),
             "net_contributions_gbp": fmt(net_contributions),
@@ -495,6 +588,16 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                  "available_at": iso(event["available_at"]),
                  "annual_rate": fmt(event["annual_rate"])}
                 for effective_at, event in sorted(rate_events.items())
+            ],
+            "distributions": [
+                {"id": event["id"], "product_id": event["product_id"],
+                 "ex_at": iso(event["ex_at"]), "available_at": iso(event["available_at"]),
+                 "pay_at": iso(event["pay_at"]),
+                 "amount_per_unit_gbp": fmt(event["amount_per_unit_gbp"]),
+                 "entitlement_quantity": fmt(event["entitlement_quantity"]),
+                 "amount_gbp": fmt(event["amount_gbp"])}
+                for event in sorted(distribution_records.values(),
+                                    key=lambda item: (item["ex_at"], item["id"]))
             ],
             "holdings": [
                 {"product_id": product_id, "quantity": fmt(quantity)}

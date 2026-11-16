@@ -149,29 +149,40 @@ weights, positive contributions and cash-funded withdrawals at a close,
 buy-only allocation at the next session open, quantity increments, minimum
 notionals, an explicit proportional cost assumption, cash conservation, and a
 flow-neutral unitized curve. Withdrawals cannot trigger sales; a cash shortfall
-fails closed. Synthetic
-split actions are accepted only at modeled session opens, with availability no
-later than effective time; a split must preserve the declared quantity increment.
+fails closed. Synthetic split actions are accepted only at modeled session
+opens, with availability no later than effective time; a split must preserve
+the declared quantity increment.
+
+Synthetic distributions specify a product, ex-open, later modeled pay-close,
+availability no later than the ex-open, and a positive GBP amount per unit.
+Entitlement uses the holding before any fill at the ex-open. A same-product
+split at that open is rejected. The gross amount is recognized as a receivable
+from ex-open and converted to cash at the pay-close, before close-time external
+flows. Inputs must use unadjusted ex-distribution prices; the harness cannot
+verify that basis. This is not a tax, withholding, settlement, or historical
+entitlement model.
+
 Synthetic annual cash rates must be explicitly supplied at modeled open/close
 clocks, available by their effective time, and accrue by simple ACT/365 between
-clocks. This convention tests causal mechanics only; it is not a savings-account
-rate, AER, tier, withdrawal, tax, or provider-terms model. The first open needs
-an explicit rate (annual decimal from 0 to 1); a rate persists until the next
-declared change. Overnight accrual uses the prior effective rate before an open
-rate change; intraday accrual uses the rate effective at that open. Interest is
-credited at modeled boundaries and can compound in later intervals. Initial
-capital enters as a close-time flow at the first modeled close, so it earns no
-interest before that inception clock.
+clocks. This convention tests causal mechanics only; it is not a
+savings-account rate, AER, tier, withdrawal, tax, or provider-terms model. The
+first open needs an explicit rate (annual decimal from 0 to 1); a rate persists
+until the next declared change. Overnight accrual uses the prior effective rate
+before an open rate change; intraday accrual uses the rate effective at that
+open. Interest is credited at modeled boundaries and can compound in later
+intervals. Initial capital enters as a close-time flow at the first modeled
+close, so it earns no interest before that inception clock.
 
 This validates mechanics, not actual returns. The harness is not connected to
 the campaign dataset, investment store, dashboard, broker, or product research.
 Its synthetic label is not evidence that an input's provenance is synthetic.
 It does not model sales or liquidating holdings to fund a withdrawal,
-dividends/distributions, account-specific cash terms/interest conventions, FX,
-taxes, inflation, fixed fees, spreads, slippage, venue calendars, or real
-execution. Apart from the narrow synthetic
-split rule, other corporate actions remain unsupported. Its output is explicitly marked as synthetic-only and
-unsupported for product-performance claims. External research gates remain open.
+distribution declarations or price-basis validation, account-specific cash
+terms/interest conventions, FX, taxes, inflation, fixed fees, spreads, slippage,
+venue calendars, or real execution. Apart from the narrow synthetic split and
+distribution rules, other corporate actions remain unsupported. Its output is
+explicitly marked as synthetic-only and unsupported for product-performance
+claims. External research gates remain open.
 
 ### Read-only dashboard
 

@@ -241,6 +241,119 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(result["summary"]["total_withdrawals_gbp"], "1050")
         self.assertEqual(result["summary"]["net_contributions_gbp"], "50")
 
+    def test_synthetic_distribution_receivable_survives_split_until_pay_date(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "10", "9"),
+            self.synthetic_bar("equity", 3, "4.5", "4.5"),
+        ]
+        ex_at = bars[2]["open_at"]
+        pay_at = bars[3]["close_at"]
+        split_at = bars[3]["open_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars,
+            splits=[{"id": "post-ex-split", "product_id": "equity",
+                     "effective_at": split_at, "available_at": split_at,
+                     "numerator": "2", "denominator": "1"}],
+            cash_rates=self.zero_cash_rates(bars),
+            distributions=[{"id": "synthetic-dividend", "product_id": "equity",
+                            "ex_at": ex_at, "pay_at": pay_at, "available_at": ex_at,
+                            "amount_per_unit_gbp": "1"}])
+
+        self.assertEqual(result["curve"][2]["cash_gbp"], "0")
+        self.assertEqual(result["curve"][2]["distribution_receivables_gbp"], "100")
+        self.assertEqual(result["curve"][2]["unit_value"], "1")
+        self.assertEqual(result["curve"][2]["distributions"], ["synthetic-dividend"])
+        self.assertEqual(result["curve"][3]["cash_gbp"], "100")
+        self.assertEqual(result["curve"][3]["distribution_receivables_gbp"], "0")
+        self.assertEqual(result["curve"][3]["distribution_payments"], ["synthetic-dividend"])
+        self.assertEqual(result["curve"][3]["unit_value"], "1")
+        self.assertEqual(result["summary"]["distributions_gbp"], "100")
+        self.assertEqual(result["summary"]["distributions_paid_gbp"], "100")
+        self.assertEqual(result["summary"]["ending_equity_gbp"], "1000")
+        self.assertEqual(result["summary"]["distributions"], [{
+            "id": "synthetic-dividend",
+            "product_id": "equity",
+            "ex_at": ex_at,
+            "available_at": ex_at,
+            "pay_at": pay_at,
+            "amount_per_unit_gbp": "1",
+            "entitlement_quantity": "100",
+            "amount_gbp": "100",
+        }])
+
+    def test_synthetic_distribution_rejects_late_unclocked_or_unheld_events(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "10", "10"),
+        ]
+        valid = {"id": "dividend", "product_id": "equity",
+                 "ex_at": bars[2]["open_at"], "pay_at": bars[2]["close_at"],
+                 "available_at": bars[2]["open_at"], "amount_per_unit_gbp": "1"}
+        invalid = (
+            {**valid, "ex_at": iso(NOW + timedelta(days=2, hours=1))},
+            {**valid, "available_at": iso(NOW + timedelta(days=2, hours=10))},
+            {**valid, "pay_at": bars[1]["close_at"]},
+        )
+        for event in invalid:
+            with self.subTest(event=event), self.assertRaises(InvestmentError):
+                simulate_synthetic_fixture(
+                    "1000", products, {"equity": "100"}, bars,
+                    cash_rates=self.zero_cash_rates(bars), distributions=[event])
+
+        split_on_ex_open = {
+            "id": "same-clock-split", "product_id": "equity",
+            "effective_at": bars[2]["open_at"], "available_at": bars[2]["open_at"],
+            "numerator": "2", "denominator": "1",
+        }
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture(
+                "1000", products, {"equity": "100"}, bars,
+                splits=[split_on_ex_open], cash_rates=self.zero_cash_rates(bars),
+                distributions=[valid])
+
+        event_at_first_buy = {
+            **valid, "ex_at": bars[1]["open_at"], "pay_at": bars[1]["close_at"],
+            "available_at": bars[1]["open_at"],
+        }
+        with self.assertRaisesRegex(InvestmentError, "positive ex-time holding"):
+            simulate_synthetic_fixture(
+                "1000", products, {"equity": "100"}, bars,
+                cash_rates=self.zero_cash_rates(bars), distributions=[event_at_first_buy])
+
+    def test_synthetic_distribution_payment_can_fund_same_close_withdrawal(self):
+        products = [{"id": "equity", "quantity_increment": "1",
+                     "minimum_notional_gbp": "1"}]
+        bars = [
+            self.synthetic_bar("equity", 0, "10", "10"),
+            self.synthetic_bar("equity", 1, "10", "10"),
+            self.synthetic_bar("equity", 2, "10", "9"),
+        ]
+        ex_at = bars[2]["open_at"]
+        pay_at = bars[2]["close_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"equity": "100"}, bars,
+            withdrawals=[{"id": "pay-date-withdrawal", "timestamp": pay_at,
+                          "available_at": pay_at, "amount_gbp": "100"}],
+            cash_rates=self.zero_cash_rates(bars),
+            distributions=[{"id": "same-day-pay", "product_id": "equity",
+                            "ex_at": ex_at, "pay_at": pay_at, "available_at": ex_at,
+                            "amount_per_unit_gbp": "1"}])
+
+        self.assertEqual(result["curve"][2]["cash_gbp"], "0")
+        self.assertEqual(result["curve"][2]["distribution_receivables_gbp"], "0")
+        self.assertEqual(result["curve"][2]["unit_value"], "1")
+        self.assertEqual(result["summary"]["total_withdrawals_gbp"], "100")
+        self.assertEqual(result["summary"]["distributions_paid_gbp"], "100")
+        self.assertEqual(result["summary"]["ending_equity_gbp"], "900")
+        self.assertEqual(result["summary"]["gain_gbp"], "0")
+
     def test_synthetic_full_cash_withdrawal_and_refunding_preserve_unit_link(self):
         products = [{"id": "equity", "quantity_increment": "1",
                      "minimum_notional_gbp": "2000"}]
