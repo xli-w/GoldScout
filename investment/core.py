@@ -198,6 +198,7 @@ class Ledger:
         self.fees = ZERO
         self.revision = 0
         self.last_time = clock(spec["created_at"])
+        self.cash_valuation_at = self.last_time
         self.ids = {}
         self.units = ZERO
         self.performance_valid = True
@@ -225,9 +226,9 @@ class Ledger:
             total += quantity * mark[0]
         if len(times) > 1:
             return None, None
-        as_of = next(iter(times)) if times else self.last_time
+        as_of = next(iter(times)) if times else self.cash_valuation_at
         # A mark before a cash/holding event is not a common-clock valuation.
-        if as_of < self.last_time:
+        if times and as_of < self.last_time:
             return None, None
         return total, as_of
 
@@ -286,6 +287,7 @@ class Ledger:
             self.ids[value["id"]] = dict(value, balances_gbp=value["balances_gbp"].copy())
             self.revision += 1
             self.last_time = timestamp
+            self.cash_valuation_at = timestamp
             self.latest_available_at = timestamp
             self.has_portfolio_attestation = True
             return True
@@ -357,6 +359,8 @@ class Ledger:
         self.ids[value["id"]] = value.copy()
         self.revision += 1
         self.last_time = timestamp
+        if kind != "mark":
+            self.cash_valuation_at = timestamp
         self.latest_available_at = max(self.latest_available_at, clock(value["available_at"]))
         if kind != "mark":
             total, _ = self.valuation(timestamp)

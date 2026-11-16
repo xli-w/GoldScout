@@ -36,6 +36,7 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     acknowledge.add_argument("--id", required=True, help="unique, reusable acknowledgement ID")
     acknowledge.add_argument("--evidence", required=True, help="brief manual review evidence")
     args = parser.parse_args(argv)
+    requested_now = now
     try:
         now = clock(now)
         if args.command == "demo":
@@ -50,12 +51,20 @@ def main(argv=None, stdout=None, stderr=None, now=None):
         elif args.command == "report":
             value = snapshot(args.database, now)
         elif args.command == "review-status":
-            value = review_status(args.database, now)
+            value = review_status(args.database, requested_now)
         elif args.command == "acknowledge-review":
             acknowledgement = acknowledge_review(args.database, args.id, args.kind,
-                                                  args.reviewed_revision, args.evidence, now)
-            value = {"acknowledgement": acknowledgement,
-                     "review_status": review_status(args.database, now)}
+                                                  args.reviewed_revision, args.evidence, requested_now)
+            try:
+                status = review_status(args.database, requested_now)
+            except InvestmentError as exc:
+                value = {"acknowledgement": acknowledgement, "review_status": None,
+                         "review_status_error": str(exc)}
+                print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout)
+                print(f"InvestmentError: Review recorded, but status unavailable: {exc}",
+                      file=stderr)
+                return 2
+            value = {"acknowledgement": acknowledgement, "review_status": status}
         else:
             value = proposal_export(args.database, now)
         print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout)

@@ -21,7 +21,7 @@ def review_schedule(ledger, now, allocation):
         annual = now >= anniversary
     drifts = [Decimal(a["drift_pp"]) for a in allocation if a["drift_pp"] is not None]
     return {"monthly_due": monthly, "annual_due": annual,
-            "drift_due": any(abs(drift) >= 5 for drift in drifts) if drifts else None}
+            "drift_due": any(drift.copy_abs() >= 5 for drift in drifts) if drifts else None}
 
 
 def plan(ledger, now, equity, as_of, allocation):

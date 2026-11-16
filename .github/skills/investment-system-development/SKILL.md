@@ -41,14 +41,16 @@ execution, not AI authority to rewrite policy. Keep runtime limits below explici
   fund buys. Dashboard routes remain read-only. Proposed notionals do not prove
   fees, settlement, or executable funding. Do not add a broker path as a
   convenience to an accounting change.
-- Manual review acknowledgements are revision-bound, require a complete fresh
-  valuation, and never approve trades or suppress five-point drift. Monthly and
-  annual clocks are separate; an annual review counts as monthly. Preserve cash,
-  holdings, valuation and performance clocks when replaying an acknowledgement.
+- Manual review acknowledgements bind a previously committed revision, require a
+  complete fresh valuation, and never approve trades or suppress five-point drift.
+  Monthly and annual clocks are separate; an annual review counts as monthly.
+  Preserve cash, holdings, valuation and performance clocks on replay; refuse
+  invalid historical attestations rather than silently repairing them.
 - Cash-only confirmations refresh the valuation clock only with exact matching
-  balances for all included accounts. Both kinds of attestation require all prior
-  journal evidence to be available at their clock. They do not prove settlement,
-  custody or unrecorded transactions, and a mismatch is not a correction.
+  balances for all included accounts. An unheld-product price mark cannot refresh
+  that clock. Both kinds of attestation require all prior journal evidence to be
+  available at their clock. They do not prove settlement, custody or unrecorded
+  transactions, and a mismatch is not a correction.
 - Human-selected targets and the fixed comparison set are not optimized by
   historical returns. Do not promise profit, safety, maximum drawdown, or a
   winning allocation.
@@ -89,6 +91,12 @@ execution, not AI authority to rewrite policy. Keep runtime limits below explici
    schema, currency, effective timestamp, source availability, cash and quantity
    conservation before commit. Append evidence atomically and publish memory
    state only after commit. Readers must not initialize or repair a missing store.
+   For implicit current-time reads, pin the SQLite snapshot via the schema
+   catalog before taking the clock; do not query unvalidated tables or views.
+   Validate all v1 table, index and trigger definitions before integrity checks,
+   which may execute expressions from altered schemas on writable connections.
+   If a status read fails after an acknowledgement commits, retain the receipt
+   and surface the error rather than suggesting that acknowledgement rolled back.
 3. Keep effective time separate from evidence availability. A mark effective at
    T but published after T cannot establish contemporaneous completeness at T.
    Never let a latest retrospective mark leak into an earlier valuation/proposal.

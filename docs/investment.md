@@ -138,6 +138,9 @@ contain operator-prepared JSON, not broker credentials or operational exports
 from the legacy engine.
 Never select the trading/intelligence ledger as investment storage. Store creation
 is explicit; reporting a missing/invalid store does not initialise or repair it.
+The store must retain its original v1 tables, implicit index and immutable
+triggers. Altered definitions or extra objects, including manually added
+indexes, are refused; preserve the evidence rather than editing the schema.
 
 The first accounting contract is **GBP-only, operator-recorded evidence**. It
 supports per-account funded cash and long holdings, actual fill fees, recorded
@@ -255,10 +258,12 @@ review and eligible sales even after acknowledgement.
 
 Acknowledgement is refused unless the reviewed revision is unchanged and the
 recorded common-clock valuation is complete and strictly younger than the
-policy's maximum mark age. The check is repeated while appending the journal
-event, so a concurrent change is refused. Every prior journal event must also
-have been available by the acknowledgement clock. `review-status` reports drift as
-unavailable when valuation is stale or incomplete, or portfolio value is zero.
+policy's maximum mark age. The revision must already be committed; an import
+cannot acknowledge an intermediate revision in the same batch. The check is
+performed atomically with the journal append, so a concurrent change is refused.
+Every prior journal event must also have been available by the acknowledgement
+clock. `review-status` reports drift as unavailable when valuation is stale or
+incomplete, or portfolio value is zero.
 Fresh recorded evidence is not independent proof of current broker balances,
 settlement or prices.
 
@@ -269,7 +274,14 @@ Import any earlier-dated account evidence before acknowledging: later journal
 entries cannot predate the acknowledgement. Repeating the same ID, kind,
 reviewed revision and evidence returns the original acknowledgement, including
 after an output failure; reusing the ID for different evidence is refused.
+If the acknowledgement commits but its subsequent status read fails, the CLI
+exits with an error and returns the receipt in stdout JSON with `review_status`
+set to null and a `review_status_error`. A successful status may include a later
+concurrent revision; it does not change the receipt's reviewed revision.
 The dashboard stays read-only and review status/acknowledgement are CLI-only.
+Previously recorded acknowledgements based on a stale cash-only valuation or an
+uncommitted revision are refused during replay. There is no automatic correction:
+preserve the original store and evidence and seek an operator-led recovery.
 
 ### Cash-only valuation confirmation
 
@@ -302,7 +314,8 @@ by that clock; do not invent current observations. The confirmation
 is a manual attestation, not independent proof of account balances, protection,
 settlement or undisclosed transactions. If a balance differs, stop rather than
 guessing a correction. With holdings, fresh common-clock price marks remain
-necessary; this cash-only confirmation cannot refresh them.
+necessary; this cash-only confirmation cannot refresh them. A price mark for an
+unheld product does not refresh the cash-only valuation.
 
 No tight ATR stops are imposed on the new passive core. This is not a change to
 legacy stops or a guarantee against losses. Market drawdowns, missing evidence

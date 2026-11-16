@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from .core import MAX_EVENTS, ZERO, clock, fmt, iso, number, replay
 from .planner import plan, review_schedule
-from .store import canonical, digest, read
+from .store import canonical, digest, read, read_with_clock
 
 
 LIMITATIONS = [
@@ -85,8 +85,7 @@ def snapshot(database, now=None):
 
 
 def review_status(database, now=None):
-    now = clock(now)
-    ledger = read(database, now)
+    ledger, now = read_with_clock(database, now)
     result = report(ledger, now)
     schedule = review_schedule(ledger, now, result["allocation"])
     valuation_status = ledger.valuation_status(now)

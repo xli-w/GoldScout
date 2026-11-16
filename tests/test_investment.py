@@ -1,6 +1,7 @@
 """Offline investment contracts; all stores and JSON fixtures are temporary."""
 
 import builtins
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+from threading import Barrier, Event, local
 import unittest
 from unittest.mock import patch
 
@@ -32,6 +34,20 @@ def ev(identifier, kind, at=NOW, account="broker", **values):
     return dict(id=identifier, type=kind, timestamp=iso(at), available_at=iso(at),
                 account_id=account, currency="GBP", evidence="explicit synthetic test evidence",
                 **values)
+
+
+def append_legacy_batch(database, values, state_hash):
+    with closing(sqlite3.connect(database)) as connection, connection:
+        revision, previous = connection.execute(
+            "SELECT revision,hash FROM events ORDER BY revision DESC LIMIT 1").fetchone()
+        for value in values:
+            revision += 1
+            payload = store.canonical(value)
+            new_hash = store.digest(previous + payload)
+            connection.execute("INSERT INTO events VALUES (?,?,?,?,?)",
+                               (revision, value["id"], payload, previous, new_hash))
+            previous = new_hash
+        connection.execute("INSERT INTO commits VALUES (?,?)", (revision, state_hash))
 
 
 class InvestmentTests(unittest.TestCase):
@@ -785,6 +801,102 @@ class InvestmentTests(unittest.TestCase):
         with self.assertRaises(InvestmentError):
             snapshot(self.database, NOW)
 
+    def test_implicit_read_rejects_identity_view_without_executing_it(self):
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("PRAGMA user_version=1")
+            connection.execute("CREATE VIEW identity AS SELECT tripwire() AS id")
+        calls = []
+        actual_connect = store._connect
+
+        def instrumented_connect(database, readonly):
+            connection = actual_connect(database, readonly)
+            connection.create_function("tripwire", 0, lambda: calls.append(True) or 1)
+            return connection
+
+        with patch("investment.store._connect", side_effect=instrumented_connect):
+            with self.assertRaises(InvestmentError):
+                read(self.database)
+        self.assertEqual(calls, [])
+
+    def test_write_rejects_invalid_table_check_without_executing_it(self):
+        self.init_demo()
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("PRAGMA writable_schema=ON")
+            cursor = connection.execute(
+                "UPDATE sqlite_master SET sql=replace(sql, 'CHECK(id=1)', 'CHECK(tripwire())') "
+                "WHERE type='table' AND name='identity'")
+            self.assertEqual(cursor.rowcount, 1)
+        calls = []
+        actual_connect = store._connect
+
+        def instrumented_connect(database, readonly):
+            connection = actual_connect(database, readonly)
+            connection.create_function("tripwire", 0, lambda: calls.append(True) or 1)
+            return connection
+
+        original = self.database.read_bytes()
+        with patch("investment.store._connect", side_effect=instrumented_connect):
+            with self.assertRaises(InvestmentError):
+                import_events(self.database, [ev("new", "contribution", amount_gbp="1")], NOW)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.database.read_bytes(), original)
+
+    def test_write_rejects_invalid_expression_index_without_executing_it(self):
+        self.init_demo()
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.create_function("tripwire", 1, lambda _: 1, deterministic=True)
+            connection.execute("CREATE INDEX unexpected_expression ON events(tripwire(payload))")
+        calls = []
+        actual_connect = store._connect
+
+        def instrumented_connect(database, readonly):
+            connection = actual_connect(database, readonly)
+            connection.create_function("tripwire", 1, lambda _: calls.append(True) or 1,
+                                       deterministic=True)
+            return connection
+
+        original = self.database.read_bytes()
+        with patch("investment.store._connect", side_effect=instrumented_connect):
+            with self.assertRaises(InvestmentError):
+                import_events(self.database, [ev("new", "contribution", amount_gbp="1")], NOW)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.database.read_bytes(), original)
+
+    def test_implicit_read_pins_snapshot_before_clock_and_concurrent_commit(self):
+        spec = deepcopy(self.spec)
+        spec["products"] = []
+        spec["policy"]["targets"] = {"equity": "0", "bond": "0", "cash": "100"}
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [ev("fund", "contribution", amount_gbp="100")], NOW)
+        before = NOW + timedelta(hours=1)
+        later = before + timedelta(seconds=1)
+        confirmation = {
+            "id": "concurrent-cash", "type": "cash_confirmation", "timestamp": iso(later),
+            "available_at": iso(later), "evidence": "synthetic",
+            "balances_gbp": {"broker": "100", "savings": "0"},
+        }
+        actual_clock = store.clock
+
+        def after_snapshot(value=None):
+            if value is not None:
+                return actual_clock(value)
+            with closing(sqlite3.connect(self.database, timeout=0)) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                writer.execute("INSERT INTO events VALUES (2,'probe','{}','','')")
+                try:
+                    with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                        writer.commit()
+                finally:
+                    writer.rollback()
+            return before
+
+        with patch("investment.store.clock", side_effect=after_snapshot):
+            ledger, captured = store.read_with_clock(self.database)
+        self.assertEqual(ledger.revision, 1)
+        self.assertEqual(captured, before)
+        self.assertEqual(import_events(self.database, [confirmation], later), 2)
+        self.assertEqual(read(self.database, later).revision, 2)
+
     def test_replay_hash_tamper_fails_closed(self):
         self.init_demo()
         with closing(sqlite3.connect(self.database)) as connection, connection:
@@ -1295,6 +1407,38 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(after["proposal"]["orders"], before["proposal"]["orders"])
         self.assertFalse(after["proposal"]["execution_enabled"])
 
+    def test_review_status_agrees_with_proposal_at_exact_drift_boundary(self):
+        spec = deepcopy(self.spec)
+        spec["policy"]["targets"] = {"equity": "75", "bond": "0", "cash": "25"}
+        spec["products"][0]["quantity_increment"] = "0.00000001"
+        for label, buy_price, sell_price, due in (
+                ("below", "0.00000001", "0.00000002", False),
+                ("at", None, None, True),
+                ("above", "0.00000002", "0.00000001", True)):
+            with self.subTest(label=label):
+                database = Path(self.temporary.name) / (label + ".sqlite3")
+                initialize(database, spec, NOW)
+                events = [
+                    ev("fund", "contribution", amount_gbp="250000000000000.75"),
+                    ev("buy", "buy", product_id="equity", quantity="1",
+                       price_gbp="1", fee_gbp="0"),
+                ]
+                if buy_price is not None:
+                    events += [
+                        ev("small-buy", "buy", product_id="equity",
+                           quantity="0.00000001", price_gbp=buy_price, fee_gbp="0"),
+                        ev("small-sell", "sell", product_id="equity",
+                           quantity="0.00000001", price_gbp=sell_price, fee_gbp="0"),
+                    ]
+                events.append(ev("mark", "mark", product_id="equity",
+                                 price_gbp="999999999999999"))
+                import_events(database, events, NOW)
+                result = snapshot(database, NOW)
+                drift = Decimal(result["allocation"][0]["drift_pp"]).copy_abs()
+                self.assertEqual(drift >= 5, due)
+                self.assertEqual(review_status(database, NOW)["drift_due"], due)
+                self.assertEqual(result["proposal"]["status"], "review" if due else "no_trade")
+
     def test_review_acknowledgement_requires_fresh_complete_unchanged_evidence(self):
         self.init_demo()
         just_fresh = NOW + timedelta(days=1) - timedelta(microseconds=1)
@@ -1353,6 +1497,66 @@ class InvestmentTests(unittest.TestCase):
         acknowledge_review(self.database, "cash-annual-review", "annual", after["revision"],
                            "synthetic cash review", review_time)
         self.assertFalse(review_status(self.database, review_time)["annual_due"])
+
+    def test_unheld_mark_does_not_refresh_cash_only_valuation(self):
+        initialize(self.database, self.spec, NOW)
+        import_events(self.database, [
+            ev("broker-funds", "contribution", amount_gbp="800"),
+            ev("bank-funds", "contribution", account="savings", amount_gbp="200"),
+        ], NOW)
+        later = NOW + timedelta(days=2)
+        import_events(self.database, [
+            ev("unheld-mark", "mark", at=later, product_id="equity", price_gbp="10")
+        ], later)
+        result = snapshot(self.database, later)
+        status = review_status(self.database, later)
+        self.assertEqual(result["as_of"], iso(NOW))
+        self.assertEqual(status["valuation_status"], "stale")
+        self.assertFalse(status["acknowledgement_available"])
+        self.assertEqual(result["proposal"]["status"], "blocked")
+        with self.assertRaisesRegex(InvestmentError, "complete, fresh"):
+            acknowledge_review(self.database, "stale-cash-review", "monthly",
+                               status["revision"], "synthetic", later)
+
+        confirmation = {
+            "id": "cash-check", "type": "cash_confirmation", "timestamp": iso(later),
+            "available_at": iso(later), "evidence": "synthetic",
+            "balances_gbp": {"broker": "800", "savings": "200"},
+        }
+        import_events(self.database, [confirmation], later)
+        result = snapshot(self.database, later)
+        self.assertEqual(result["as_of"], iso(later))
+        self.assertEqual(result["proposal"]["status"], "review")
+        acknowledge_review(self.database, "confirmed-review", "monthly",
+                           result["revision"], "synthetic", later)
+
+    def test_parent_v1_cash_quote_replays_without_refreshing_cash(self):
+        initialize(self.database, self.spec, NOW)
+        import_events(self.database, [
+            ev("broker-funds", "contribution", amount_gbp="800"),
+            ev("bank-funds", "contribution", account="savings", amount_gbp="200"),
+        ], NOW)
+        later = NOW + timedelta(days=2)
+        # State hashes were captured from synthetic stores written by the parent version.
+        append_legacy_batch(self.database, [
+            ev("unheld-mark", "mark", at=later, product_id="equity", price_gbp="10")
+        ], "00933985b96547482d3f21d90b904ad18ffa7d47ffa00e4e4561d32da177dd80")
+        self.assertEqual(read(self.database, later).revision, 3)
+        self.assertEqual(snapshot(self.database, later)["as_of"], iso(NOW))
+        self.assertEqual(review_status(self.database, later)["valuation_status"], "stale")
+
+        review = {
+            "id": "invalid-cash-review", "type": "review_acknowledgement",
+            "timestamp": iso(later), "available_at": iso(later), "evidence": "synthetic",
+            "review_kind": "monthly", "reviewed_revision": 3, "valuation_as_of": iso(later),
+        }
+        append_legacy_batch(
+            self.database, [review],
+            "b5fa38aa8eacd499ed8aad82aa64d17769954345705cfc9bda9d2fae080c7955")
+        before = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "complete, fresh"):
+            read(self.database, later)
+        self.assertEqual(self.database.read_bytes(), before)
 
     def test_cash_confirmation_rejects_missing_discrepant_or_late_evidence(self):
         spec = deepcopy(self.spec)
@@ -1518,6 +1722,209 @@ class InvestmentTests(unittest.TestCase):
         for field in ("as_of", "equity_gbp", "gain_gbp", "twr_pct", "max_drawdown_pct"):
             self.assertEqual(with_review[field], without_review[field])
 
+    def test_concurrent_identical_review_requests_return_one_receipt(self):
+        self.init_demo()
+        first_has_lock = Event()
+        second_attempted = Event()
+        worker = local()
+        actual_read = store._read
+        actual_connect = store._connect
+
+        def held_read(connection, now):
+            if worker.first:
+                first_has_lock.set()
+                if not second_attempted.wait(timeout=5):
+                    raise AssertionError("Second acknowledgement did not attempt the writer lock")
+            return actual_read(connection, now)
+
+        def traced_connect(database, readonly):
+            connection = actual_connect(database, readonly)
+            if not readonly and not worker.first:
+                connection.set_trace_callback(
+                    lambda statement: second_attempted.set()
+                    if statement == "BEGIN IMMEDIATE" else None)
+            return connection
+
+        def acknowledge(first, at):
+            worker.first = first
+            if not first and not first_has_lock.wait(timeout=5):
+                raise AssertionError("First acknowledgement did not acquire the writer lock")
+            return acknowledge_review(self.database, "same-review", "monthly", 4,
+                                      "synthetic concurrent review", at)
+
+        first_time = NOW + timedelta(hours=1)
+        with patch("investment.store._read", side_effect=held_read), \
+                patch("investment.store._connect", side_effect=traced_connect), \
+                ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(acknowledge, True, first_time)
+            second = pool.submit(acknowledge, False, first_time + timedelta(seconds=1))
+            receipts = [first.result(timeout=15), second.result(timeout=15)]
+        self.assertTrue(second_attempted.is_set())
+        self.assertEqual(receipts[0], receipts[1])
+        self.assertEqual(read(self.database, first_time + timedelta(seconds=1)).revision, 5)
+
+    def test_concurrent_cli_retries_use_the_committed_review_clock(self):
+        self.init_demo()
+        started = Barrier(2)
+        later_finished = Event()
+        worker = local()
+        actual_clock = store.clock
+        earlier = NOW + timedelta(hours=1)
+        later = earlier + timedelta(seconds=1)
+        retry = later + timedelta(seconds=1)
+
+        def cli_clock(value=None):
+            if value is not None:
+                return actual_clock(value)
+            worker.clock_calls += 1
+            if worker.clock_calls == 1:
+                started.wait(timeout=10)
+                if worker.earlier and not later_finished.wait(timeout=10):
+                    raise AssertionError("Concurrent acknowledgement did not finish")
+                return earlier if worker.earlier else later
+            return retry
+
+        def store_clock(value=None):
+            if value is not None:
+                return actual_clock(value)
+            return retry if worker.earlier else later
+
+        def run(first):
+            worker.earlier = first
+            worker.clock_calls = 0
+            output, errors = io.StringIO(), io.StringIO()
+            arguments = ["acknowledge-review", "--database", str(self.database), "--kind",
+                         "monthly", "--reviewed-revision", "4", "--id", "same-cli-review",
+                         "--evidence", "synthetic concurrent review"]
+            try:
+                result = main(arguments, stdout=output, stderr=errors)
+                return result, output.getvalue(), errors.getvalue()
+            finally:
+                if not first:
+                    later_finished.set()
+
+        with patch("investment.__main__.clock", side_effect=cli_clock), \
+                patch("investment.store.clock", side_effect=store_clock), \
+                ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(run, True)
+            second = pool.submit(run, False)
+            results = [first.result(timeout=15), second.result(timeout=15)]
+        for result, _, errors in results:
+            self.assertEqual(result, 0, errors)
+        self.assertEqual(json.loads(results[0][1])["acknowledgement"],
+                         json.loads(results[1][1])["acknowledgement"])
+        self.assertEqual(read(self.database, retry).revision, 5)
+
+    def test_cli_receipt_survives_a_later_commit_before_status_read(self):
+        spec = deepcopy(self.spec)
+        spec["products"] = []
+        spec["policy"]["targets"] = {"equity": "0", "bond": "0", "cash": "100"}
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [ev("fund", "contribution", amount_gbp="100")], NOW)
+        reviewed = NOW + timedelta(hours=1)
+        later = reviewed + timedelta(seconds=1)
+        current = later + timedelta(seconds=1)
+        confirmation = {
+            "id": "concurrent-cash", "type": "cash_confirmation", "timestamp": iso(later),
+            "available_at": iso(later), "evidence": "synthetic",
+            "balances_gbp": {"broker": "100", "savings": "0"},
+        }
+        actual_clock = store.clock
+        actual_connect = store._connect
+        inserted = False
+
+        def inject_later_commit(database, readonly):
+            nonlocal inserted
+            if readonly and not inserted:
+                inserted = True
+                with patch("investment.store._connect", side_effect=actual_connect):
+                    import_events(database, [confirmation], later)
+            return actual_connect(database, readonly)
+
+        def store_clock(value=None):
+            if value is not None:
+                return actual_clock(value)
+            return current if inserted else reviewed
+
+        def cli_clock(value=None):
+            return reviewed if value is None else actual_clock(value)
+
+        def service_clock(value=None):
+            return current if value is None else actual_clock(value)
+
+        arguments = ["acknowledge-review", "--database", str(self.database), "--kind",
+                     "monthly", "--reviewed-revision", "1", "--id", "review",
+                     "--evidence", "synthetic"]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch("investment.__main__.clock", side_effect=cli_clock), \
+                patch("investment.service.clock", side_effect=service_clock), \
+                patch("investment.store.clock", side_effect=store_clock), \
+                patch("investment.store._connect", side_effect=inject_later_commit):
+            code = main(arguments, stdout=output, stderr=errors)
+        self.assertTrue(inserted)
+        self.assertEqual(code, 0, errors.getvalue())
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["acknowledgement"]["reviewed_revision"], 1)
+        self.assertEqual(result["review_status"]["revision"], 3)
+        self.assertEqual(read(self.database, current).revision, 3)
+
+    def test_cli_reports_committed_receipt_when_status_read_fails(self):
+        self.init_demo()
+        arguments = ["acknowledge-review", "--database", str(self.database), "--kind",
+                     "monthly", "--reviewed-revision", "4", "--id", "review",
+                     "--evidence", "synthetic"]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch("investment.__main__.review_status",
+                   side_effect=InvestmentError("Synthetic status read failure")):
+            code = main(arguments, stdout=output, stderr=errors, now=NOW)
+        self.assertEqual(code, 2)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["acknowledgement"]["reviewed_revision"], 4)
+        self.assertIsNone(result["review_status"])
+        self.assertIn("Synthetic status read failure", result["review_status_error"])
+        self.assertIn("recorded", errors.getvalue())
+        self.assertEqual(read(self.database, NOW).revision, 5)
+
+    def test_review_status_cli_includes_commit_before_its_snapshot(self):
+        spec = deepcopy(self.spec)
+        spec["products"] = []
+        spec["policy"]["targets"] = {"equity": "0", "bond": "0", "cash": "100"}
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [ev("fund", "contribution", amount_gbp="100")], NOW)
+        before = NOW + timedelta(hours=1)
+        later = before + timedelta(seconds=1)
+        confirmation = {
+            "id": "concurrent-cash", "type": "cash_confirmation", "timestamp": iso(later),
+            "available_at": iso(later), "evidence": "synthetic",
+            "balances_gbp": {"broker": "100", "savings": "0"},
+        }
+        actual_clock = store.clock
+        actual_connect = store._connect
+        inserted = False
+
+        def inject_later_commit(database, readonly):
+            nonlocal inserted
+            if readonly and not inserted:
+                inserted = True
+                with patch("investment.store._connect", side_effect=actual_connect):
+                    import_events(database, [confirmation], later)
+            return actual_connect(database, readonly)
+
+        def store_clock(value=None):
+            if value is not None:
+                return actual_clock(value)
+            return later if inserted else before
+
+        output, errors = io.StringIO(), io.StringIO()
+        with patch("investment.__main__.clock", return_value=before), \
+                patch("investment.store.clock", side_effect=store_clock), \
+                patch("investment.store._connect", side_effect=inject_later_commit):
+            code = main(["review-status", "--database", str(self.database)],
+                        stdout=output, stderr=errors)
+        self.assertTrue(inserted)
+        self.assertEqual(code, 0, errors.getvalue())
+        self.assertEqual(json.loads(output.getvalue())["revision"], 2)
+
     def test_imported_review_cannot_bypass_revision_or_valuation_checks(self):
         self.init_demo()
         review = {
@@ -1533,6 +1940,54 @@ class InvestmentTests(unittest.TestCase):
                 import_events(self.database, [dict(review, **change)], NOW)
             self.assertEqual(read(self.database, NOW).revision, 4)
 
+    def test_review_must_reference_a_previously_committed_revision(self):
+        self.init_demo()
+        later = NOW + timedelta(hours=1)
+        mark = ev("new-mark", "mark", at=later, product_id="equity", price_gbp="11")
+        review = {
+            "id": "batch-review", "type": "review_acknowledgement",
+            "timestamp": iso(later), "available_at": iso(later), "evidence": "synthetic",
+            "review_kind": "annual", "reviewed_revision": 5, "valuation_as_of": iso(later),
+        }
+        with self.assertRaisesRegex(InvestmentError, "committed"):
+            import_events(self.database, [mark, review], later)
+        self.assertEqual(read(self.database, later).revision, 4)
+        import_events(self.database, [mark], later)
+        import_events(self.database, [review], later)
+        self.assertEqual(read(self.database, later).revision, 6)
+        self.assertEqual(review_status(self.database, later)["last_annual_review_at"], iso(later))
+
+    def test_parent_v1_review_snapshot_remains_readable(self):
+        self.init_demo()
+        later = NOW + timedelta(hours=1)
+        review = {
+            "id": "valid-review", "type": "review_acknowledgement",
+            "timestamp": iso(later), "available_at": iso(later), "evidence": "synthetic",
+            "review_kind": "monthly", "reviewed_revision": 4, "valuation_as_of": iso(NOW),
+        }
+        append_legacy_batch(
+            self.database, [review],
+            "0467843a04cc39608068bd2b1dd3e100c7b870ba4da7d7e40a4185c002dd3481")
+        self.assertEqual(read(self.database, later).revision, 5)
+        self.assertEqual(review_status(self.database, later)["last_monthly_review_at"], iso(later))
+
+    def test_parent_v1_uncommitted_review_is_refused_without_mutation(self):
+        self.init_demo()
+        later = NOW + timedelta(days=2)
+        mark = ev("new-mark", "mark", at=later, product_id="equity", price_gbp="11")
+        review = {
+            "id": "batch-review", "type": "review_acknowledgement",
+            "timestamp": iso(later), "available_at": iso(later), "evidence": "synthetic",
+            "review_kind": "annual", "reviewed_revision": 5, "valuation_as_of": iso(later),
+        }
+        append_legacy_batch(
+            self.database, [mark, review],
+            "09526beca2593cabb099804bdd82d6574e0b706efd50f1ea5d82cb24c64f2e40")
+        before = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "committed revision"):
+            read(self.database, later)
+        self.assertEqual(self.database.read_bytes(), before)
+
     def test_review_anniversary_for_leap_day_is_february_28(self):
         leap_day = datetime(2024, 2, 29, 12, tzinfo=timezone.utc)
         initialize(self.database, demo_profile(leap_day), leap_day)
@@ -1547,16 +2002,23 @@ class InvestmentTests(unittest.TestCase):
         self.init_demo()
         review_time = NOW + timedelta(hours=1)
         actual_import = store.import_events
+        actual_connect = store._connect
+        inserted = False
 
-        def concurrent_import(database, values, now):
-            actual_import(database, [
-                ev("concurrent", "contribution", at=review_time, amount_gbp="1")
-            ], now)
-            return actual_import(database, values, now)
+        def concurrent_connect(database, readonly):
+            nonlocal inserted
+            if not readonly and not inserted:
+                inserted = True
+                with patch("investment.store._connect", side_effect=actual_connect):
+                    actual_import(database, [
+                        ev("concurrent", "contribution", at=review_time, amount_gbp="1")
+                    ], review_time)
+            return actual_connect(database, readonly)
 
-        with patch("investment.store.import_events", side_effect=concurrent_import):
+        with patch("investment.store._connect", side_effect=concurrent_connect):
             with self.assertRaisesRegex(InvestmentError, "revision changed"):
                 acknowledge_review(self.database, "raced-review", "monthly", 4, "test", review_time)
+        self.assertTrue(inserted)
         ledger = read(self.database, review_time)
         self.assertEqual(ledger.revision, 5)
         self.assertNotIn("raced-review", ledger.ids)
