@@ -3,8 +3,9 @@
 ## Current investment protocol boundary
 
 The [current mandate](investment-research-context.md#current-long-term-investment-mandate)
-supersedes the earlier trading campaign's objectives and passive-core risk
-assumptions. The remainder of this document retains that campaign's historical
+defines a substantial-capital core-plus-dynamic portfolio, not the original
+GBP 1,000 short-horizon trading question. It supersedes that campaign's objectives
+and passive-core risk assumptions. The remainder retains the historical
 design and runner limitations; it does not authorise crypto, leverage, stop-sized
 passive holdings or the former six-month return aspiration in the new core.
 
@@ -45,17 +46,61 @@ Before any portfolio performance comparison:
    passive admission gate. No passing active candidate means no holdout simulation,
    including baseline-only fallback. Locked confirmation is report-only.
 
-Primary future comparison: one initial GBP 1,000 without later flows. Optional
-contribution scenarios must be labelled and matched; deposits are not performance.
-Use the investor-selected Bank of England instant-access quoted-rate proxy for
-GBP 1,000 balances, excluding guaranteed bonuses as primary and including them
-as a sensitivity, alongside diversified passive references. This is a market
-average, not an account-specific savings return; retain NatWest only as
-additional 0% context. Short product histories or missing regimes must be
-labelled limited/inconclusive, not repaired with synthetic or unlicensed proxy
-data. No comparison guarantees profitability.
+Primary future comparison: the approved core-plus-dynamic policy versus deploying
+the same actual starting capital entirely under the approved passive-core policy,
+with matched dated contributions, costs, tax/wrapper assumptions and event clocks.
+The starting amount and exact policy are not yet supplied. Include a no-later-flow
+case and separately labelled contribution cases; deposits are not performance.
+Also compare applicable designated savings terms where supported. The previously
+chosen BoE GBP 1,000 excluding-bonus rate remains a market-average proxy/sensitivity,
+with bonus-inclusive sensitivity, not the larger account's realised yield.
+Retain NatWest 0% and GBP 1,000 only as labelled historical/sensitivity context.
+Short histories or missing regimes remain limited/inconclusive, never repaired
+with synthetic or unlicensed proxy data. No comparison guarantees profitability.
+
+### Core-plus-dynamic admission requirements
+
+- Freeze core policy and the dynamic sleeve's capital cap, position/aggregate
+  exposure, turnover/cost budget, loss accounting, stop/review conditions and
+  replenishment/profit-transfer rules before selection. The illustrative
+  80-90% / 10-20% range is not an approved allocation. A falling sleeve must not
+  be automatically refilled to its target by a generic rebalance.
+- Evaluate dynamic results and combined results against a matched all-core
+  counterfactual. Attribute beta, overlapping core exposure, FX, distributions,
+  costs and active decisions; do not count core gains as experimental alpha.
+  Sleeve transfers are internal flows, not strategy profit. Include dependence,
+  drawdown duration, tail scenarios, concentration and operational complexity.
+- Start with a small interpretable daily/weekly long-only hypothesis family,
+  not a broad indicator/LLM search. Exact products and parameters require a frozen
+  specification. The existing 60-candidate ceiling includes prior/manual/failed
+  variants and baselines; it is not a target to fill.
+- Predeclare whether a dynamic hypothesis seeks net excess growth, risk reduction
+  or diversification, its passive-relative admission threshold, sufficient
+  observations, dependence-aware uncertainty and adverse-cost failure rules.
+  Compare at the approved funding/risk constraints and disclose risk mismatch.
+  Neither cash outperformance alone nor a positive backtest justifies admission.
+- Existing news/LLM exclusions remain in force for existing runs. A proposed
+  calendar gate or AI-derived feature needs separate explicit approval, defined
+  coverage/failure behaviour and a new prospectively recorded protocol before
+  affecting decisions. Preserve source revisions, receipt/validated-completion
+  time, model/prompt/input hashes and every model/manual trial. Today's LLM on old
+  headlines is contaminated retrospective analysis, not causal holdout evidence.
+- Missing intelligence may invalidate a dependent experimental decision under
+  its approved failure policy; it must not force liquidation or change the core.
+  Nondependent accounting, monitoring and protective recovery remain separate.
+  No strategy can edit risk limits or admit its own replacement.
+- Selection, one genuinely unexposed locked report-only confirmation, prospective
+  shadow observation and separately approved broker trials are distinct gates.
+  No passing candidate means no holdout opening and no experimental deployment.
+  Manual execution/export-only operation remains valid if safe recovery cannot
+  be established. This documentation enables none of these operational steps.
 
 ## Historical trading protocol and runner evidence
+
+The remaining campaign objectives, capital, profiles and dated feasibility
+screens retain historical provenance. They do not override the current
+core-plus-dynamic protocol above. Technical runner/data limitations still matter;
+the earlier GBP 1,000 and BoE-primary screen is not the new capital/benchmark policy.
 
 This protocol operationalizes [investment research context](investment-research-context.md). It tests whether a bounded set of approaches merits further consideration; it cannot guarantee returns, certify live readiness, or force a winner.
 

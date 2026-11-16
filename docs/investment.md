@@ -1,4 +1,4 @@
-# Long-term GBP investment path
+# Long-term GBP portfolio manager
 
 GoldScout's new investment path measures an operator-selected portfolio and
 produces export-only allocation proposals. It does not trade, transfer money,
@@ -7,25 +7,105 @@ remains separate with its original stops, ownership checks and recovery.
 
 ## Current mandate
 
-The investor confirmed GBP 1,000, separate emergency savings, no expensive debt,
-no fixed withdrawal date and willingness to tolerate a 40-50% fall. Large losses
-can be permanent; that tolerance is not a loss limit or a reason to take maximum
-risk. Optional regular contributions are supported without a fixed schedule.
+The 2026-11-16 mandate is a central manager for the investor's substantial,
+designated long-term investment capital across selected bank savings, bonds and
+investments. Household spending accounts, emergency reserves and miscellaneous
+small savings are outside the product scope. The earlier GBP 1,000 example is
+not a limit or an assumption about today's capital. No new exact amount, target
+weights or dynamic loss budget has been supplied.
 
-The intended universe is UK-accessible, unleveraged global equity funds,
-high-quality bonds and protected GBP deposits. Exclude portfolio leverage,
-shorts, crypto and speculative options. Exact product, account, wrapper and
-protection eligibility must be verified separately.
+Seek durable net compound GBP growth and better explained allocation decisions
+within approved risk constraints, not a promised "most profitable" strategy.
+Large losses can be permanent. Earlier willingness to tolerate a 40-50% fall
+does not authorise that loss in an experimental sleeve.
 
-The investor chooses the target allocation. Compare a small fixed set such as
-100% savings, 100% global equities, 80/20 and 60/40 equity/cash, 80/20 and 60/40
-equity/bonds, and 80/10/10 equity/bonds/cash. These are research recipes, not
-proven optima or product recommendations. Use the investor-selected Bank of
-England quoted instant-access rate for a GBP 1,000 balance, excluding guaranteed
-bonuses, as the primary cash proxy; show the bonus-inclusive series as a
-sensitivity. This is a market average, not a rate the investor necessarily
-receives. Retain NatWest's published 0% current-account counterfactual for
-context, but verify applicable terms.
+The intended design is a **majority stable core plus a capped dynamic sleeve**.
+An 80-90% core / 10-20% dynamic range is approved for illustration only, not
+implementation, suitability approval or a default. The investor approves actual
+weights, eligible products and risk budgets. The core can include diversified
+global funds, high-quality bonds and designated GBP deposits; its bank allocation
+is an investment choice, not an emergency-fund requirement. "Fixed" means stable
+strategic policy, not fixed prices, guaranteed returns or mandatory term deposits.
+Exact product/account/wrapper/protection eligibility must be verified.
+Leverage, shorts, crypto and speculative options remain unapproved.
+
+The end goal includes extensive automation: research, monitoring, reporting,
+policy-bound core maintenance and admitted dynamic strategies. This chat approves
+the documentation/strategy direction only. The released code still uses fixed
+human targets and export-only proposals, with no autonomous investment execution.
+See the [mandate](investment-research-context.md) and
+[architecture decision](decisions/0004-core-dynamic-portfolio-manager.md).
+
+### Two allocation dimensions, not three new tickers
+
+The future model must distinguish **asset class** (equity/bond/designated savings)
+from **management role** (core/dynamic). An equity fund may be core; a different
+equity strategy may be dynamic. Account location alone does not establish role.
+The current schema has only equity/bond/cash targets and cannot represent or
+enforce these independent budgets. Do not relabel today's targets as isolation.
+
+Core maintenance remains low-turnover and contribution-first, with periodic/drift
+review; calendar headlines must not churn the core. The dynamic sleeve explores
+a small predeclared set of explainable long-only daily/weekly strategies in
+eligible products. Trend or relative-strength hypotheses are research candidates,
+not admitted strategies. More frequent trading, thematic/individual holdings or
+additional asset classes need evidence and explicit product/risk approval.
+
+Before funding a dynamic strategy, specify capital and position limits,
+overlapping/correlated exposure, turnover/cost limits, cumulative loss accounting,
+review/retirement rules and transfers. Do not top up a losing experiment from
+the core merely to restore its target percentage. Profit harvesting and any
+replenishment need approved rules; the strategy cannot approve either itself.
+Capital caps constrain planned exposure, not a guaranteed realised loss ceiling:
+gaps, shared custody, outages and execution errors remain portfolio risks.
+The dynamic sleeve is a controlled opportunity budget, not a requirement to
+keep every experiment invested. Zero deployed dynamic risk is valid until a
+candidate passes; rejected ideas must not be replaced merely to fill the budget.
+
+### Decision support and automation contract (planned)
+
+- Centralise only selected investment-capital accounts. Record balances, fills,
+  actual interest and statement dates with provenance. Savings rate/AER, tiers,
+  term/maturity and protection are account-specific facts, not inferred yields.
+  Bond funds and individual bonds need distinct duration/credit and coupon/maturity
+  treatment; neither is equivalent to protected savings.
+- Provide dated portfolio/core/dynamic growth curves and net contributions,
+  flow-neutral and money-weighted returns, fees, income, FX/inflation where
+  supported, drawdown depth/duration, concentration and benchmark attribution.
+  Missing evidence stays unavailable. Forecasts are labelled scenarios, not facts.
+- Explain each decision's policy, known evidence, exposure change, funding,
+  estimated total costs, uncertainty and alternatives including no trade.
+  Dynamic value is judged against investing that same capital under core policy,
+  not against zero-return cash or the core's gains.
+- Automate source collection, dated economic-calendar awareness, AI briefs,
+  thesis tracking and experiment proposals using separate intelligence storage.
+  Verify coverage before extending today's US-focused feeds to UK/global
+  exposures. AI text cannot become an order, change targets or relax limits.
+- Introduce revocable, versioned standing authority only after separate approved
+  execution development: account/product allowlists, strategy/policy hashes,
+  exposure/loss/turnover/cost limits, expiry, evidence freshness and suspension
+  conditions. Policy approval should then permit compliant orders without
+  repeated manual clicks; out-of-policy changes require approval.
+- Keep durable intent, uniquely evidenced ambiguous-submission recovery,
+  ownership/partial-fill reconciliation, settlement-aware funding and audit
+  history between proposal and execution. A pause blocks new risk according to
+  policy; it must not blindly cancel protection or liquidate the passive core.
+  Never retry an uncertain non-idempotent submission as if it failed.
+
+### Comparison policy
+
+Use actual applicable designated savings terms for personal reporting; compare
+the combined portfolio and dynamic contribution with a matched all-core passive
+counterfactual after costs and consistent tax assumptions. The former fixed
+passive recipes (100% savings/equities, 80/20 or 60/40 equity/cash or equity/bonds,
+80/10/10 equity/bonds/cash) remain a small comparison family, not optima.
+Freeze the relevant subset and exact capital/policy before viewing results.
+
+The previously selected BoE instant-access quoted rate for GBP 1,000 balances,
+excluding guaranteed bonuses with bonus-inclusive sensitivity, is a research
+proxy only. It is not the investor's larger-account yield. NatWest 0% remains
+historical context, not sufficient justification for active risk. Neither public
+pages nor the illustrative split establish suitability or future outperformance.
 
 ## First offline release
 
@@ -297,8 +377,29 @@ Refreshes only read reports; there is no browser approval or execution route.
 
 ## Research and provider screen
 
+### Design evidence reviewed on 2026-11-16
+
+These public documents inform architecture and research priorities, not product
+selection, account eligibility, trading approval or this portfolio's performance.
+No market-history dataset was acquired.
+
+| Verified source | Design implication and limitation |
+| --- | --- |
+| [Vanguard, Why, how and when multi-asset investors should rebalance](https://www.vanguard.co.uk/professional/vanguard-365/investment-knowledge/portfolio-construction/when-multi-asset-investors-should-rebalance), 4 January 2026 | Strategic rebalancing primarily maintains intended risk, not maximum returns. Retain low-turnover core maintenance; no universal optimal frequency or guarantee follows from its illustrations. |
+| [Bank of England/FCA, Artificial intelligence in UK financial services](https://www.bankofengland.co.uk/report/2024/artificial-intelligence-in-uk-financial-services-2024), 21 November 2024 | Survey respondents identify analytical/operational benefits alongside data, third-party and model risks. Only 2% of reported use cases were fully autonomous. Adoption is not evidence of trading alpha; automate useful research and operations with explicit governance. |
+| [ESMA, Guidance on AI in investment services](https://www.esma.europa.eu/press-news/esma-news/esma-provides-guidance-firms-using-artificial-intelligence-investment-services), 30 May 2024 | Highlights data quality/bias, opaque decisions, overreliance, privacy and security. Keep accountable policy ownership, evidence-linked explanations and deterministic execution constraints. EU firm guidance is design evidence, not a legal ruling on this UK personal tool. |
+| [Hurst, Ooi and Pedersen, A Century of Evidence on Trend-Following Investing](https://www.aqr.com/Insights/Research/Journal-Article/A-Century-of-Evidence-on-Trend-Following-Investing), 31 October 2017, Journal of Portfolio Management | Motivates a small trend hypothesis family only. Its long/short futures/forward research does not establish returns for an unleveraged GBP long-only fund sleeve, nor authorise those instruments. |
+
+Prefer verified primary evidence over an AI-generated research summary. Public
+fund-manager research may have commercial interests; regulator surveys/guidance
+do not measure this strategy's returns. The S&P SPIVA pages refused direct retrieval
+in this review, so no purported latest report date or underperformance percentage
+is asserted here. No source establishes an optimal 80-90% / 10-20% allocation.
+
 Public-document review on 2026-11-15; no product dataset was acquired and no
 performance run or account verification occurred.
+The following initial screen retains its dated GBP 1,000 cost examples and
+candidate products; it is not a current larger-capital fee calculation or selection.
 
 | Evidence | Implication |
 | --- | --- |
@@ -374,31 +475,48 @@ following remain unsupported/unverified:
 - Validated spread/slippage/quote/cost models for executable proposals.
 - Exact venue permissions and uniquely evidenced ambiguous-order recovery.
 - Licensed historical portfolio comparisons and the optional active challenger.
+- Core/dynamic role accounting, independent risk/transfer budgets, matched
+  all-core attribution and revocable standing-policy execution.
+- Automated portfolio-specific briefs, thesis/watch workflows, UK/global
+  calendar coverage and prospectively admitted intelligence-derived features.
 
 ### Continuation order
 
-The bounded recorded-accounting release is complete. The next portfolio-research
-phase is **feasibility and simulator engineering**, not a return run: first close
-the product/account, cash-terms, historical-data-rights/vintage, action/FX,
-cost/tax, and selection-protocol gates in the
-[research protocol](backtesting-protocol.md). Synthetic-only tests may validate a
-future continuous simulator's event ordering and conservation, but cannot close
-those external gates or support a portfolio-performance conclusion. Stop if a
-required source or permission is unavailable; retain the useful tracking workflow.
+1. **Investment-capital usability and truth:** safe onboarding of existing selected
+   accounts/holdings, reconciliation and append-only corrections; manual bank
+   updates without fabricated returns/cost basis; history and cost/income
+   attribution. The current empty-inception contract remains until explicitly
+   implemented alternatives are tested. Do not import household cash by default.
+2. **Core/dynamic accounting and policy:** introduce independent role/risk budgets,
+   evidenced transfers, combined concentration and review controls. Approve exact
+   allocation, loss/replenishment/profit rules and investable products before
+   funding experiments. Generic equity/bond/cash drift is not sufficient.
+3. **Automated observation and research:** integrate read-only intelligence,
+   scheduled portfolio briefs, exposure-aware calendar/watch alerts and research
+   records. Collection/provider activation remains opt-in and separately approved;
+   no private account data is sent to hosted AI. Operational automation can be
+   useful without waiting for a winning trading model.
+4. **Evidence and simulator engineering, in parallel with useful tracking:** close
+   product/account, cash-terms, persistent source rights/vintages, action/FX,
+   cost/tax and frozen-protocol gates before product-performance runs. Synthetic
+   tests validate engineering only. Build continuous combined/core/dynamic
+   accounting, not stitched USD windows. Compare a finite locked strategy family
+   with matched all-core and savings alternatives. Stop at unavailable evidence.
+5. **Execution progression:** first a separately approved per-proposal execution
+   pilot, then revocable standing authority for approved core maintenance and
+   admitted dynamic strategies, after broker trials/recovery tests and independent
+   review. No broker is selected and no standing authority is implemented.
+   Reuse legacy safety concepts, not unverified Alpaca-specific retry semantics.
+6. **Experimental admission and retirement:** require selection/locked
+   confirmation and prospective shadow evidence before separately approved
+   deployment. Track incremental net benefit and risk; retire or suspend failed
+   hypotheses under approved rules rather than chase losses or force a winner.
+   AI/calendar-derived trading features need their own prospective admission.
 
-Broker execution is a separate later phase. It requires exact venue/product/
-settlement evidence, durable per-proposal human approval, and uniquely evidenced
-recovery from ambiguous submissions. This plan does not authorize account access,
-orders, credentials, operational migrations, or changes to safety hooks/policies.
-The optional trend challenger follows passive comparison and remains nonessential.
-
-No favourable report is approval to invest. A separately enabled local execution
-CLI would require per-proposal human approval, durable intent, confirmed partial
-fills/ownership, evidence-backed recovery and independent validation. If safe
-recovery is unavailable, retain manual execution outside GoldScout.
-
-[Market intelligence](intelligence.md) stays advisory-only and is not a dependency
-of allocation or a news/AI signal in research. The
-[investment research context](investment-research-context.md) and
-[protocol](backtesting-protocol.md) distinguish this mandate from the historical
-trading campaign; preserve all old trials and consumed holdouts.
+This roadmap authorises no account access, orders, secret access, operational
+migrations or guard changes. If safe recovery is unavailable, retain export-only
+proposals and manual execution. No favourable report is approval to invest.
+[Market intelligence](intelligence.md) remains advisory-only in the current
+runtime; its expanded portfolio role is planned, not silently enabled.
+Preserve all earlier trials and consumed holdouts under the
+[context](investment-research-context.md) and [protocol](backtesting-protocol.md).

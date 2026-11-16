@@ -6,6 +6,48 @@ AI briefs. It never places orders, changes stops or suppresses strategy signals.
 `shadow` produces hypothetical calendar observations only. Calendar completeness
 is unverified, so unknown coverage never becomes trading permission.
 
+## Portfolio-manager direction (planned, not enabled)
+
+The [2026-11-16 mandate](investment-research-context.md) makes intelligence a
+central supporting capability for substantial long-term investment capital:
+a stable core and capped dynamic experiments, not a household cash planner.
+Reuse the existing service rather than building a parallel ungoverned AI trader.
+Current advisory/shadow contracts and opt-in launch/provider gates are unchanged.
+
+Prioritise automatic, source-linked portfolio briefs, thesis/watch records,
+economic-event awareness, uncertainty and research-hypothesis generation. A future
+local exposure projection may link relevant public events to approved instruments;
+account balances, private identifiers and broker/account evidence must not become
+hosted AI inputs. Public research sources still need verified rights and relevance.
+Current BLS/BEA/Fed coverage is US-focused; BoE/UK/global calendars and issuer
+coverage are proposed extensions requiring approved sources and coverage tests,
+not capabilities inferred from an empty calendar.
+
+Separate three uses:
+
+1. **Explain and monitor:** dated evidence, known changes, exposure context and
+   watch/review/wait briefs. Measure factual reference accuracy, freshness,
+   coverage, alert usefulness and AI spend; fluent prose is not return evidence.
+2. **Propose experiments:** AI can help formulate testable hypotheses and identify
+   missing evidence. Humans freeze products, signals, model/prompt versions,
+   costs, trial history and admission criteria. Proposed ideas are not trades.
+3. **Future admitted dynamic features:** deterministic calendar constraints or
+   structured AI features require separate explicit approval and prospectively
+   logged research with receipt/validated-completion times. They do not modify
+   the stable core. Existing news/LLM exclusions are not lifted for current runs.
+
+Future standing-policy execution must sit behind independent deterministic
+funding, cost, ownership and risk checks. Models cannot submit orders, edit
+mandates, expand budgets or automatically refill experimental losses. External
+text/model output is untrusted data, never executable instruction. An intelligence
+failure cannot silently become a favourable signal, change protective recovery
+or force core liquidation. A dependent dynamic strategy needs its own approved
+failure/suspension policy before admission.
+
+See the [portfolio roadmap and verified design sources](investment.md) and
+[research admission protocol](backtesting-protocol.md). This documentation change
+starts no service, calls no provider and grants no trading authority.
+
 ## Setup
 
 Use the selected Python 3.11 environment. Install optional dependencies:

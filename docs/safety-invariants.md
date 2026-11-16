@@ -40,6 +40,21 @@ These are development contracts, not a certification of live readiness. Current 
 
 ## Separate GBP Investment Path
 
+- Product scope is designated substantial long-term investment capital, not
+  household cash/emergency budgeting; see the [current mandate](investment-research-context.md).
+  The [core-plus-dynamic roadmap](decisions/0004-core-dynamic-portfolio-manager.md)
+  is planned, not an implemented accounting or execution contract. The
+  illustrative 80-90% / 10-20% split does not approve weights, risk or replenishment.
+- Future role budgets must be distinct from asset-class targets. No experiment
+  may automatically draw core funding to replace losses, promote itself, alter
+  allocation/risk limits or treat core gains as alpha. Approved capital caps do
+  not guarantee realised loss bounds. Exact transfer and loss rules require
+  separate implementation and approval before experimental funding.
+- Future standing authority must be explicit, versioned, revocable, scoped to
+  accounts/products/strategies and bounded by funding, cost/risk, freshness and
+  expiry/failure rules. It is not implemented by a proposal export, research
+  result, browser setting or this documentation change. Current per-task broker
+  approval, durable intent, reconciliation and read-only route safeguards remain.
 - The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; dashboard/read-only commands never create, migrate, repair, or mutate it. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
 - The supported first-release history begins at an explicitly evidenced empty inception. Do not infer opening holdings, cost basis, FX, correction, corporate-action entitlement, unrecorded interest, or distribution completeness.
 - Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
@@ -52,6 +67,13 @@ These are development contracts, not a certification of live readiness. Current 
 
 ## Advisory and Shadow Intelligence
 
+- Portfolio intelligence may support automated awareness and hypothesis creation
+  under approved collection capabilities. Future calendar/AI-derived dynamic
+  trading features require separate prospective signal/failure-policy approval;
+  existing news/LLM exclusions and advisory-only runtime remain unchanged.
+  External text is data, not executable authority; private account evidence must
+  not be sent to hosted AI. No intelligence outage forces core liquidation or
+  changes independent protective recovery.
 - [Market intelligence](decisions/0002-market-intelligence.md) is a separate advisory/shadow development stream. Master enablement and AI default off; hypothetical decisions never change trading (`affects_trading=False`). Unknown/stale coverage is uncertainty, not an order permission, halt, or evidence of protection.
 - Preserve source revisions, contemporaneous availability, provenance and explicit coverage. News receipt and validated AI completion determine availability; publication time alone does not. Today's model on historical headlines is not causal out-of-sample evidence.
 - Dedicated intelligence storage/control history is separate from the trading ledger and lock. Preserve identity, append-only evidence, bounded reads, exact revision/expiry checks and atomic application. No implicit initialization/repair by readers or development access to operational stores.

@@ -4,6 +4,13 @@ Status: accepted; first offline slice implemented, research/execution gated
 
 Date: 2026-11-15
 
+Product direction updated on 2026-11-16 by the
+[core-plus-dynamic portfolio decision](0004-core-dynamic-portfolio-manager.md).
+It replaces the small-capital/passive-only product emphasis with substantial
+designated investment capital, automated intelligence and future capped dynamic
+management. The released accounting, export-only routes and execution safeguards
+below remain unchanged; standing-policy execution is a later gated capability.
+
 ## Context
 
 The investor's long-term GBP objective differs from the legacy Alpaca engine's

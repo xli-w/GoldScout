@@ -1,17 +1,26 @@
 # GoldScout
 
-GoldScout is being refocused on **long-term, diversified GBP investing**:
-accurate portfolio measurement, optional contributions and explainable allocation
-proposals, rather than frequent price prediction. The first investment release is
-offline and export-only. It cannot place orders or guarantee profitability.
+GoldScout is being developed into a **long-term GBP core-plus-dynamic portfolio
+manager** for the investor's substantial, designated investment capital: selected
+bank savings, bonds and investments, not household budgeting, emergency reserves
+or miscellaneous small cash accounts.
+
+The goal is transparent net compound growth, a majority stable investment core,
+a capped experimental sleeve, source-linked AI/economic research and as much
+validated policy-bound automation as practical. An illustrative 80-90% core /
+10-20% dynamic split is a design discussion, not an approved allocation or default.
+The current investment release is still offline and export-only: it cannot place
+orders, isolate a dynamic sleeve or guarantee profitability.
 
 See the [investment guide](docs/investment.md) for the current workflow, supported
 accounting and explicit research/broker blockers.
 
 ## Investment first
 
-- A human chooses the allocation across global equities, high-quality bonds and
-  GBP cash; there is no automatic "best backtest" selection.
+- The investor approves the strategic allocation across global equities,
+  high-quality bonds and designated GBP savings, and eventually a separate dynamic
+  budget. "Fixed" means stable policy, not fixed prices or guaranteed returns.
+  No automatic "best backtest" allocation selection is implemented or intended.
 - Contribution-first planning, monthly review and annual/five-percentage-point
   drift reviews aim to limit unnecessary turnover. Export-only sales can be
   suggested at annual/drift reviews; proposed proceeds do not fund purchases.
@@ -24,6 +33,12 @@ accounting and explicit research/broker blockers.
 - Full FX, corporate-action entitlement/accrual, money-weighted/inflation returns,
   licensed historical comparisons and human-approved broker execution remain
   gated follow-ons. A valid import is not proof of investment suitability.
+- The roadmap prioritises investment-capital onboarding, growth attribution,
+  core/dynamic risk accounting and automated monitoring/research, then validated
+  execution. Future standing authority may automate approved contributions,
+  rebalancing and admitted dynamic strategies without approving every order;
+  it must not allow AI to change policy, expand risk or refill experimental losses.
+  No such authority exists in today's CLI or dashboard.
 
 With the selected Python environment and existing dependencies:
 
@@ -49,6 +64,10 @@ Economic-calendar and AI news context is available through the separate
 [market intelligence service and dashboard](docs/intelligence.md). Collection and AI
 are explicitly enabled by the operator; front-end analysis controls never place
 orders or alter risk settings. The initial release supports advisory/shadow use only.
+Reuse its source provenance, calendars, briefs and bounded provider infrastructure
+for future portfolio awareness, not as an unrestricted LLM-to-order connection.
+See the [portfolio-manager decision](docs/decisions/0004-core-dynamic-portfolio-manager.md)
+for the agreed direction and unchanged operational boundaries.
 
 Trades SPY, QQQ, BTC/USD, GLD and USO with three strategy modules, ATR-based sizing and hard stops.
 SPY/QQQ use 15-minute mean reversion, BTC/USD uses hourly momentum breakouts, and GLD/USO use

@@ -2,47 +2,76 @@
 
 ## Current long-term investment mandate
 
-The investor explicitly revised the mandate on 2026-11-15: GBP 1,000, separate
-emergency savings, no expensive debt, no fixed withdrawal date, tolerance for
-40-50% drawdowns and optional regular contributions. Losses may be permanent.
-The core is human-chosen diversified global funds, high-quality bonds and GBP
-savings, without portfolio leverage, shorting or crypto. See the
-[current investment guide](investment.md) for implemented capabilities, primary
-research sources and unresolved gates.
+On 2026-11-16 the investor clarified that GoldScout should manage substantial,
+designated long-term investment capital, not emergency reserves, day-to-day
+liquidity, miscellaneous savings or household budgeting. Include only selected
+investment bank deposits, bonds and investment accounts. GBP remains the reporting
+currency; the capital amount is to be supplied, not assumed to be GBP 1,000.
+Earlier drawdown tolerance is context, not approval of a dynamic loss budget.
 
-Prioritise accurate GBP measurement and contribution-first discipline. Use
-monthly reviews and annual/five-percentage-point drift proposals; the investor
-chooses the allocation rather than optimising it against historical returns.
-The investor selected a Bank of England quoted household instant-access deposit
-rate for a GBP 1,000 balance as the primary cash **proxy**, using the
-excluding-guaranteed-bonus series; show the bonus-inclusive series as a
-sensitivity. These monthly advertised-rate averages are gross of tax, omit
-account fees and are not the investor's own available or realized savings rate.
-Keep NatWest's applicable 0% current-account counterfactual distinct, not as
-sufficient investment justification. The exact BoE series identifier/vintage,
-operator-held account, and investment product/account eligibility remain to be
-verified. Historical market data stays public or operator-supplied only; no paid
-feed or authenticated broker data is authorized.
+**Objective:** seek durable net compound GBP growth over years, explain its
+sources and costs, and improve allocation decisions within investor-approved risk
+constraints. "Most profitable" is an aspiration, not a knowable optimum or a
+mandate to maximise leverage, turnover or risk. Operational funding/settlement
+constraints still apply even though personal liquidity planning is out of scope.
 
-The earlier six-month return aspiration, stop-based risk profiles, leverage/crypto
-challengers and +5-point NatWest gate below are **historical campaign assumptions**,
-not the current passive-core policy. Retain their provenance and trial/holdout
-history. The 60-candidate ceiling, predeclaration, adverse costs, causal accounting
-and single-use report-only holdout remain controls for future research. A changed
-mandate cannot erase previously exposed samples.
+**Structure:** a majority stable core plus a separately capped experimental,
+dynamic sleeve. The investor approved documenting 80-90% core / 10-20% dynamic
+as an illustrative design range only. Exact weights, allowed products, per-position
+and aggregate risk, loss budget, replenishment and profit-transfer rules await
+approval. The core is diversified unleveraged global funds, high-quality bonds
+and selected GBP deposits. "Fixed" means stable strategic holdings/policy, not
+guaranteed value or a ban on disciplined rebalancing. Leverage, shorts, crypto and
+speculative options are not newly authorised in either sleeve.
 
-The current engineering release is offline GBP tracking and export-only buy/sell
-proposals, not a historical performance campaign or broker execution system. The
-next research phase starts with external feasibility and synthetic-only simulator
-engineering; it must not produce product-performance results until the gates in
-the protocol are met. The no-later-flow GBP 1,000 comparison remains a primary
-future research scenario; optional contribution scenarios must be separately
-labelled and matched across benchmarks. Before active research,
-approve exact improvement/uncertainty criteria relative to passive alternatives;
-never choose thresholds after seeing results. Trading/account access and
-changes to safety policies require separate explicit approval.
+**Automation:** maximise reliable automatic measurement, monitoring, alerts,
+source-linked AI research and calendar awareness first; progress to execution
+under revocable standing policy after venue/recovery validation. Human approval
+of policy should eventually replace repetitive approval of every compliant order.
+The system must not rewrite its own mandate, promote experiments, refill losses
+from the core or increase risk because of AI output. These are future requirements,
+not permissions implemented by the current export-only release.
+
+**Research priorities:** maintain a low-cost, low-turnover core; evaluate a small
+set of interpretable daily/weekly long-only dynamic hypotheses against keeping
+that capital in the core. AI should automate evidence gathering, dated briefs,
+exposure explanations and experiment proposals. Calendar-aware execution or
+structured AI-derived features may become separate prospective experiments only
+after explicit signal/failure-policy approval. No news/LLM trading signal is
+admitted to the existing campaign by this mandate. Do not revive the legacy
+intraday strategies as presumed winners or attach unrestricted AI to orders.
+
+**Comparisons:** actual designated savings terms for personal reporting, a
+matched all-core passive portfolio for judging dynamic value, and full-portfolio
+as well as sleeve-level net GBP attribution. The previously selected BoE
+GBP 1,000 instant-access quoted-rate series (excluding guaranteed bonuses, with
+bonus-inclusive sensitivity) remains a separately labelled research proxy, not
+this larger investor's available yield. Its series/vintage still needs verification.
+NatWest 0% and the original GBP 1,000 scenario remain historical/sensitivity
+context, not the current primary benchmark or capital assumption.
+
+The earlier six-month aspiration, stop-based profiles, leverage/crypto challengers
+and +5-point NatWest gate below are historical. Preserve their provenance, every
+exposed sample and consumed holdout. Retain the 60-candidate total ceiling,
+predeclaration, causal accounting, adverse costs and single-use report-only
+confirmation. Do not reset the search history because the mandate changed.
+
+The current release remains recorded GBP accounting and export-only proposals,
+with no core/dynamic schema, integrated historical simulator or broker adapter.
+The [investment guide](investment.md) defines the product roadmap; the
+[protocol](backtesting-protocol.md) defines research admission. Public-document
+research may inform design, but market-data acquisition/performance runs remain
+blocked at unmet product, source-rights, vintage, cash-terms, action/FX, cost/tax
+and frozen-protocol gates. No paid feed, authenticated broker data, account access,
+orders or operational-state work is authorised. This chat approved documentation
+and matching guidance changes only; executable strategies/defaults stay unchanged.
 
 ## Historical trading campaign (retained context)
+
+All investor objectives, capital assumptions, strategy priorities and research
+risk profiles in the remainder are historical, not the current mandate above.
+Their trial/exposure history remains binding provenance; changing the product
+direction cannot make previously seen samples unexposed.
 
 This document records the investor's stated goals and the agreed boundaries for offline strategy research. It is context for research and decision-making, not investment, legal, or tax advice. It does not change the live bot, its configuration, or its operating limits.
 

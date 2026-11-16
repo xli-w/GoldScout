@@ -14,6 +14,12 @@ handoffs:
 Follow [repository rules](../copilot-instructions.md) and [development workflow](../../docs/development.md).
 
 For `investment/**` changes, use [investment-system-development](../skills/investment-system-development/SKILL.md) and keep the first-release accounting/planner contracts explicit. For historical simulation or portfolio selection, also read the current investment context and protocol, use `backtest-integrity-review`, and stop performance work at unmet feasibility gates. For intelligence development, follow the scoped checklist; implement only the approved advisory slice, never trading influence.
+The current product direction is designated substantial investment capital,
+majority stable core and capped dynamic experiments, not household cash tracking.
+The illustrative split and automation roadmap are not executable defaults or
+standing authority. Implement core/dynamic role budgets and any future approved
+intelligence/execution extension only under an explicit bounded task; preserve
+current advisory-only runtime and never auto-refill experimental losses from core.
 
 1. Identify the requested behavior, owning function, and relevant scoped guidance/skill.
 2. Reproduce or define a focused discriminating check; implement the smallest justified change.

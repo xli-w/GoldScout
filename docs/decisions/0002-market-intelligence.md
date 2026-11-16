@@ -4,6 +4,13 @@ Status: implemented initial advisory/shadow release; operational provider/feed v
 
 Date: 2026-11-14
 
+Portfolio direction update, 2026-11-16: the
+[core-plus-dynamic decision](0004-core-dynamic-portfolio-manager.md) plans to reuse
+this foundation for automated portfolio awareness and experiment support.
+Separately approved prospective dynamic features are a possible later extension,
+not a change to this release's advisory/shadow authority, default-off controls,
+source coverage or existing research exclusions.
+
 ## Context
 
 The bot currently evaluates price-based strategies and applies independent execution,

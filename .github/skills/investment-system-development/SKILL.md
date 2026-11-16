@@ -13,6 +13,22 @@ historical simulation/selection, also use
 [current mandate](../../../docs/investment-research-context.md) plus
 [backtesting protocol](../../../docs/backtesting-protocol.md).
 
+## Product direction
+
+The current mandate is substantial designated long-term investment capital,
+not household cash or emergency reserves. A majority stable core plus capped
+dynamic sleeve, automated AI/calendar awareness and eventual revocable
+standing-policy execution are planned. The illustrative 80-90% / 10-20% split
+does not approve weights, loss budgets or replenishment. See the
+[portfolio decision](../../../docs/decisions/0004-core-dynamic-portfolio-manager.md).
+
+Core/dynamic role must be independent of equity/bond/cash and account location;
+today's schema has no role/risk isolation. For example, an equity overweight
+must not cause generic rebalancing to refill a losing dynamic equity strategy
+from the core. Approve transfer/loss/profit rules before implementing or funding
+that behaviour. Automation maximises useful observation and approved policy
+execution, not AI authority to rewrite policy. Keep runtime limits below explicit.
+
 ## Current release boundary
 
 - `investment/` is separate from `bot/`, `config.py`, the trading ledger, and
@@ -36,6 +52,10 @@ historical simulation/selection, also use
 - Human-selected targets and the fixed comparison set are not optimized by
   historical returns. Do not promise profit, safety, maximum drawdown, or a
   winning allocation.
+- Future dynamic admission needs approved capital/risk/cost limits, matched
+  all-core comparisons and prospective evidence. Neither a return result nor
+  a research brief grants standing authority. News/LLM trading exclusions remain
+  for existing runs; future calendar/AI features require separate approval.
 - `investment.simulation.simulate_synthetic_fixture` is only an engineering
   harness: synchronized GBP observations, next-session-open buy-only fills,
   positive contributions, cash-funded close-time withdrawals (no liquidation),
