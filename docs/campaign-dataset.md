@@ -1,15 +1,15 @@
 # Offline GBP Campaign Dataset Importer
 
-`python -m bot.campaign_data import MANIFEST.json --dataset-dir DATA_DIR` validates
+`python -m research_data import MANIFEST.json --dataset-dir DATA_DIR` validates
 operator-supplied local files and writes a content-addressed snapshot under
-`DATA_DIR/datasets/<sha256>/`. `python -m bot.campaign_data validate DATASET_ID
+`DATA_DIR/datasets/<sha256>/`. `python -m research_data validate DATASET_ID
 --dataset-dir DATA_DIR` reopens the snapshot and verifies its original manifest
 and every preserved source file. Both commands are local-only; they do not
 instantiate a market-data client or access a network.
 
-This is a **separate versioned data-ingestion contract**. It does not replace or
-modify minute experiment Dataset v1, is not accepted by `bot.experiments
-validate/run`, and does not provide a simulator or portfolio/accounting path.
+This is an independent offline data-ingestion contract, not part of the journal.
+It provides no simulator or portfolio/accounting authority and has no broker or
+network dependency. Dataset wire versions are independent of journal versions.
 Successful import establishes only the checks documented below. It does not
 close product eligibility, session/calendar, FX transaction-time, total-return,
 cost, tax, cash-accounting, benchmark, or GBP campaign feasibility gates, and
@@ -165,11 +165,11 @@ once the products and sources are selected.
 ## Scoped FX publication and freshness audit
 
 ```powershell
-python -m bot.campaign_data fx-readiness DATASET_ID --dataset-dir .\campaign_datasets --profile .\fx-readiness.json
+python -m research_data fx-readiness DATASET_ID --dataset-dir .\campaign_datasets --profile .\fx-readiness.json
 ```
 
 The equivalent Python function is
-`bot.campaign_data.readiness.audit_fx_readiness(dataset_dir, dataset_id, profile_path)`.
+`research_data.readiness.audit_fx_readiness(dataset_dir, dataset_id, profile_path)`.
 It reopens and checksum-validates an existing snapshot and examines one
 declared GBP-per-unit FX series at explicitly supplied clocks. It does not
 change the dataset, contact a provider, convert prices or calculate returns.
@@ -230,10 +230,10 @@ backtesting or trading. Develop and test with synthetic temporary fixtures.
 ## Complete FX observation view
 
 ```powershell
-python -m bot.campaign_data fx-view DATASET_ID --dataset-dir .\campaign_datasets --profile .\fx-readiness.json
+python -m research_data fx-view DATASET_ID --dataset-dir .\campaign_datasets --profile .\fx-readiness.json
 ```
 
-`bot.campaign_data.readiness.fx_observation_view(dataset_dir, dataset_id, profile_path)`
+`research_data.readiness.fx_observation_view(dataset_dir, dataset_id, profile_path)`
 reuses the same dataset-bound FX profile and publication/freshness rules as the
 audit. It returns **one observation for every supplied clock**, never a
 sample or a shortened prefix. If any clock lacks a published observation or
@@ -274,12 +274,12 @@ fixtures during development.
 ## Scoped GBP daily readiness audit
 
 ```powershell
-python -m bot.campaign_data readiness DATASET_ID --dataset-dir .\campaign_datasets --profile .\readiness.json
+python -m research_data readiness DATASET_ID --dataset-dir .\campaign_datasets --profile .\readiness.json
 ```
 
 This read-only command reopens and checksum-validates the immutable snapshot,
 then audits selected daily GBP series against a separate, dataset-bound profile.
-It neither changes importer v1 nor feeds the minute runner. It writes JSON to
+It preserves the importer wire contract and is not connected to a simulator. It writes JSON to
 stdout and diagnostics to stderr; save any report **outside** the snapshot.
 Evidence references are recorded only, never opened or fetched.
 
@@ -371,7 +371,7 @@ evidence rather than adopting the illustrative values.
   observation or availability timestamps, or their applicable retrieval
   timestamps, are rejected explicitly rather than rounded into an earlier
   session or decision. Invalid UTC offset components are rejected rather than
-  normalized; extra trailing zeroes are allowed. Importer v1 remains unchanged.
+  normalized; extra trailing zeroes are allowed. The importer wire contract is unchanged.
 - Only daily, GBP-denominated inputs explicitly documented as `GBP_PER_UNIT`
   (pounds) or `GBX_PER_UNIT` (pence) are supported. For pence, the declared
   conversion is 100 pence per GBP. The source manifest currency remains `GBP`:
@@ -437,11 +437,11 @@ Existing `import` and `validate` exit behavior is unchanged.
 ## Complete GBP-normalized daily view
 
 ```powershell
-python -m bot.campaign_data normalize DATASET_ID PRODUCT_ID --dataset-dir .\campaign_datasets --profile .\readiness.json --as-of 2025-03-31T16:00:00Z
+python -m research_data normalize DATASET_ID PRODUCT_ID --dataset-dir .\campaign_datasets --profile .\readiness.json --as-of 2025-03-31T16:00:00Z
 ```
 
 The equivalent Python function is
-`bot.campaign_data.readiness.normalized_product_view(dataset_dir, dataset_id, profile_path, product_id, as_of)`.
+`research_data.readiness.normalized_product_view(dataset_dir, dataset_id, profile_path, product_id, as_of)`.
 It reopens and checksum-validates the dataset, binds the profile to that dataset,
 and runs the same whole-profile readiness audit. Any failing or unsupported
 check, including checks for other selected products or cash, rejects the view.
@@ -494,7 +494,7 @@ outside the snapshot. Test and develop with synthetic temporary fixtures.
 
 ## Synthetic GBP fill-accounting contract
 
-The pure helper `bot.campaign_data.account_fills(initial_cash_gbp, fills)` is
+The pure helper `research_data.account_fills(initial_cash_gbp, fills)` is
 an offline engineering contract only. It accepts a positive initial GBP cash
 amount and an already ordered `list`/`tuple` of synthetic fill events. It uses
 exact decimal strings, explicit `GBP` / `GBP_PER_UNIT`, a caller-supplied

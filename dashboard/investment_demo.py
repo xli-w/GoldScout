@@ -1,4 +1,4 @@
-"""Synthetic v2 investment snapshot used by the local dashboard demo."""
+"""Synthetic opening-evidence snapshot used by the local dashboard demo."""
 
 from datetime import timedelta
 

@@ -15,23 +15,18 @@ def frontend_directory():
 
 def verify_frontend(directory=None, schema=None):
     directory = Path(directory) if directory else frontend_directory()
-    schema = Path(schema) if schema else Path(__file__).with_name("response.schema.json")
+    investment_schema = Path(__file__).resolve().parent.parent / "investment" / "response-v2.schema.json"
+    schema = Path(schema) if schema else investment_schema
     try:
         if directory.is_symlink() or (directory / "dashboard-build.json").is_symlink():
             raise FrontendBuildError("Frontend build must not contain symbolic links")
         manifest = json.loads((directory / "dashboard-build.json").read_text(encoding="utf-8"))
         if manifest.get("version") != 1 or manifest.get("schema_sha256") != hashlib.sha256(schema.read_bytes()).hexdigest():
             raise FrontendBuildError("Frontend contract does not match this dashboard")
-        if schema == Path(__file__).with_name("response.schema.json"):
+        if schema == investment_schema:
             setup_schema = Path(__file__).with_name("setup.schema.json")
             if manifest.get("setup_schema_sha256") != hashlib.sha256(setup_schema.read_bytes()).hexdigest():
                 raise FrontendBuildError("Frontend setup contract does not match this dashboard")
-            investment_schema = Path(__file__).resolve().parent.parent / "investment" / "response.schema.json"
-            if manifest.get("investment_schema_sha256") != hashlib.sha256(investment_schema.read_bytes()).hexdigest():
-                raise FrontendBuildError("Frontend investment contract does not match this dashboard")
-            opening_schema = investment_schema.with_name("response-v2.schema.json")
-            if manifest.get("investment_v2_schema_sha256") != hashlib.sha256(opening_schema.read_bytes()).hexdigest():
-                raise FrontendBuildError("Frontend opening investment contract does not match this dashboard")
             awareness_schema = investment_schema.with_name("awareness.schema.json")
             if manifest.get("awareness_schema_sha256") != hashlib.sha256(awareness_schema.read_bytes()).hexdigest():
                 raise FrontendBuildError("Frontend portfolio awareness contract does not match this dashboard")

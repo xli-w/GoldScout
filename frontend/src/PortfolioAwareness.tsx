@@ -143,7 +143,7 @@ export function PortfolioAwareness({ portfolioId, revision }: { portfolioId: str
                 <p>{brief.provider} / {brief.model}; prompt {brief.prompt_version}; input SHA256 {brief.input_hash}</p>
               </details>)}
               <h3>Review reminders</h3>
-              <p>Operator-configured cadence only. A reminder is not a recorded review acknowledgement or investment-policy approval.</p>
+              <p>Operator-configured cadence only. A reminder is not evidence that a review occurred or that an investment policy was approved.</p>
               {!data.reminders.length && <p>No review reminders configured.</p>}
               <ul>{data.reminders.map(item => <li key={item.id}>
                 <strong>{item.title}: {label(item.status)}</strong>; due {timestamp(item.due_at, "No review date recorded")};

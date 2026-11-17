@@ -1,217 +1,203 @@
-# Safety Invariants
+# Safety invariants
 
-These are development contracts, not a certification of live readiness. Current operating limits are documented in [README](../README.md). Historical reviews must be rechecked against current source.
+These are development contracts, not certification of custody, suitability,
+profitability or live readiness. [README](../README.md) defines current scope.
 
-## Execution
+## Authority and privacy
 
-- Market-data workers fetch only; the main loop owns strategy evaluation and mutations ([main](../bot/main.py)).
-- Stop requests skip remaining scheduler jobs and block entries still in preflight. An entry that passes its final guard after durable order intent is in flight; shutdown does not cancel it, and recovery reconciles it. Shutdown leaves open positions and their resting protection in place.
-- New entries require a successful position-monitor pass started within `MONITOR_INTERVAL`. Failed, overdue, or never-completed monitoring blocks entries; retries and ordinary exits continue.
-- Orders require known ownership, matching symbol/side/residual quantity, valid protective terms, and broker-confirmed state ([portfolio](../bot/portfolio.py)). Unknown provenance or direction blocks mutation.
-- Fresh entries refresh same-symbol broker positions and open orders before durable intent. Existing exposure/orders block new entries; post-fill broker quantity must be conserved by the entry fills (crypto fee deductions are bounded by the configured estimate), and a protective OTO leg is attachable only with matching parent-group evidence. Foreign orders stay untracked and are not canceled or adopted.
-- Durable intent precedes submission. Observed cumulative fills are not individual executions. Per-order baselines and repeated observations must conserve quantity without double accounting or resurrecting exited residuals.
-- Cancellation must be confirmed before a competing exit or re-arm. Cancellation/re-arm has an unprotected interval. Stops and crypto stop-limit orders do not guarantee execution or price.
-- Finite sizing inputs and risk caps remain mandatory ([risk manager](../bot/risk_manager.py)). The daily-loss halt blocks entries, not automatic liquidation. Live endpoint confirmation must not be bypassed.
-- Local configuration imports do not initialize broker settings. Trading startup validates them before logging or locking, and broker clients still require an approved endpoint.
-- When `TRADER_PROXY_URL` is configured, Alpaca REST, intelligence feed transport and the hosted AI adapter must use it without direct fallback. Proxy authentication must not appear in logs; external destination address validation, pinning and TLS hostname verification remain mandatory. The explicitly selected local AI adapter uses loopback.
+- There is no order-submission runtime, trading scheduler, execution broker
+  adapter or trading ledger. A separately gated eToro read collector exists;
+  it publishes partial, live-unvalidated observations only. Do not reconstruct
+  execution as an accounting convenience. Proposals remain blocked; no
+  report/export, role assignment, monitoring action or AI output grants authority.
+- No secrets, authenticated/paper broker calls, account changes, operational
+  maintenance or operational-file access without task-specific approval.
+  Never read/print/transmit `.env`, credentials or private account evidence.
+  Development uses temporary synthetic stores, not `local-investment/`.
+- The local dashboard has no user login. Keep loopback, host/origin and CSRF
+  safeguards; they are not authentication. Never expose or tunnel it.
+- Future standing authority must be explicit, versioned, revocable and scoped
+  to accounts/products/policy, funding/cost/risk, freshness, expiry and failure
+  rules. It is not implemented. Non-idempotent uncertain submissions must never
+  be retried/adopted from approximate history matching.
 
-## Accounting and Recovery
+## Journal, accounting and recovery
 
-- [SQLite ledger](../bot/ledger.py) is the recovery/accounting authority; the shared persisted-state model and validator live in [state](../bot/state.py). CSVs are derived reports; JSON is a compatibility snapshot.
-- Commit exit/state together before publishing in-memory quantities or counters. Persistence failure quarantines writes and stops unsafe scheduling, without silently resetting state.
-- Broker calls and database commits cannot be atomic; do not hold transactions across requests. Recovery relies on intent, client IDs, observations, and reconciliation.
-- Preserve account/environment binding, revision-linked snapshots, original evidence, append-only events, and idempotency. Conflicting duplicate IDs are refused.
-- Unknown exit prices are not approximated. Evidence-linked corrections require operator verification of the relationship and values; settled fees and historical facts must not be invented.
-- Maintenance uses the process lock and explicit operator approval. Backups use SQLite backup/integrity checks; copying only an active WAL database file is not a safe backup.
+- Only the opening-evidence journal, wire `schema_version=2`, is supported.
+  Older/foreign/invalid stores are explicitly rejected without migration.
+  Journals containing retired policy-review acknowledgement events are refused
+  even when marked version 2; no event migration is provided.
+  Readers never initialize, migrate, repair or mutate missing/existing stores.
+  Validate exact tables, indexes, triggers and schema identity before integrity
+  checks or data queries that could execute altered-schema expressions.
+- The investment journal is its own accounting authority; intelligence,
+  monitoring caches and review workflows are distinct stores. Preserve binding,
+  append-only original evidence, commit boundaries, revision/idempotency and
+  hash-linked replay. Identical duplicate imports are idempotent; conflicts fail.
+- Validate exact decimal cash/quantity/role conservation and chronology before
+  commit, then publish in-memory state only after commit. Failure rolls back
+  the entire append, not partial effects. No invented fees/prices, FX, settlement,
+  custody, entitlement, accrual or historical cost basis.
+- Opening evidence records all included cash and long holdings, not past trades
+  or lifetime gains. Complete contemporaneous common valuation alone starts
+  the performance baseline. There is no automatic new baseline after correction.
+- Profile amendments are append-only. Identity, binding/currency and product
+  classification/quantity rules are immutable; retirement requires zero exposure.
+  Funded scope additions need complete same-clock balances/held prices and a
+  valid existing baseline. They are unitization-neutral, not external deposits.
+- Core/dynamic/unassigned attribution is independent of account and asset class.
+  Roles conserve aggregate balances, isolate debits and survive account transfers.
+  Missing attribution stays unassigned; role-to-role movements are disabled.
+  Attribution does not verify custody or implement risk/loss/transfer budgets.
+- No automatic core-funded loss refill, experiment promotion, allocation/risk
+  expansion or counting core gains as alpha. Illustrative allocations supply
+  no approved targets or guaranteed loss bounds.
+- Every event preserves effective time and `available_at`. Late-published marks
+  cannot establish earlier contemporaneous completeness. Missing held prices
+  make valuation incomplete; never present a subtotal or zero-filled return as
+  complete. Valuation history groups same-clock relevant events and preserves
+  late/incomplete clocks as explicit gaps, not interpolation.
+- Preserve journal order but reject ambiguous performance sequencing: required
+  marks precede same-clock external flows, baseline precedes same-clock income.
+  Missing complete flow-time valuation invalidates linked TWR/drawdown; later
+  marks cannot reconstruct it. Unitization remains linked through full
+  redemption and refunding without fabricated drawdowns or reset gains.
+- Included-account transfers are internal, not contributions/returns. Scheduled
+  future funds are not settled cash; external bank deposits are not broker
+  buying power. Proposed sale proceeds never fund proposed purchases.
+- Financial corrections append evidence and replay downstream events, rejecting
+  invalid cash/quantity/role/chronology. Preserve original payload/availability.
+  Historical correction invalidates performance without automatically starting
+  another baseline. Opening, profile/scope, role, observation and review events
+  are not correctable.
+- Cash observations never change money or refresh valuation. Historical
+  correction replay recalculates past differences and can hide a previously
+  reported discrepancy; reconciliation/monitoring surface an attention warning
+  when corrections coexist with cash observations. Retain prior reports and
+  review correction evidence.
+  Savings terms are dated display facts, not accrual, eligibility or cash value.
+  Fee/income/capital-flow histories are explicit journal facts only, not proof
+  of full expenses, tax, entitlement or external movements.
+- Policy review acknowledgements are not implemented. Monitoring review actions
+  do not approve trades or resolve discrepancies. Exact cash-only confirmations
+  can refresh value only when every included account
+  matches, with all prior evidence available; unheld marks cannot refresh it.
+  Invalid confirmations fail replay, never silent repair.
+- Setup requires same-origin/CSRF, a bound preview and explicit confirmation.
+  Startup/status/preview creates no files. Existing artifacts are never
+  overwritten. Setup stages/replay-validates before no-overwrite publication;
+  profile copy, journal and receipts are not one atomic filesystem transaction.
+  A post-publication failure must preserve/report the committed journal.
+  Recovery requires exact setup provenance, not an arbitrary empty database.
+- [Backup/restore](investment-journal.md) uses pinned validated SQLite backup,
+  chain/commit/replay validation and a fresh no-overwrite destination under
+  operator-controlled permissions. Never install a restore automatically,
+  copy only an active WAL file, delete sidecars or reset evidence to bypass
+  failure. Internal hashes do not prove authenticity or latestness; keep
+  independently recorded receipts and source evidence. Directory durability,
+  Windows ACLs, encryption and retention require operator procedures.
+- Respect event/evidence/database bounds; no automatic pruning/rollover,
+  guessed new opening or limit increases as a workaround. Read failures after
+  a committed action must not suggest that the action rolled back.
 
-## Research and Data
+## Monitoring, reconciliation and awareness
 
-- Decisions use completed candles and features known at the event time. UTC, session calendars, early closes, crypto boundaries, and `bar_end` are part of the data contract ([sessions](../bot/sessions.py), [data](../bot/data.py)).
-- Reject incomplete, sparse, off-grid, or conflicting execution history instead of silently synthesizing validity. Keep cache provenance and validation ([history cache](../bot/history_cache.py)).
-- Corporate actions are globally ordered across pages; same-day split/dividend ordering and adjustments must agree across features, simulation, and benchmarks ([corporate actions](../bot/corporate_actions.py)).
-- Newly published ATR/stops cannot act on an earlier range. Mixed-timeframe sizing uses only contemporaneously available marks ([backtest](../bot/backtest.py)).
-- Shared strategy rules do not make simulated fills equivalent to broker behavior. Document OHLC ambiguity, slippage, liquidity, fees/estimates, and gaps.
-- Record experiment provenance, costs, seeds, parameters, and trials. Lock selection before the final report-only holdout; no repeated holdout tuning or implicit risk optimization ([research](../bot/research.py), [statistics](../bot/statistics.py)).
-- `bot.experiments` is offline research only: network access solely via `prepare --allow-network`, runs read immutable checksummed datasets, parameters are locked in the registry before any holdout is simulated, and research-only strategy pairings (`validate_strategy(research=True)`) never apply to live code ([experiments](../bot/experiments/)).
-- For the agreed GBP campaign, [investor context](investment-research-context.md) and the [protocol](backtesting-protocol.md) add stricter controls than the generic runner: public/user-supplied data only, no Alpaca preparation, fixed research-only risk/candidate budgets, feasibility before performance, comparable net GBP cash/passive evidence, and no holdout opening when selection fails. Existing USD/window outputs cannot substitute for unsupported GBP portfolio accounting.
-- The read-only GBP normalized daily view requires a complete scoped readiness audit and declared availability by its cutoff. It preserves source provenance but does not verify historical data vintages or authorize a performance run; future consumers must enforce availability at each decision and independently establish point-in-time data.
-- The read-only FX-readiness audit and complete observation view check declared availability and age only at caller-supplied clocks. A scoped pass or complete view does not establish complete event coverage, source vintages or executable FX, and must not be used as currency conversion, portfolio accounting or authorization to trade.
-- `bot.campaign_data.account_fills` is only a pure synthetic GBP cash/quantity conservation contract for ordered long-only fills. It does not value positions, accrue cash, apply actions, model product increments/costs, calculate risk or returns, persist state, or authorize performance claims. It is not a trading ledger or an execution adapter.
+- Monitoring is local and read-only; provider collection requires explicit
+  activation and account/permission/retention approval, never page refresh.
+  Failed collection cannot refresh source clocks or repair journal differences.
+  Native-currency evidence cannot manufacture GBP valuation.
+- Dynamic-share monitoring uses completely valued, fresh, role-attributed
+  non-LISA investment holdings, excluding savings, LISA and all cash.
+  Unassigned/missing classification or marks makes it unavailable. The
+  illustrative range is no target/cap; concentration is exact instrument share,
+  not look-through overlap.
+- Staged observations read a pinned journal revision without changing source
+  files or accounting. Use only explicit evidenced account/product mappings
+  available at the observation clock. Missing/unknown is not zero. Same-clock,
+  later-journal or late-available evidence makes comparison unavailable, not a
+  guessed historical balance. A declared match is not custody/buying power.
+- The separate purgeable observation cache has distinct instance identity and
+  monotonic revisions across purge. The separate optional review inbox binds
+  portfolio/profile/cache instance and stores summaries/hashes, not raw payloads.
+  Actions are append-only, revision-bound and separately opted in; acknowledge,
+  defer, review, inactivity or supersession is not resolution or accounting repair.
+  Reads never initialize/sync. Guided observations need preview/confirmation
+  and write only the cache. Journal/cache/review stores are not one transaction;
+  source revisions are rechecked but external updates may overlap the check.
+- Awareness locally matches explicitly mapped positive exposures to existing
+  public calendar/brief evidence. Reads start no collection/AI, change no journal
+  and send no private evidence to AI. Missing/future/stale/unmapped evidence is
+  explicit. Editable thesis/calendar notes are not immutable source truth,
+  automatic coverage, policy or review approval. Stable technical wire shapes
+  remain distinct from journal format. Provider discovery is not permission/sync.
 
-## Separate GBP Investment Path
+## Research and synthetic mechanics
 
-- The [17 November context](investment-research-context.md#current-clarification-17-november-2026)
-  clarifies selected savings, first-home LISA and investments. The illustrative
-  dynamic denominator is non-LISA investment holdings, excluding savings, LISA
-  and cash in the monitoring calculation. It does not approve any target or
-  loss budget. Prior scope statements below are historical where inconsistent.
-- Monitoring is a local read-only projection; its separately initialized,
-  purgeable observation cache is not accounting authority. Collection requires
-  explicit activation and account/permission/retention approval, never a browser
-  refresh. Native-currency evidence cannot manufacture GBP valuation, and
-  failed collection cannot refresh source clocks or repair journal differences.
-- The optional local review inbox is a separately initialized workflow store,
-  bound to the portfolio, monitoring profile and (if used) cache instance. It
-  stores finding summaries and evidence hashes, not provider payloads. Actions
-  are append-only and revision-bound; acknowledgement, deferral, review,
-  inactivity or supersession never means accounting correction, finding
-  resolution or trade approval. Cache instance IDs are distinct on
-  initialization, and cache revisions remain monotonic across purge.
+- Follow [mandate](investment-research-context.md) and [protocol](backtesting-protocol.md).
+  Stop at unmet eligibility, licensed persistent data/vintage, cash-terms,
+  actions/FX, costs/tax and frozen-policy/specification gates. No histories,
+  comparative returns or acquisition are authorized by engineering changes.
+- Preserve all prior/manual/failed/descriptive trials and exposed/reserved/
+  consumed samples. Keep the 60-candidate total ceiling; no registry/dataset
+  switch or code retirement resets history. Lock before one genuinely unexposed,
+  report-only holdout; no passing candidate means no holdout opening.
+- Use only completed information known at event time; validate aware UTC clocks,
+  session/early-close boundaries, source availability, price basis and action
+  ordering. Reject missing/conflicting/off-grid data instead of inventing
+  continuity. Document gaps, costs, liquidity and fill/OHLC ambiguity.
+- `research_data` preserves bounded local manifests/raw bytes/provenance and
+  validates checksums on reopen. Its scoped daily/FX readiness checks declared
+  availability/age at supplied cutoffs, not truth, vintages, complete transaction
+  clocks, conversion, executable rates, entitlement or performance authorization.
+  Normalized views require complete selected coverage, never partial-as-complete.
+- `research_data.account_fills` is pure synthetic ordered long-only GBP
+  cash/quantity/fee conservation. It has no marks, accrual/actions, product
+  increments, risk, performance, persistence or execution authority.
+- The synthetic investment simulator is disconnected from datasets/store/CLI.
+  It models next-open buy-only fills, positive contributions, cash-funded
+  withdrawals without liquidation, proportional fees and increment-preserving
+  splits available by modeled opens. Insufficient cash fails closed.
+  Distributions use pre-ex-open holdings, create unspendable receivables included
+  in portfolio/allocation value, then pay before close-time external flows.
+  Reject unavailable/unheld distributions and same-product ex-open splits;
+  caller prices must not already include distribution adjustment.
+- Synthetic annual rates require first-open evidence, simple ACT/365 at
+  modeled boundaries and prior rates overnight; changes apply after boundary
+  accrual. First capital enters at first close, earning no earlier interest.
+  Preserve unit value through complete redemption/refunding. Explicit UTC clocks
+  allow at most microseconds; reject missing clocks and datetime subclasses
+  rather than truncate hidden precision.
+- Simulator provenance/basis/entitlement cannot be verified. No sales/liquidation,
+  actual cash terms, tax, FX, inflation, fixed fees, spreads/slippage or verified
+  calendars/execution are supplied. Keep synthetic-only labels; no product
+  returns, eligibility or profitability claims follow.
 
-- Product scope is designated substantial long-term investment capital, not
-  household cash/emergency budgeting; see the [current mandate](investment-research-context.md).
-  The [core-plus-dynamic direction](decisions/0004-core-dynamic-portfolio-manager.md)
-  has implemented role accounting and a limited local awareness projection, but
-  not an approved policy or execution contract. The illustrative 80-90% / 10-20%
-  split does not approve weights, risk or replenishment.
-- V2 core/dynamic/unassigned role balances are explicit replayed evidence,
-  independent of account and asset class. They conserve aggregate cash and
-  holdings; missing attribution stays unassigned. Role debits cannot consume
-  another role, account transfers preserve role, and role-to-role movements
-  are disabled. Attribution is not a risk budget or evidence of independently
-  verified custody. Future role budgets must be distinct from asset-class targets. No experiment
-  may automatically draw core funding to replace losses, promote itself, alter
-  allocation/risk limits or treat core gains as alpha. Approved capital caps do
-  not guarantee realised loss bounds. Exact transfer and loss rules require
-  separate implementation and approval before experimental funding.
-- Future standing authority must be explicit, versioned, revocable, scoped to
-  accounts/products/strategies and bounded by funding, cost/risk, freshness and
-  expiry/failure rules. It is not implemented by a proposal export, research
-  result, browser setting or this documentation change. Current per-task broker
-  approval, durable intent, reconciliation and read-only route safeguards remain.
-- The [Trading 212 pilot trace](investment.md#trading-212-pilot-offline-recovery-engineering-only)
-  and its separately bounded SQLite journal are synthetic engineering only.
-  Journal persistence exercises close/reopen replay and rollback, but does not
-  contain durable real-order intent or broker evidence. Approval, ownership and
-  restart events are declarations, not real approval or recovery evidence. The
-  journal cannot submit orders, reserve cash or update investment accounting.
-  An ambiguous submission cannot be retried or adopted in the trace. Do not
-  connect it to a broker or use it as an execution gate.
-- The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; readers never create, migrate, repair, or mutate it. The default dashboard's narrow setup capability has no user login; it requires a same-origin, CSRF-protected session, a bound preview and explicit confirmation before creating a new v2 journal. These browser defenses are not authentication; ordinary startup/status/preview creates no files. Existing or invalid stores are never overwritten or repaired, and setup never grants ongoing recording authority. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
-- The [investment backup and restore commands](investment-journal.md) copy a
-  pinned, validated journal using SQLite in an operator-controlled directory,
-  validate copied evidence, commit boundaries and replay, and publish to a new
-  path without overwriting. They never automatically install a
-  restore; operational maintenance still requires explicit approval. A valid
-  older or forged copy is not proven current or authentic by its internal
-  hashes, and external evidence and receipts remain separate.
-- V1 begins at explicitly evidenced empty inception. V2 can start from an explicit
-  opening record of cash and long holdings without inferring prior transactions,
-  cost basis or lifetime gain. A performance baseline starts only at a complete
-  common valuation whose evidence was available at that clock. V2 is
-  operator-recorded by CLI or explicitly enabled local dashboard, with no
-  allocation policy, review approval, proposal export or migration. No v2
-  freshness threshold is configured. Never infer FX, entitlement or unrecorded
-  interest/distributions. V2 profile amendments are append-only; identity,
-  account binding/currency and product classification/quantity rules are
-  immutable. Retirement requires zero exposure. A funded account scope addition
-  requires complete same-clock balances and held-position prices, is unitization
-  neutral rather than an external flow, and requires an existing valid baseline.
-- V2 cash observations are separate append-only evidence, never balance mutations.
-  Calculate any difference against recorded cash at that observation clock; preserve
-  the dated discrepancy and evidence source. A statement observation cannot refresh
-  valuation or resolve a mismatch, and late evidence cannot be used retrospectively.
-  Preserve the full bounded observation history in read-only reports; a newer
-  matching observation must not hide an older difference or alter recorded cash.
-- A separate operator-owned [staged observation preview](portfolio-automation.md#offline-observation-staging-and-reconciliation)
-  reads a pinned v2 revision and never changes the journal or source file.
-  Bind accounts and products only through explicit operator-evidenced mappings;
-  preserve source, availability, coverage and freshness, including mapping
-  evidence available at the observation clock. Unknown or absent
-  observations are not zero, and same-clock, later-journal or late-available
-  accounting evidence makes a comparison unavailable rather than a guessed
-  historical balance. A declared match does not establish custody or buying power.
-- V2 savings-terms updates are append-only display facts for included deposit
-  accounts. Preserve observed/available clocks; they never accrue interest or
-  change cash, valuation, performance, or product eligibility.
-- V2 valuation history is replay-derived and records one point after each
-  relevant same-clock event group. Preserve source availability; late or
-  incomplete clocks are explicit gaps, never zero-filled or interpolated.
-  Cash observations and savings-term updates do not create valuation points,
-  and cash observations cannot refresh valuation.
-- V2 preserves same-clock journal order but refuses ambiguous performance
-  sequencing: required marks precede same-clock external flows, and the first
-  complete baseline precedes same-clock interest or dividends. Never infer
-  this ordering from equal timestamps.
-- The investment dashboard is read-only by default. Manual writes require an
-  explicit server opt-in and a selected existing v2 store; there is no user
-  authentication. Writes are same-origin, CSRF-protected, previewed and revision-bound.
-  Stale revisions fail closed. Browser sessions/previews are temporary and no
-  browser path contacts a bank/broker, moves funds, approves orders or executes
-  trades. Corrections may replace supported financial-event facts only by
-  appending evidence and replaying all downstream events; invalid cash,
-  quantity, role or chronology state is refused. Original payload and
-  availability are retained. Historical corrections invalidate performance
-  and never establish a new baseline automatically. Opening records,
-  profile/scope events, role assignments, observations and review attestations
-  are not correctable; observations remain separate evidence and never
-  automatically adjust balances.
-- Dashboard monitoring inbox reads never initialize or sync the explicitly
-  selected review store. Review actions require the separate
-  monitoring-workflow opt-in, a current report sync, exact portfolio,
-  profile and cache-instance binding, and revision/idempotency checks. Guided
-  manual observations require preview plus explicit confirmation and append
-  only to the distinct monitoring cache; journal, accounting and provider
-  authority remain unchanged. Review/journal/cache stores are not a single
-  atomic transaction; source revisions are rechecked immediately before writes,
-  but concurrent external journal updates may overlap that check.
-- An external flow after the baseline without a complete contemporaneous
-  valuation invalidates linked TWR/drawdown; later marks cannot reconstruct
-  the missing flow-time value.
-- V2 fee and income totals are derived only from explicitly journaled fill fees,
-  interest and dividend payments. Preserve journal order, effective/availability
-  timestamps and evidence in the corresponding event history; the dashboard may
-  show only a recent subset. These records do not imply complete expense, income,
-  entitlement, tax or cash-accrual coverage.
-- V2 capital-flow history preserves contribution, withdrawal and transfer events
-  with their journal order and evidence clocks. A transfer between included
-  accounts is not an external contribution or withdrawal; recorded events are not
-  independent verification of account movements.
-- Every event preserves effective time and evidence `available_at`. A mark published after its effective valuation clock cannot establish contemporaneous completeness or support an earlier decision. Incomplete held-product marks make the portfolio valuation incomplete; never present a complete subtotal or zero-filled return as complete.
-- Time-weighted unitization is flow-neutral and remains linked across complete withdrawals and later refunding. A zero-equity interval does not erase prior unit price/history or manufacture a drawdown from new capital.
-- External-deposit cash is part of recorded mandate value only when included by policy; it is never broker buying power. Scheduled contributions are not settled cash. Transfers between included accounts do not count as external investment performance flows.
-- V1 and v2 investment proposals are blocked until role-aware policy, actual
-  weights, products and loss/transfer rules are approved and implemented.
-  Neither a report, acknowledgement nor an attribution grants execution authority.
-- Investment v1 store schemas are validated against the original tables, implicit index and immutable triggers before integrity checks or data queries can execute untrusted schema expressions. Altered or extra objects are refused; readers never repair them.
-- Manual review acknowledgements are append-only, bound to an unchanged, previously committed revision and a complete, fresh recorded valuation; they are not trade approval. Monthly and annual clocks are separate; an annual acknowledgement also counts as monthly, while five-point drift remains a trigger. Acknowledgements do not alter cash, holdings, valuation clocks or performance; later evidence cannot be backdated before them. Invalid historical attestations fail replay rather than being silently repaired.
-- A cash-only confirmation may refresh the recorded valuation clock only when every included account has an exact matching GBP balance and evidence available at that clock; an unheld-product price mark cannot refresh that clock. It never changes money or repairs discrepancies; it is an operator attestation, not independent proof of balances or settlement. Prior journal evidence must have been available by either an acknowledgement or confirmation clock.
-- `investment.simulation.simulate_synthetic_fixture` is a pure engineering harness intended only for caller-supplied synthetic GBP bars, next-session-open buy-only allocations, contribution/withdrawal unitization, explicit synthetic distribution events, and assumed proportional costs. Synthetic withdrawals are paid only from available cash; they cannot trigger sales, and insufficient cash fails closed. Preserve unit-value continuity through complete cash redemptions and later contributions. Synthetic distributions use holdings immediately before modeled ex-open fills, create a receivable included in portfolio and contribution-allocation target valuation until their later modeled pay-close, and convert that receivable to spendable cash before close-time external flows. Reject distributions unavailable by ex-open, unheld ex-open products, and a same-product split at ex-open. Caller prices must exclude the distribution adjustment; the harness cannot verify this basis or the source/entitlement. It supports only synthetic splits effective at modeled opens and available no later than their effective time; unsupported fractional-increment outcomes fail. Explicit synthetic cash-rate events (annual decimal 0-1) require a first-open rate, may change only at modeled opens/closes, and accrue by simple ACT/365 only after being available. Overnight interest uses the prior rate; open-effective rates apply after that accrual. This is not a cash-product terms or rate model. The harness does not verify input provenance and is not connected to product datasets, the investment store, or a CLI; its output cannot support product-performance claims. It omits sales or liquidation, taxes/withholding, actual cash-account conventions, FX, fixed costs, spreads/slippage, and actual calendars/execution. Product selection, legal/access eligibility, licensed data, savings terms, historical comparisons, broker behavior, and profitability require separate evidence and approval.
-- Synthetic fixture clocks are explicit UTC values with at most microsecond
-  precision. A missing clock must never default to wall time, and
-  sub-microsecond timestamps must not be silently truncated into availability.
-  Reject datetime subclasses whose extra precision cannot be established.
+## Advisory intelligence and development guards
 
-## Advisory and Shadow Intelligence
-
-- Opt-in [portfolio awareness](portfolio-automation.md) matches existing public
-  evidence to explicitly mapped positive recorded exposures only on the local
-  machine. Its profile and account/role/holding evidence never enter AI requests.
-  Reads do not start collection or mutate either store; future/missing/stale
-  evidence and unmapped exposure remain explicit. Review reminders are
-  operator-configured notifications, not policy or revision acknowledgements.
-  Optional thesis histories and calendar watch entries are editable, unverified
-  local profile notes, not an immutable journal, source coverage, AI inputs or
-  trading authority. Preserve the v1 awareness wire shape; additional notes
-  appear only in the opt-in v2 projection.
-  Provider discovery is not verified account-level permission or sync activation;
-  future observations/discrepancies must not automatically repair accounting.
-- Portfolio intelligence may support automated awareness and hypothesis creation
-  under approved collection capabilities. Future calendar/AI-derived dynamic
-  trading features require separate prospective signal/failure-policy approval;
-  existing news/LLM exclusions and advisory-only runtime remain unchanged.
-  External text is data, not executable authority; private account evidence must
-  not be sent to hosted AI. No intelligence outage forces core liquidation or
-  changes independent protective recovery.
-- [Market intelligence](decisions/0002-market-intelligence.md) is a separate advisory/shadow development stream. Master enablement and AI default off; hypothetical decisions never change trading (`affects_trading=False`). Unknown/stale coverage is uncertainty, not an order permission, halt, or evidence of protection.
-- Preserve source revisions, contemporaneous availability, provenance and explicit coverage. News receipt and validated AI completion determine availability; publication time alone does not. Today's model on historical headlines is not causal out-of-sample evidence.
-- Dedicated intelligence storage/control history is separate from the trading ledger and lock. Preserve identity, append-only evidence, bounded reads, exact revision/expiry checks and atomic application. No implicit initialization/repair by readers or development access to operational stores.
-- Requested settings, service-applied receipts, and bot-observed revisions are distinct. Local application or a schema does not establish active collection or bot acknowledgement. Trading/account APIs remain read-only; recorded-mode intelligence controls require explicit enablement but no user authentication. Controls are limited to same-origin, CSRF-protected analysis settings; synthetic demo sessions use isolated temporary storage.
-- The local dashboard has no user login. It binds to loopback and retains host/origin and CSRF checks; these are not authentication and do not protect against other local users. Do not expose or tunnel the dashboard.
-- Implemented opt-in feeds, providers, controls and the best-effort observer do not authorize operational service startup, external calls or changes to trading. Preserve broker-call parity, exits, stops, risk gates, quantities and causal candle consumption. News/LLM trading signals remain excluded from the GBP campaign.
-
-## AI Development Boundary
-
-- No secret access, operational-state mutation, broker calls, or trading by default. Authenticated paper work requires explicit task-specific approval and operator-owned credentials.
-- Offline checks isolate and restore cached broker settings and use temporary state, mocked broker boundaries, and blocked Python socket access. This is not an OS sandbox and does not contain malicious/native/subprocess code.
-- Read-only review cannot prove runtime behavior. Report hypotheses as hypotheses and executed evidence as executed evidence.
+- Intelligence is separately stored, opt-in and advisory only, with
+  master/AI default off. Historical persisted `shadow` labels have no runtime
+  effect or hypothetical order evaluation. Unknown/stale coverage is
+  uncertainty, not protection, permission, halt or liquidation authority.
+- Preserve source revisions, receipt and validated committed AI-completion
+  availability, model/prompt/input provenance and coverage. Publication alone
+  is not availability. External text/model output is untrusted data, never
+  executable instructions. Private account evidence must not enter hosted AI.
+- Preserve dedicated store identity, append-only evidence, bounded reads,
+  idempotency, exact revisions/expiry, atomic application and no reader repair.
+  Requested settings and service-applied receipts are distinct; a toggle/schema
+  proves neither application nor active collection.
+- Recorded analysis controls require explicit enablement and their existing
+  same-origin/CSRF defenses, not user authentication. Settings are bounded analysis only,
+  never arbitrary URLs/prompts/secrets/orders/risk limits. Provider capabilities,
+  endpoint allowlists, bounded requests and durable spending reservations remain.
+- Configured hosted/feed proxy use has no direct fallback; preserve address
+  validation/pinning and TLS verification without logging proxy credentials.
+  Explicit local AI uses loopback, never as remote-failure fallback.
+- Existing campaign news/LLM signal exclusions remain. Future structured features
+  need prospective separate approval and failure rules; neither intelligence
+  outage nor fluent output may rewrite core policy or create execution authority.
+- Offline runner scrubs credential settings/disables dotenv/proxy secret loading
+  and blocks Python sockets. It is not an OS sandbox; no subprocess/native
+  network bypasses. Keep hook/CI safety guards and read-only review permissions.
+  Review reports distinguish hypotheses from executed evidence; offline tests
+  prove neither broker/provider behavior nor editor hook activation.

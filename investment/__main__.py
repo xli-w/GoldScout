@@ -6,10 +6,9 @@ import sys
 import threading
 
 from . import InvestmentError
-from .core import clock, replay
-from .service import (demo_events, demo_profile, demo_snapshot, proposal_export, report,
-                      review_status, snapshot)
-from .store import acknowledge_review, import_events, initialize, load_json
+from .core import clock
+from .service import demo_snapshot, snapshot
+from .store import import_events, initialize, load_json
 
 
 def main(argv=None, stdout=None, stderr=None, now=None):
@@ -17,8 +16,7 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     stderr = sys.stderr if stderr is None else stderr
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    demo = commands.add_parser("demo", help="pure synthetic GBP1000 report; no persistence")
-    demo.add_argument("--contribution", action="store_true", help="demonstrate an extra GBP100")
+    commands.add_parser("demo", help="synthetic opening-evidence report; no persistence")
     init = commands.add_parser("init", help="create a new explicitly bound investment store")
     init.add_argument("--profile", required=True)
     init.add_argument("--database", required=True)
@@ -29,11 +27,8 @@ def main(argv=None, stdout=None, stderr=None, now=None):
         command = commands.add_parser(name, help="copy a validated investment store to a new path")
         command.add_argument("--database", required=True, help="existing source store")
         command.add_argument("--destination", required=True, help="new destination; never overwrites")
-    for name in ("report", "propose", "export"):
-        command = commands.add_parser(name, help="read-only stdout JSON; never executes")
-        command.add_argument("--database", required=True)
-    status = commands.add_parser("review-status", help="read-only review clocks and valuation status")
-    status.add_argument("--database", required=True)
+    command = commands.add_parser("report", help="read-only stdout JSON; never executes")
+    command.add_argument("--database", required=True)
     awareness = commands.add_parser("awareness", help="local advisory alerts, briefs and reminder JSON; no collection")
     awareness.add_argument("--database", required=True)
     awareness.add_argument("--intelligence-database", required=True)
@@ -62,12 +57,6 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             command.add_argument("--approval", required=True, help="nonsecret time-bounded operator attestation")
             command.add_argument("--allow-network", action="store_true")
             command.add_argument("--watch", action="store_true", help="explicit daily loop; stops on errors or approval expiry")
-    acknowledge = commands.add_parser("acknowledge-review", help="record a manual review, not an order approval")
-    acknowledge.add_argument("--database", required=True)
-    acknowledge.add_argument("--kind", choices=("monthly", "annual"), required=True)
-    acknowledge.add_argument("--reviewed-revision", type=int, required=True)
-    acknowledge.add_argument("--id", required=True, help="unique, reusable acknowledgement ID")
-    acknowledge.add_argument("--evidence", required=True, help="brief manual review evidence")
     review_init = commands.add_parser(
         "review-init", help="explicitly initialize a separate local monitoring review store")
     review_init.add_argument("--database", required=True)
@@ -95,8 +84,7 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     try:
         now = clock(now)
         if args.command == "demo":
-            value = (report(replay(demo_profile(now), demo_events(now, True), now), now, "demo")
-                     if args.contribution else demo_snapshot(now))
+            value = demo_snapshot(now)
         elif args.command == "init":
             initialize(args.database, load_json(args.profile), now)
             value = snapshot(args.database, now)
@@ -108,8 +96,6 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             value = copy_verified(args.database, args.destination, requested_now)
         elif args.command == "report":
             value = snapshot(args.database, now)
-        elif args.command == "review-status":
-            value = review_status(args.database, requested_now)
         elif args.command == "awareness":
             from .awareness import awareness_snapshot
             value = awareness_snapshot(args.database, args.intelligence_database,
@@ -122,10 +108,10 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             from .store import canonical, digest, read_with_clock
             from .core import iso
             ledger, observed = read_with_clock(args.database, requested_now)
-            if (ledger.spec["schema_version"] != 2 or not ledger.opened
+            if (not ledger.opened
                     or not 1 <= args.max_age_seconds <= 365 * 86400
                     or not 1 <= args.review_interval_days <= 3660):
-                raise InvestmentError("Template requires an opened v2 journal and bounded explicit age/review intervals")
+                raise InvestmentError("Template requires an opened journal and bounded explicit age/review intervals")
             value = {
                 "schema_version": 1, "portfolio_id": ledger.spec["portfolio_id"],
                 "investment_profile_sha256": digest(canonical(ledger.spec)),
@@ -164,19 +150,6 @@ def main(argv=None, stdout=None, stderr=None, now=None):
                     threading.Event().wait(86400)
             else:
                 value = monitoring_snapshot(args.database, args.monitoring_profile, args.cache, observed)
-        elif args.command == "acknowledge-review":
-            acknowledgement = acknowledge_review(args.database, args.id, args.kind,
-                                                  args.reviewed_revision, args.evidence, requested_now)
-            try:
-                status = review_status(args.database, requested_now)
-            except InvestmentError as exc:
-                value = {"acknowledgement": acknowledgement, "review_status": None,
-                         "review_status_error": str(exc)}
-                print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout)
-                print(f"InvestmentError: Review recorded, but status unavailable: {exc}",
-                      file=stderr)
-                return 2
-            value = {"acknowledgement": acknowledgement, "review_status": status}
         elif args.command in ("review-init", "review-sync"):
             from pathlib import Path
             from .monitoring import monitoring_snapshot, validate_profile
@@ -228,8 +201,6 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             from .monitoring_reviews import update_review
             value = update_review(args.reviews, args.case_id, args.request_id,
                                   args.expected_revision, args.action, args.note, requested_now)
-        else:
-            value = proposal_export(args.database, now)
         print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout)
         return 0
     except InvestmentError as exc:

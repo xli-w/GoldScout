@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from market_intelligence.contracts import (
     CalendarEvent, CalendarSnapshot, ControlReceipt, ControlRequest, IntelligenceSettings, SourceCoverage, utc_time,
 )
-from market_intelligence.policy import CalendarPolicy, evaluate_calendar
 from market_intelligence.store import construct
 
 
@@ -22,7 +21,6 @@ class CalendarFixture:
     def setUp(self):
         self.now = datetime(2026, 11, 13, 13, 30, tzinfo=timezone.utc)
         self.settings = IntelligenceSettings(enabled=True, mode="shadow", revision=2)
-        self.policy = CalendarPolicy(categories=("inflation",))
         self.source = SourceCoverage(
             "bls", ("inflation",), self.now - timedelta(hours=1),
             self.now - timedelta(days=1), self.now + timedelta(days=30), "healthy")
@@ -33,144 +31,6 @@ class CalendarFixture:
         self.snapshot = CalendarSnapshot(3, self.now - timedelta(hours=1),
                                          (self.source,), (self.event,))
 
-    def decision(self, now=None, snapshot=None, settings=None, symbol="SPY", action="enter_long"):
-        return evaluate_calendar(settings or self.settings, snapshot or self.snapshot,
-                                 symbol, action, now or self.now, self.policy)
-
-
-class CalendarShadowTests(CalendarFixture, unittest.TestCase):
-    def test_default_is_off_and_has_no_trading_authority(self):
-        result = self.decision(settings=IntelligenceSettings())
-        self.assertEqual(result.outcome, "disabled")
-        self.assertFalse(result.affects_trading)
-
-    def test_modes_cannot_enable_an_execution_gate(self):
-        for mode, outcome in (("advisory", "advisory"), ("shadow", "would_block")):
-            with self.subTest(mode=mode):
-                result = self.decision(settings=replace(self.settings, mode=mode))
-                self.assertEqual(result.outcome, outcome)
-                self.assertFalse(result.affects_trading)
-        for mode in ("entry_gate", "live", "deterministic", ""):
-            with self.subTest(mode=mode), self.assertRaises(ValueError):
-                replace(self.settings, mode=mode)
-
-    def test_exits_and_holds_are_never_restricted_even_without_data(self):
-        for action in ("exit", "hold"):
-            result = evaluate_calendar(self.settings, None, "SPY", action, self.now, self.policy)
-            self.assertEqual(result.outcome, "not_applicable")
-            self.assertFalse(result.affects_trading)
-
-    def test_window_is_start_inclusive_end_exclusive(self):
-        for offset, outcome in ((-901, "would_allow"), (-900, "would_block"),
-                                (0, "would_block"), (1799, "would_block"), (1800, "would_allow")):
-            with self.subTest(offset=offset):
-                result = self.decision(now=self.now + timedelta(seconds=offset))
-                self.assertEqual(result.outcome, outcome)
-                self.assertFalse(result.affects_trading)
-        self.assertEqual([(reference.source, reference.event_id) for reference in self.decision().event_refs],
-                 [("bls", "cpi-2026-11")])
-        self.assertEqual(self.decision().settings_revision, 2)
-        self.assertEqual(self.decision().snapshot_revision, 3)
-
-    def test_only_affected_instruments_and_entries_are_evaluated(self):
-        self.assertEqual(self.decision(symbol="USO").outcome, "would_allow")
-        self.assertEqual(self.decision(action="enter_short").outcome, "would_block")
-        with self.assertRaises(ValueError):
-            self.decision(symbol="UNKNOWN")
-
-    def test_cancelled_and_rescheduled_events_use_current_revision(self):
-        cancelled = replace(self.event, status="cancelled", revision=1)
-        self.assertEqual(self.decision(snapshot=replace(self.snapshot, events=(cancelled,))).outcome, "would_allow")
-        later = replace(self.event, scheduled_at=self.now + timedelta(days=1), revision=2)
-        self.assertEqual(self.decision(snapshot=replace(self.snapshot, events=(later,))).outcome, "would_allow")
-        with self.assertRaises(ValueError):
-            replace(self.snapshot, events=(self.event, later))
-
-    def test_unknown_time_and_tentative_dates_are_not_invented(self):
-        for event in (replace(self.event, scheduled_at=None), replace(self.event, status="tentative")):
-            self.assertEqual(self.decision(snapshot=replace(self.snapshot, events=(event,))).outcome, "unknown")
-
-    def test_empty_calendar_requires_positive_coverage_evidence(self):
-        self.assertEqual(self.decision(snapshot=replace(self.snapshot, events=())).outcome, "would_allow")
-        self.assertEqual(self.decision(snapshot=replace(self.snapshot, events=(), sources=())).outcome, "unknown")
-        missing = evaluate_calendar(self.settings, None, "SPY", "enter_long", self.now, self.policy)
-        self.assertEqual(missing.outcome, "unknown")
-
-    def test_stale_invalid_and_incomplete_sources_are_unknown(self):
-        sources = (
-            replace(self.source, checked_at=self.now - timedelta(seconds=7201)),
-            replace(self.source, status="invalid"),
-            replace(self.source, status="unavailable"),
-            replace(self.source, coverage_start=self.now),
-            replace(self.source, coverage_end=self.now + timedelta(minutes=15)),
-        )
-        for source in sources:
-            with self.subTest(source=source):
-                result = self.decision(snapshot=replace(self.snapshot, sources=(source,)))
-                self.assertEqual(result.outcome, "unknown")
-                self.assertFalse(result.affects_trading)
-
-    def test_source_age_boundary_is_inclusive(self):
-        source = replace(self.source, checked_at=self.now - timedelta(seconds=7200))
-        self.assertEqual(self.decision(snapshot=replace(self.snapshot, sources=(source,))).outcome, "would_block")
-
-    def test_fresh_alternate_coverage_does_not_validate_stale_event_evidence(self):
-        alternate = replace(self.source, source="alternate")
-        for original in (replace(self.source, checked_at=self.now - timedelta(seconds=7201)),
-                         replace(self.source, status="invalid")):
-            snapshot = replace(self.snapshot, sources=(original, alternate))
-            self.assertEqual(self.decision(snapshot=snapshot).outcome, "unknown")
-
-    def test_snapshot_not_available_yet_is_not_replayed_into_past(self):
-        later = replace(self.snapshot, available_at=self.now + timedelta(seconds=1))
-        self.assertEqual(self.decision(snapshot=later).outcome, "unknown")
-        event = replace(self.event, available_at=self.now + timedelta(seconds=1))
-        with self.assertRaises(ValueError):
-            replace(self.snapshot, events=(event,))
-
-    def test_future_schedule_is_valid_but_future_observation_is_not(self):
-        future = replace(self.event, scheduled_at=self.now + timedelta(days=10))
-        self.assertEqual(self.decision(snapshot=replace(self.snapshot, events=(future,))).outcome, "would_allow")
-        source = replace(self.source, checked_at=self.now + timedelta(seconds=1))
-        with self.assertRaises(ValueError):
-            replace(self.snapshot, sources=(source,))
-
-    def test_calendar_and_ai_switches_are_independent(self):
-        settings = replace(self.settings, ai_enabled=True, ai_profile="local-test")
-        self.assertEqual(self.decision(settings=settings).outcome, "would_block")
-        self.assertEqual(self.decision(settings=replace(settings, ai_enabled=False)).outcome, "would_block")
-        self.assertEqual(self.decision(settings=replace(settings, calendar_enabled=False)).outcome, "disabled")
-
-    def test_contracts_are_immutable_and_reject_mutable_collections(self):
-        with self.assertRaises(FrozenInstanceError):
-            self.settings.enabled = False
-        with self.assertRaises(FrozenInstanceError):
-            self.event.scheduled_at = self.now
-        with self.assertRaises(FrozenInstanceError):
-            self.decision().outcome = "execute"
-        for changes in ({"symbols": ["SPY"]}, {"symbols": ("SPY", "SPY")}, {"symbols": ("OTHER",)}):
-            with self.assertRaises(ValueError):
-                replace(self.event, **changes)
-        with self.assertRaises(ValueError):
-            replace(self.snapshot, events=[self.event])
-
-    def test_bad_settings_timestamps_urls_and_policies_are_rejected(self):
-        for changes in ({"enabled": 1}, {"revision": True}, {"revision": -1},
-                        {"ai_enabled": True}, {"ai_profile": "https://arbitrary.example"}):
-            with self.subTest(changes=changes), self.assertRaises(ValueError):
-                replace(self.settings, **changes)
-        for timestamp in (self.now.replace(tzinfo=None), self.now.astimezone(timezone(timedelta(hours=1)))):
-            with self.assertRaises(ValueError):
-                utc_time(timestamp)
-        for url in ("http://example.com", "https://user:secret@example.com", "https://example.com:80", "https://example.com/\n"):
-            with self.assertRaises(ValueError):
-                replace(self.event, source_url=url)
-        for changes in ({"before_minutes": -1}, {"before_minutes": float("nan")},
-                        {"after_minutes": 1441}, {"max_source_age_seconds": 0}, {"categories": ["inflation"]}):
-            with self.assertRaises(ValueError):
-                replace(self.policy, **changes)
-
-
 @unittest.skipIf(Draft202012Validator is None, "Install requirements-dashboard-dev.txt for wire schema checks")
 class IntelligenceWireTests(CalendarFixture, unittest.TestCase):
     def setUp(self):
@@ -179,6 +39,25 @@ class IntelligenceWireTests(CalendarFixture, unittest.TestCase):
         self.schema = json.loads(path.read_text(encoding="utf-8"))
         Draft202012Validator.check_schema(self.schema)
         self.validator = Draft202012Validator(self.schema, format_checker=FormatChecker())
+
+    def test_calendar_rejects_future_evidence_but_preserves_unknown_event_time(self):
+        unknown = replace(self.event, scheduled_at=None, status="tentative")
+        self.assertIsNone(replace(self.snapshot, events=(unknown,)).events[0].scheduled_at)
+        with self.assertRaises(ValueError):
+            replace(self.snapshot, events=(replace(self.event, available_at=self.now),))
+        with self.assertRaises(ValueError):
+            replace(self.snapshot, sources=(replace(self.source, checked_at=self.now),))
+        with self.assertRaises(ValueError):
+            replace(self.snapshot, events=(self.event, replace(self.event, revision=1)))
+
+    def test_settings_cannot_grant_trading_authority(self):
+        self.assertFalse(IntelligenceSettings().enabled)
+        self.assertFalse(IntelligenceSettings().ai_enabled)
+        for mode in ("entry_gate", "live", "deterministic"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                replace(self.settings, mode=mode)
+        with self.assertRaises(FrozenInstanceError):
+            self.settings.enabled = True
 
     def wire(self, record):
         payload = asdict(record)
@@ -190,7 +69,7 @@ class IntelligenceWireTests(CalendarFixture, unittest.TestCase):
         request = ControlRequest("request-1", "intelligence-1", self.settings.revision, self.now,
                                  self.now + timedelta(minutes=5), replace(self.settings, revision=3))
         receipt = ControlReceipt("request-1", "intelligence-1", "pending", None, None, "Awaiting service")
-        for record in (self.settings, self.snapshot, self.decision(), request, receipt):
+        for record in (self.settings, self.snapshot, request, receipt):
             self.validator.validate(self.wire(record))
 
     def test_legacy_source_provenance_remains_unknown_and_incomplete_pairs_are_rejected(self):
@@ -204,16 +83,6 @@ class IntelligenceWireTests(CalendarFixture, unittest.TestCase):
         snapshot["sources"][0]["input_hash"] = "a" * 64
         self.assertFalse(self.validator.is_valid(snapshot))
 
-    def test_event_references_preserve_ambiguous_identifier_pairs(self):
-        first_source = replace(self.source, source="a:b")
-        second_source = replace(self.source, source="a")
-        first_event = replace(self.event, source="a:b", event_id="c")
-        second_event = replace(self.event, source="a", event_id="b:c")
-        snapshot = replace(self.snapshot, sources=(first_source, second_source), events=(first_event, second_event))
-        decision = self.wire(self.decision(snapshot=snapshot))
-        self.assertEqual(decision["event_refs"], [{"source": "a", "event_id": "b:c"},
-                                                 {"source": "a:b", "event_id": "c"}])
-        self.validator.validate(decision)
 
     def test_wire_and_python_reject_identifier_newlines_and_non_https_ports(self):
         settings = self.wire(self.settings)
@@ -229,14 +98,12 @@ class IntelligenceWireTests(CalendarFixture, unittest.TestCase):
                 replace(self.event, source_url=url)
 
     def test_wire_rejects_authority_extra_settings_and_local_time(self):
-        for field, value in (("affects_trading", True), ("outcome", "execute"),
-                             ("observed_at", "2026-11-13T13:30:00+00:00")):
-            payload = self.wire(self.decision())
-            payload[field] = value
-            self.assertFalse(self.validator.is_valid(payload))
+        snapshot = self.wire(self.snapshot)
+        snapshot["available_at"] = "2026-11-13T13:30:00+00:00"
+        self.assertFalse(self.validator.is_valid(snapshot))
         settings = self.wire(self.settings)
-        settings["risk_per_trade_pct"] = 0.5
-        self.assertFalse(self.validator.is_valid(settings))
+        for field, value in (("affects_trading", True), ("risk_per_trade_pct", 0.5)):
+            self.assertFalse(self.validator.is_valid({**settings, field: value}))
 
     def test_ai_brief_requires_evidence_provenance_and_advisory_recommendations(self):
         brief = {

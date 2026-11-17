@@ -3,7 +3,7 @@ import json
 import unittest
 from decimal import Decimal, localcontext
 
-from bot.campaign_data.accounting import (
+from research_data.accounting import (
     CampaignAccountingError,
     account_fills,
 )

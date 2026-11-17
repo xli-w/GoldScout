@@ -30,6 +30,10 @@ def offline_environment():
         "PYTHON_DOTENV_DISABLED": "1",
         "MPLBACKEND": "Agg",
     }
+    environment.update({
+        name: "" for name in os.environ
+        if name.upper().startswith(("GOLDSCOUT_ETORO_", "TRADER_AI_"))
+    })
     with tempfile.TemporaryDirectory(prefix="trader-offline-") as directory, ExitStack() as stack:
         stack.enter_context(patch.dict(os.environ, environment))
         targets = [f"socket.{name}" for name in (
@@ -45,19 +49,7 @@ def offline_environment():
         stack.enter_context(patch("dotenv.load_dotenv", return_value=False))
         stack.enter_context(patch("dotenv.dotenv_values", return_value={}))
         stack.enter_context(patch("proxy_config._read_proxy_dotenv", return_value=""))
-        import config
-
-        stack.enter_context(patch.object(config, "_runtime_settings", None))
         temporary_root = Path(directory)
-        settings = {name: temporary_root / filename for name, filename in (
-            ("TRADES_CSV", "trades.csv"), ("DAILY_PNL_CSV", "daily_pnl.csv"),
-            ("STATE_FILE", "bot_state.json"), ("LOG_FILE", "bot.log"),
-            ("LEDGER_FILE", "bot_ledger.sqlite3"), ("LOCK_FILE", "bot.lock"),
-        )}
-        settings.update(ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
-                        ALPACA_BASE_URL=environment["ALPACA_BASE_URL"],
-                        IS_PAPER=True, LIVE_TRADING_CONFIRMED=False, TRADER_PROXY_URL="")
-        stack.enter_context(patch.multiple(config, **settings))
         yield temporary_root
 
 

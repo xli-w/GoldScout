@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from investment import InvestmentError
 from investment.__main__ import main
-from investment.service import demo_events, demo_profile, snapshot
+from investment.service import snapshot
 from investment.store import import_events, initialize, trigger_sql
 from test_investment_opening import event, opening, profile
 
@@ -27,35 +27,30 @@ class InvestmentLifecycleTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def test_backup_and_restore_preserve_v1_and_v2_replay(self):
+    def test_backup_and_restore_preserve_opening_evidence_replay(self):
         from investment.lifecycle import copy_verified
 
-        for version in (1, 2):
-            with self.subTest(version=version):
-                source = self.root / f"source-{version}.sqlite3"
-                backup = self.root / f"backup-{version}.sqlite3"
-                restored = self.root / f"restored-{version}.sqlite3"
-                spec = demo_profile(NOW) if version == 1 else profile()
-                events = demo_events(NOW) if version == 1 else [opening()]
-                initialize(source, spec, NOW)
-                import_events(source, events, NOW)
-                original = source.read_bytes()
-                receipt = copy_verified(source, backup, NOW)
-                recovered = copy_verified(backup, restored, NOW)
-                self.assertEqual(receipt, recovered)
-                self.assertEqual(receipt["schema_version"], version)
-                self.assertEqual(receipt["capacity"]["event_count"], len(events))
-                self.assertEqual(receipt["capacity"]["copy_size_bytes"], backup.stat().st_size)
-                self.assertGreater(receipt["capacity"]["evidence_bytes"], 0)
-                self.assertEqual(snapshot(source, NOW), snapshot(backup, NOW))
-                self.assertEqual(snapshot(source, NOW), snapshot(restored, NOW))
-                self.assertEqual(source.read_bytes(), original)
-                self.assertEqual(backup.read_bytes(), restored.read_bytes())
-                if version == 2:
-                    import_events(restored, [event("after-restore", "interest", NOW, "bank",
-                                                   amount_gbp="1")], NOW)
-                    self.assertEqual(snapshot(restored, NOW)["revision"], receipt["revision"] + 1)
-                    self.assertEqual(snapshot(source, NOW)["revision"], receipt["revision"])
+        source = self.root / "source.sqlite3"
+        backup = self.root / "backup.sqlite3"
+        restored = self.root / "restored.sqlite3"
+        initialize(source, profile(), NOW)
+        import_events(source, [opening()], NOW)
+        original = source.read_bytes()
+        receipt = copy_verified(source, backup, NOW)
+        recovered = copy_verified(backup, restored, NOW)
+        self.assertEqual(receipt, recovered)
+        self.assertEqual(receipt["schema_version"], 2)
+        self.assertEqual(receipt["capacity"]["event_count"], 1)
+        self.assertEqual(receipt["capacity"]["copy_size_bytes"], backup.stat().st_size)
+        self.assertGreater(receipt["capacity"]["evidence_bytes"], 0)
+        self.assertEqual(snapshot(source, NOW), snapshot(backup, NOW))
+        self.assertEqual(snapshot(source, NOW), snapshot(restored, NOW))
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(backup.read_bytes(), restored.read_bytes())
+        import_events(restored, [event("after-restore", "interest", NOW, "bank",
+                                       amount_gbp="1")], NOW)
+        self.assertEqual(snapshot(restored, NOW)["revision"], receipt["revision"] + 1)
+        self.assertEqual(snapshot(source, NOW)["revision"], receipt["revision"])
 
     def test_refuses_invalid_source_and_existing_destination(self):
         from investment.lifecycle import copy_verified

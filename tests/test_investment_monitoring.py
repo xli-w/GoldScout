@@ -115,6 +115,31 @@ class MonitoringTests(unittest.TestCase):
         self.assertIn("comparison_unavailable", rules)
         self.assertIn("observation_difference", rules)
 
+    def test_historical_correction_with_cash_observations_requires_attention(self):
+        from test_investment_opening import (
+            cash_observation, event, historical_correction,
+        )
+
+        funded_at = NOW + timedelta(seconds=1)
+        observation_at = NOW + timedelta(seconds=2)
+        funding = event("funding", "contribution", funded_at, "bank", amount_gbp="100")
+        observation = cash_observation(observation_at, balance="1080")
+        import_events(self.database, [funding, observation], observation_at)
+        correction_at = NOW + timedelta(seconds=3)
+        import_events(
+            self.database,
+            [historical_correction(funding, {"amount_gbp": "80"}, correction_at)],
+            correction_at,
+        )
+
+        before_projection = self.database.read_bytes()
+        result = self.report(correction_at)
+        self.assertEqual(self.database.read_bytes(), before_projection)
+        finding = next(item for item in result["findings"]
+                       if item["rule"] == "historical_correction")
+        self.assertEqual(result["status"], "attention")
+        self.assertIn("Preserve earlier reports", finding["explanation"])
+
     def test_bindings_classification_thresholds_and_clocks_fail_closed(self):
         for change in (
             lambda p: p.update(investment_profile_sha256="wrong"),

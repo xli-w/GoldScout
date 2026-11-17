@@ -1,4 +1,4 @@
-"""Independent intelligence workspace; never opens the trading ledger."""
+"""Independent advisory intelligence workspace; never opens investment records."""
 
 from datetime import datetime, timedelta, timezone
 import json
@@ -112,11 +112,7 @@ class IntelligenceWorkspace:
                     "calendar":[json.loads(encode(item)) for item in calendar.events[:100]] if calendar else [],
                     "news":[json.loads(encode(item)) for item in archive.batch.items[:50]] if archive else [],
                     "briefs":[json.loads(encode(item)) for item in briefs],"controls":[json.loads(encode(item)) for item in controls],
-                    "budget":self.store.analysis_usage(now),"bot_observed_revision":self.bot_revision(now)}
-
-    def bot_revision(self,now):
-        from market_intelligence.bridge import observed_revision
-        return observed_revision(self.store.path,self.store.database_id,now)
+                    "budget":self.store.analysis_usage(now)}
 
     def enqueue(self,payload,now):
         if type(payload) is not dict or set(payload)!={"request_id","database_id","base_revision","settings"}:

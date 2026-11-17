@@ -1,6 +1,6 @@
 ---
 name: reproduce-bug
-description: "Reproduce a reported trading bot defect with a minimal offline regression."
+description: "Reproduce a portfolio evidence defect with a minimal offline regression."
 disable-model-invocation: true
 argument-hint: "Failure, traceback, or expected behavior"
 ---

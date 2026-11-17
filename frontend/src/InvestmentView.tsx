@@ -3,28 +3,20 @@ import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
-import validate from "./investment-validator.js";
-import validateV2 from "./investment-validator-v2.js";
+import validate from "./investment-validator-v2.js";
 import { label, timestamp } from "./api";
 import { PortfolioAwareness } from "./PortfolioAwareness";
 import { PortfolioMonitoring } from "./PortfolioMonitoring";
 
 export type InvestmentSnapshot = {
-  schema_version: 1; source_mode: "demo" | "recorded"; portfolio_id: string;
+  schema_version: 2; source_mode: "demo" | "recorded"; portfolio_id: string;
   revision: number; generated_at: string; as_of: string | null; currency: "GBP";
   complete: boolean; equity_gbp: string | null; net_contributions_gbp: string;
-  gain_gbp: string | null; twr_pct: string | null; max_drawdown_pct: string | null;
-  accounts: { id: string; name: string; kind: "broker" | "deposit"; cash_gbp: string }[];
-  holdings: { account_id: string; product_id: string; name: string; sleeve: "equity" | "bond"; quantity: string; value_gbp: string | null }[];
-  allocation: { sleeve: "equity" | "bond" | "cash"; target_pct: string; actual_pct: string | null; drift_pp: string | null }[];
-  proposal: { status: "review" | "no_trade" | "blocked"; reason: string; expires_at: string | null;
-    orders: { account_id: string; product_id: string; side: "buy" | "sell"; quantity: string; estimated_notional_gbp: string }[];
-    manual_transfers: string[]; execution_enabled: false };
+  twr_pct: string | null; max_drawdown_pct: string | null;
+  proposal: { status: "blocked"; reason: string; expires_at: null;
+    orders: []; manual_transfers: []; execution_enabled: false };
   warnings: string[]; limitations: string[];
-};
-
-type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | "allocation" | "holdings" | "accounts"> & {
-  schema_version: 2; baseline_as_of: string | null; since_baseline_gain_gbp: string | null;
+  baseline_as_of: string | null; since_baseline_gain_gbp: string | null;
   role_accounting_at: string | null;
   role_assignments: { id: string; account_id: string; product_id: string | null;
     role: "core" | "dynamic"; amount: string; timestamp: string; available_at: string; evidence: string }[];
@@ -72,18 +64,14 @@ type OpeningSnapshot = Omit<InvestmentSnapshot, "schema_version" | "gain_gbp" | 
     quantity: string; value_gbp: string | null; mark_at: string | null; mark_available_at: string | null }[];
 };
 
-async function loadInvestment(signal: AbortSignal): Promise<InvestmentSnapshot | OpeningSnapshot> {
+type OpeningSnapshot = InvestmentSnapshot;
+
+async function loadInvestment(signal: AbortSignal): Promise<InvestmentSnapshot> {
   const response = await fetch("/api/investment/v1/snapshot", {
     signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]), cache: "no-store",
   });
   const body: unknown = await response.json();
   if (!response.ok) throw new Error("Investment records are unavailable. Select a valid investment store or synthetic demo.");
-  if (typeof body !== "object" || body === null || !("schema_version" in body))
-    throw new Error("Investment response failed validation.");
-  if (body.schema_version === 2) {
-    if (!validateV2(body)) throw new Error("Investment response failed validation.");
-    return body as OpeningSnapshot;
-  }
   if (!validate(body)) throw new Error("Investment response failed validation.");
   return body as InvestmentSnapshot;
 }
@@ -124,9 +112,12 @@ function CashEvidenceOverview({ data, now }: { data: OpeningSnapshot; now: numbe
     }
     return result;
   }, [data.cash_observations]);
+  const correctionWarning = data.warnings.find(warning =>
+    warning.startsWith("Historical correction replay may have changed past cash-observation differences."));
   return <section className="history-group" aria-label="Cash evidence overview">
     <h2>Cash evidence overview</h2>
-    <p className="position-note">Recorded observations are not provider verification or corrections. Later matching observations do not resolve earlier differences. Absence of a difference does not establish a current balance.</p>
+    <p className="position-note">Counts and differences below reflect the current replay of recorded observations. Later matching observations do not resolve differences in this replay. Absence of a difference does not establish a current balance.</p>
+    {correctionWarning && <p className="position-note">{correctionWarning}</p>}
     <dl className="health-facts">{data.accounts.map(account => {
       const history = differences.get(account.id);
       const firstDifference = history?.first;
@@ -137,7 +128,7 @@ function CashEvidenceOverview({ data, now }: { data: OpeningSnapshot; now: numbe
           Latest observed {timestamp(latest.timestamp)} (age: {evidenceAge(latest.timestamp, now)});
           available {timestamp(latest.available_at)}; difference {pounds(latest.difference_gbp, true)}.
         </>}
-        {" "}{history?.count ?? 0} differing {history?.count === 1 ? "observation" : "observations"} in recorded history.
+        {" "}{history?.count ?? 0} differing {history?.count === 1 ? "observation" : "observations"} in current replayed history.
         {firstDifference && firstDifference !== latestDifference && <> Earliest difference: {pounds(firstDifference.difference_gbp, true)} at {timestamp(firstDifference.timestamp)};
           source {firstDifference.source}; evidence {firstDifference.evidence}.</>}
         {latestDifference && <> Latest difference: {pounds(latestDifference.difference_gbp, true)} at {timestamp(latestDifference.timestamp)};
@@ -619,7 +610,7 @@ function InvestmentRecording() {
   </section>;
   if (!session.enabled) return <section className="history-group" aria-label="Manual recording">
     <h2>Recording is disabled</h2>
-    <p>Recording requires an explicitly selected version-2 store and local opt-in. This page cannot connect to a bank or broker, place orders, or move money.</p>
+    <p>Recording requires an explicitly selected journal and local opt-in. This page cannot connect to a bank or broker, place orders, or move money.</p>
     <p>Stop the dashboard and restart with <code>--investment-recording</code>. For a source checkout's default workspace,
       run <code>python -m dashboard --investment-recording</code>. If you selected a different workspace or journal,
       retain your original --workspace or --investment-database selection when restarting. Installed use outside
@@ -916,11 +907,11 @@ export function InvestmentView({ now }: { now: number }) {
           <section className="metrics" aria-label="Investment totals">
             <div><span>Portfolio value</span><strong>{pounds(data.equity_gbp)}</strong><small>GBP, recorded valuation</small></div>
             <div><span>Net contributions</span><strong>{pounds(data.net_contributions_gbp)}</strong><small>Deposits are not profit</small></div>
-            <div><span>{data.schema_version === 2 ? "Gain since baseline" : "Investment gain"}</span><strong>{pounds(data.schema_version === 2 ? data.since_baseline_gain_gbp : data.gain_gbp)}</strong><small>Net of recorded fees</small></div>
+            <div><span>Gain since baseline</span><strong>{pounds(data.since_baseline_gain_gbp)}</strong><small>Net of recorded fees</small></div>
           </section>
           <nav className="investment-sections" aria-label="Investment sections">
             <a href="#investment-overview">Overview</a>
-            {data.schema_version === 2 && <a href="#investment-roles">Management roles</a>}
+            <a href="#investment-roles">Management roles</a>
             <a href="#investment-performance">Performance history</a>
             <a href="#investment-monitoring">Monitoring</a>
             <a href="#investment-records">Journal records</a>
@@ -931,14 +922,14 @@ export function InvestmentView({ now }: { now: number }) {
           <section className="investment-boundary" aria-label="Proposal boundary">
             <ShieldAlert size={18} />
             <p><strong>{data.proposal.status === "blocked" ? "Proposals are blocked." : "Proposal is review-only."}</strong> Recorded balances and illustrative role attribution are not approved targets or trade authority.</p>
-            {data.schema_version === 2 && data.source_mode === "recorded" &&
+            {data.source_mode === "recorded" &&
               <NavLink className="text-link" to="/investment/record">Record evidence</NavLink>}
           </section>
-          {data.schema_version === 2 && <InvestmentNextSteps data={data} onReviewCashEvidence={() => {
+          <InvestmentNextSteps data={data} onReviewCashEvidence={() => {
             if (accountsRef.current) accountsRef.current.open = true;
-          }} />}
+          }} />
           {data.warnings.length > 0 && <section className="investment-warnings" role="status"><h2>Evidence and valuation warnings</h2><ul>{data.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul></section>}
-          {data.schema_version === 2 && <section className="history-group" id="investment-roles" aria-label="Management role accounting">
+          <section className="history-group" id="investment-roles" aria-label="Management role accounting">
             <h2>Management roles</h2>
             <p className="position-note">{data.source_mode === "demo"
               ? "Synthetic role attribution is shown only to demonstrate accounting. It is not a target, approved allocation, or recommendation."
@@ -970,7 +961,7 @@ export function InvestmentView({ now }: { now: number }) {
                 </tr>)}</tbody></table>
               </div>
             </details>}
-          </section>}
+          </section>
           <PortfolioMonitoring portfolioId={data.portfolio_id} revision={data.revision} />
           <details className="investment-detail" id="investment-awareness">
             <summary>Optional local portfolio awareness</summary>
@@ -978,7 +969,7 @@ export function InvestmentView({ now }: { now: number }) {
           </details>
           <details className="investment-detail" id="investment-records">
             <summary>Journal records</summary>
-          {data.schema_version === 2 && <section className="history-group" aria-label="Recorded fees and income">
+          <section className="history-group" aria-label="Recorded fees and income">
             <h2>Recorded fees and income</h2>
             <p className="position-note">Totals cover explicit journal events, including any before the baseline; coverage, tax and entitlement are not verified.</p>
             <dl className="health-facts">
@@ -1015,9 +1006,9 @@ export function InvestmentView({ now }: { now: number }) {
                 </table>
               </div>
             </>}
-          </section>}
-          {data.schema_version === 2 && <p className="position-note">Baseline as of {timestamp(data.baseline_as_of)}. Lifetime gain and prior cost basis are unavailable. No valuation freshness threshold is configured.</p>}
-          {data.schema_version === 2 && data.recorded_flow_events.length > 0 &&
+          </section>
+          <p className="position-note">Baseline as of {timestamp(data.baseline_as_of)}. Lifetime gain and prior cost basis are unavailable. No valuation freshness threshold is configured.</p>
+          {data.recorded_flow_events.length > 0 &&
             <section className="history-group" aria-label="Recorded capital flows">
               <h2>Recorded contributions, withdrawals and transfers</h2>
               <p className="position-note">Showing the latest {Math.min(data.recorded_flow_events.length, 100)} of {data.recorded_flow_events.length} journal entries in original order. These are operator-recorded events, not independently verified movements. Transfers between included accounts do not change net external contributions.</p>
@@ -1034,7 +1025,7 @@ export function InvestmentView({ now }: { now: number }) {
                 </table>
               </div>
             </section>}
-          {data.schema_version === 2 && data.recorded_corrections.length > 0 &&
+          {data.recorded_corrections.length > 0 &&
             <section className="history-group" aria-label="Evidence-backed corrections">
               <h2>Historical corrections</h2>
               <p className="position-note">Corrections append new evidence and replay downstream accounting. A correction is refused if the revised event breaks later accounting. Any historical correction makes performance unavailable; the system never creates a replacement baseline automatically.</p>
@@ -1049,7 +1040,7 @@ export function InvestmentView({ now }: { now: number }) {
                 </table>
               </div>
             </section>}
-          {data.schema_version === 2 && data.recorded_profile_changes.length > 0 &&
+          {data.recorded_profile_changes.length > 0 &&
             <section className="history-group" aria-label="Profile changes and scope additions">
               <h2>Account and product history</h2>
               <p className="position-note">Names can change, while account/product identities and financial semantics remain fixed. Retired entries remain visible. Funded account scope additions are unitization-neutral and are not external contributions.</p>
@@ -1071,18 +1062,7 @@ export function InvestmentView({ now }: { now: number }) {
               <div><dt>Flow-neutral maximum drawdown</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>
             </dl>
           </section>
-          {data.schema_version === 2 && <div id="investment-performance"><InvestmentGrowthHistory history={data.valuation_history} /></div>}
-          {data.schema_version === 1 && <details className="investment-detail">
-            <summary>Legacy v1 asset-class target view</summary>
-            <section className="history-group">
-            <h2>Legacy v1 allocation and drift</h2>
-            <p className="position-note">These are historical v1 asset-class settings, not the current role-based mandate, approved targets, or investment recommendations.</p>
-            <div className="table-scroll" tabIndex={0} aria-label="Investment allocation" aria-describedby="table-scroll-instructions"><table>
-              <thead><tr><th>Sleeve</th><th>Target</th><th>Recorded</th><th>Drift (percentage points)</th></tr></thead>
-              <tbody>{data.allocation.map(row => <tr key={row.sleeve}><td>{label(row.sleeve)}</td><td>{percent(row.target_pct)}</td><td>{percent(row.actual_pct)}</td><td>{row.drift_pp === null ? "Unavailable" : new Decimal(row.drift_pp).toFixed(2)}</td></tr>)}</tbody>
-            </table></div>
-            </section>
-          </details>}
+          <div id="investment-performance"><InvestmentGrowthHistory history={data.valuation_history} /></div>
           <details ref={accountsRef} className="investment-detail" id="investment-accounts">
             <summary>Cash accounts, holdings and reconciliation evidence</summary>
           <section className="history-group"><h2>Cash accounts</h2><dl className="health-facts">
@@ -1090,8 +1070,8 @@ export function InvestmentView({ now }: { now: number }) {
               {"status" in account && account.status === "retired" ? " · retired" : ""}</dt>
               <dd>{pounds(account.cash_gbp)}</dd></div>)}
           </dl><p className="position-note">External savings are not broker buying power. Deposit protection and product eligibility require separate evidence.</p></section>
-          {data.schema_version === 2 && <CashEvidenceOverview data={data} now={now} />}
-          {data.schema_version === 2 && data.accounts.some(account => account.cash_observation !== null) &&
+          <CashEvidenceOverview data={data} now={now} />
+          {data.accounts.some(account => account.cash_observation !== null) &&
             <section className="history-group"><h2>Observed cash balances</h2>
               <p className="position-note">Operator-entered evidence, not provider verification. Differences compare with recorded cash at that timestamp; they are not corrections or proof of a later balance.</p>
               <p className="position-note">Showing the latest {Math.min(data.cash_observations.length, 100)} of {data.cash_observations.length} recorded observations.</p>
@@ -1108,7 +1088,7 @@ export function InvestmentView({ now }: { now: number }) {
                 </table>
               </div>
             </section>}
-          {data.schema_version === 2 && data.accounts.some(account => account.terms !== null) &&
+          {data.accounts.some(account => account.terms !== null) &&
             <section className="history-group"><h2>Reported savings-account terms</h2>
               <p className="position-note">Operator-recorded facts, not current provider verification or an interest-accrual input.</p>
               <dl className="health-facts">{data.accounts.filter(account => account.terms !== null).map(account => {
@@ -1124,7 +1104,7 @@ export function InvestmentView({ now }: { now: number }) {
             </section>}
           <section className="history-group"><h2>Long-term holdings</h2>
             <div className="table-scroll" tabIndex={0} aria-label="Investment holdings" aria-describedby="table-scroll-instructions"><table>
-              <thead><tr><th>Fund</th><th>Account</th><th>Sleeve</th><th>Quantity</th><th>Value</th>{data.schema_version === 2 && <><th>Mark as of</th><th>Mark age</th><th>Available at</th></>}</tr></thead>
+              <thead><tr><th>Fund</th><th>Account</th><th>Sleeve</th><th>Quantity</th><th>Value</th><th>Mark as of</th><th>Mark age</th><th>Available at</th></tr></thead>
               <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}><td>{holding.name}</td><td>{holding.account_id}</td><td>{label(holding.sleeve)}</td><td>{holding.quantity}</td><td>{pounds(holding.value_gbp)}</td>{"mark_at" in holding && <><td>{timestamp(holding.mark_at)}</td><td>{evidenceAge(holding.mark_at, now)}</td><td>{timestamp(holding.mark_available_at)}</td></>}</tr>)}</tbody>
             </table></div>
           </section>
@@ -1133,11 +1113,6 @@ export function InvestmentView({ now }: { now: number }) {
             <summary>Proposal status and capability limits</summary>
           <section className="history-group"><h2>Allocation proposal: {label(data.proposal.status)}</h2>
             <p>{data.proposal.reason}</p><p className="position-note">No order approval or execution is available here. Proposal expiry: {timestamp(data.proposal.expires_at, "Not issued")}.</p>
-            {data.proposal.orders.length > 0 && <div className="table-scroll" tabIndex={0} aria-label="Proposed investment changes" aria-describedby="table-scroll-instructions"><table>
-              <thead><tr><th>Account</th><th>Product</th><th>Side</th><th>Quantity</th><th>Estimated notional</th></tr></thead>
-              <tbody>{data.proposal.orders.map((order, index) => <tr key={index}><td>{order.account_id}</td><td>{order.product_id}</td><td>{label(order.side)}</td><td>{order.quantity}</td><td>{pounds(order.estimated_notional_gbp)}</td></tr>)}</tbody>
-            </table></div>}
-            {data.proposal.manual_transfers.map(message => <p key={message}>{message}</p>)}
           </section>
           <section className="history-group"><h2>Capability limits</h2><ul>{data.limitations.map(item => <li key={item}>{item}</li>)}</ul>
             <p>No market investment guarantees profit or a maximum loss. This is a measurement and discipline tool, not evidence of future outperformance.</p>
@@ -1164,7 +1139,7 @@ export function InvestmentGuide() {
   return <article className="trading-guide">
     <p className="guide-intro">GoldScout's investment path supports a long-term, human-chosen portfolio of global funds, GBP savings and high-quality bonds. It measures recorded holdings; proposals are blocked and it does not trade.</p>
     <section><h2>Ownership, not short-term prediction</h2><p>Broad diversified funds spread company exposure, but still face market declines and concentration. GBP dealing does not remove underlying currency exposure. Bonds can fall when interest rates or credit conditions change; they are not protected savings.</p></section>
-    <section><h2>Contributions and rebalancing</h2><p>Proposals are blocked until role-aware policy, products, weights and loss/transfer rules are approved and implemented. Review acknowledgements are recorded through the offline CLI, not the dashboard; five-point drift remains a trigger. They do not approve trades. Future fees and settlement require human verification. No trade is a valid outcome.</p></section>
+    <section><h2>Contributions and rebalancing</h2><p>Proposals are blocked until role-aware policy, products, weights and loss/transfer rules are approved and implemented. Monitoring review actions do not approve trades or resolve discrepancies. Future fees and settlement require human verification. No trade is a valid outcome.</p></section>
     <section><h2>Accurate GBP measurement</h2><p>Deposits are not profit. Internal transfers do not change total contributed capital. Recorded fills, costs and price observations determine the supported valuation; missing or stale evidence never grants permission to trade. External savings cannot be spent as broker cash.</p></section>
     <section><h2>Backup and recovery</h2>
       <p>This dashboard does not check whether a backup exists or is current. Git ignore is not encryption, access control or protection from deletion.
@@ -1173,7 +1148,7 @@ export function InvestmentGuide() {
         It describes validated, non-overwriting backup and restore to new operator-controlled paths, receipt comparison and a restore rehearsal.
         Never replace an existing journal automatically or assume an older valid copy contains the latest evidence.</p>
     </section>
-    <section><h2>Separate safety boundaries</h2><p>The dashboard is read-only by default; v2 recording requires explicit local opt-in. There is no user login, so keep the service on its loopback address. Broker execution, licensed portfolio research, money-weighted return, inflation and full multi-currency accounting require further validated capabilities. Existing legacy trading stops and recovery are not removed or changed by the investment path. News and AI remain advisory only.</p></section>
+    <section><h2>Separate safety boundaries</h2><p>The dashboard is read-only by default; recording requires explicit local opt-in. There is no user login, so keep the service on its loopback address. Broker execution, licensed portfolio research, money-weighted return, inflation and full multi-currency accounting require further validated capabilities. News and AI remain advisory only.</p></section>
     <div className="guide-warning"><strong>Losses can be large, prolonged or permanent.</strong> Diversification, lower costs and a long horizon do not guarantee returns. Exact products, savings protection, tax wrappers and provider access require current verification.</div>
   </article>;
 }

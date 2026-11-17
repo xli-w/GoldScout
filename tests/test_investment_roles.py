@@ -9,7 +9,7 @@ from unittest.mock import patch
 from dashboard.app import create_app
 from fastapi.testclient import TestClient
 from investment import InvestmentError
-from investment.service import demo_events, demo_profile, proposal_export, snapshot
+from investment.service import snapshot
 from investment.store import import_events, initialize
 from test_dashboard_api import MemoryEventLoop
 from test_investment_opening import NOW, correction, event, iso, opening, profile
@@ -177,15 +177,6 @@ class InvestmentRolesTests(unittest.TestCase):
         contribution = event("legacy-contribution", "contribution", NOW, "bank", amount_gbp="1")
         import_events(path, [contribution], NOW)
         self.assertEqual(snapshot(path, NOW)["accounts"][0]["cash_gbp"], "1001")
-
-    def test_v1_legacy_proposals_are_blocked_without_role_policy(self):
-        path = Path(self.directory.name) / "legacy.sqlite3"
-        initialize(path, demo_profile(NOW), NOW)
-        import_events(path, demo_events(NOW, contribution=True), NOW)
-        proposal = snapshot(path, NOW)["proposal"]
-        self.assertEqual(proposal["status"], "blocked")
-        self.assertEqual(proposal["orders"], [])
-        self.assertEqual(proposal_export(path, NOW)["proposal"], proposal)
 
     def test_assignment_commit_failure_and_retry_keep_journal_consistent(self):
         attribution = assignment("once", "core", "bank", "100")

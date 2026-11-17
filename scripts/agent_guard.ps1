@@ -10,7 +10,7 @@ function Get-TargetPaths {
     }
     elseif ($Value -is [PSCustomObject]) {
         foreach ($property in $Value.PSObject.Properties) {
-            if ($property.Name -match '(?i)^(filePath|filePaths|fileUri|targetFileUri|resourcePath|path|uri|dirPath|includePattern|query|selectFiles)$') {
+            if ($property.Name -match '(?i)^(filePath|filePaths|fileUri|targetFileUri|resourcePath|path|paths|uri|dirPath|includePattern|pattern|query|selectFiles)$') {
                 @($property.Value)
             }
             elseif ($property.Name -eq 'input' -and $property.Value -is [string]) {
@@ -74,7 +74,7 @@ function Get-PolicyDecision {
     if ($tool -match '(?i)(read_file|view_image|create_file|insert_edit_into_file|apply_patch|file_search|grep_search|list_dir|edit_notebook_file|Edit)$' -and $paths.Count -eq 0) {
         return @('deny', 'File tool input has no inspectable target.')
     }
-    $protected = '(?i)(^|[/\\\s])(?:\.env(?:[.\w-]*)?|bot_ledger\.sqlite3(?:-wal|-shm)?|bot_state\.json|trades\.csv|daily_pnl\.csv|bot\.log|bot\.lock)(?=$|[/\\\s*?\[]|:)'
+    $protected = '(?i)(^|[/\\\s])(?:\.env(?:[.\w-]*)?|local-investment|bot_ledger\.sqlite3(?:-wal|-shm)?|bot_state\.json|trades\.csv|daily_pnl\.csv|bot\.log|bot\.lock)(?=$|[/\\\s*?\[]|:)'
     $policyApproval = $false
     foreach ($path in $paths) {
         $normalized = [Uri]::UnescapeDataString([string]$path).Replace('\', '/')

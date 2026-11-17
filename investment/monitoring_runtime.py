@@ -1,4 +1,4 @@
-"""Explicit monitoring orchestration; only approved collection may contact eToro."""
+"""Explicit monitoring orchestration; only approved read collection may contact eToro."""
 
 from datetime import timedelta
 import os

@@ -14,7 +14,7 @@ trader-dashboard = "dashboard.__main__:main"
 goldscout-investment = "investment.__main__:main"
 
 [tool.setuptools]
-packages = ["dashboard", "market_intelligence", "investment"]
+packages = ["dashboard", "market_intelligence", "investment", "research_data"]
 py-modules = ["proxy_config"]
 include-package-data = false
 

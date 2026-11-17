@@ -13,10 +13,10 @@ from pathlib import Path
 from threading import Barrier
 from unittest.mock import patch
 
-from bot.campaign_data import CampaignDataset, CampaignDatasetError, import_campaign_dataset
-from bot.campaign_data import dataset as dataset_module
-from bot.campaign_data import readiness as readiness_module
-from bot.campaign_data.__main__ import main as campaign_cli
+from research_data import CampaignDataset, CampaignDatasetError, import_campaign_dataset
+from research_data import dataset as dataset_module
+from research_data import readiness as readiness_module
+from research_data.__main__ import main as campaign_cli
 
 
 GBP_BARS = (
@@ -289,9 +289,7 @@ class CampaignDatasetTests(unittest.TestCase):
 
     def test_import_and_validate_cli_are_separate_and_local_only(self):
         output = io.StringIO()
-        with patch("bot.utils.create_api", side_effect=AssertionError("network client must not be used")), \
-                patch("bot.history_cache.MinuteHistory", side_effect=AssertionError("minute history must not be used")), \
-                patch("sys.stdout", output):
+        with patch("sys.stdout", output):
             result = campaign_cli([
                 "import", str(self.input_dir / "manifest.json"), "--dataset-dir", str(self.dataset_dir),
             ])
@@ -328,11 +326,11 @@ class CampaignDatasetTests(unittest.TestCase):
 
     def test_reopen_enforces_input_manifest_and_aggregate_size_limits(self):
         identifier = import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
-        with patch("bot.campaign_data.dataset.MAX_MANIFEST_BYTES", 1):
+        with patch("research_data.dataset.MAX_MANIFEST_BYTES", 1):
             with self.assertRaisesRegex(CampaignDatasetError, "source manifest exceeds"):
                 CampaignDataset.open(self.dataset_dir, identifier)
-        with patch("bot.campaign_data.dataset.MAX_MANIFEST_BYTES", 2 * 1024 * 1024), \
-                patch("bot.campaign_data.dataset.MAX_TOTAL_SOURCE_BYTES", 1):
+        with patch("research_data.dataset.MAX_MANIFEST_BYTES", 2 * 1024 * 1024), \
+                patch("research_data.dataset.MAX_TOTAL_SOURCE_BYTES", 1):
             with self.assertRaisesRegex(CampaignDatasetError, "aggregate size limit"):
                 CampaignDataset.open(self.dataset_dir, identifier)
 
@@ -726,7 +724,7 @@ class CampaignDatasetTests(unittest.TestCase):
                     stream.write(b"x")
             return original_os_open(path, flags, *args, **kwargs)
 
-        with patch("bot.campaign_data.dataset.MAX_CSV_BYTES", 1024), \
+        with patch("research_data.dataset.MAX_CSV_BYTES", 1024), \
                 patch.object(dataset_module.os, "open", grow_source):
             with self.assertRaisesRegex(CampaignDatasetError, "size limit"):
                 dataset.source_file("usd_fx.csv")

@@ -1,17 +1,20 @@
 # Investment journal lifecycle
 
 The separate GBP investment store is the authority for its own recorded
-evidence; it is not the legacy trading ledger or intelligence store. It is an
-append-only journal with explicit v1/v2 initialization, bounded reads,
+evidence; it is not the intelligence or monitoring store. It is an
+append-only opening-evidence journal with explicit initialization, bounded reads,
 hash-linked events and replay-verified committed states. Readers never migrate,
-repair or create it. These checks detect inconsistency, not forgery or an
+repair or create it. Only wire `schema_version=2` is supported; older journals
+are explicitly rejected with no migration. Journals containing retired policy
+review-acknowledgement events are refused even when marked version 2; no event
+migration is provided. These checks detect inconsistency, not forgery or an
 omitted later backup.
 
 ## Confirmed first-run creation
 
 The [default wizard](investment.md#guided-first-run-setup) is an explicitly
 confirmed local bootstrap path with no login. Workspace discovery, status and
-preview are read-only and never initialize storage. The operator confirms the exact v2
+preview are read-only and never initialize storage. The operator confirms the exact
 profile and opening event before any workspace directory, staging file or
 receipt is written. Drafts are not persisted before that confirmation.
 
@@ -39,7 +42,7 @@ able to rewrite local files, and publication is not a power-loss certification.
 
 ## Synthetic onboarding rehearsal
 
-Before entering account evidence, rehearse the v2 command flow with isolated,
+Before entering account evidence, rehearse the command flow with isolated,
 synthetic fixtures:
 
 ```powershell
@@ -115,7 +118,7 @@ chat, hosted AI or an unapproved remote destination for private records.
 Current code limits the journal to 10,000 events, 8 MiB of
 serialized profile and event evidence, and a 32 MiB database. A bound can stop
 new imports or reads before another is reached; there is no automatic rollover,
-pruning, v1-to-v2 migration or capacity forecast. A copy receipt measures each
+pruning, migration or capacity forecast. A copy receipt measures each
 bound at the pinned snapshot; file size alone does not measure serialized
 evidence. Monitor receipts and rehearse recovery before reaching a limit.
 Imports check the database size before opening and recheck SQLite's allocated

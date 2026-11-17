@@ -1,105 +1,106 @@
-# AI-Assisted Development
+# Development workflow
 
-## Entry Points
+Read [repository guidance](../.github/copilot-instructions.md),
+[safety invariants](safety-invariants.md) and the [README](../README.md).
+**Developer** implements; **Safety Reviewer** performs independent read-only
+review and cannot edit, execute or delegate execution.
 
-Project customizations are versioned under [.github](../.github/copilot-instructions.md). Use **Developer** for implementation and **Safety Reviewer** for read-only review. The Developer has an explicit review handoff; reviewer tools are restricted to read/search and it cannot delegate execution.
+## Current owners
 
-User-invoked workflow skills: `/review-change`, `/reproduce-bug`, `/validate-change`, `/plan-feature` (stored as `SKILL.md`, not separate prompt files). Domain skills: `trading-change-validation`, `order-recovery-review`, `ledger-migration-review`, `backtest-integrity-review`, and `investment-system-development`. Scoped instructions load for the relevant files; domain skills load on demand. Installed Pylance skills complement these procedures but are not required for discovery or CI.
+- `investment/`: opening-evidence GBP accounting, append-only replay, CLI and
+  local monitoring. Use
+  [investment-system-development](../.github/skills/investment-system-development/SKILL.md).
+  Wire `schema_version=2` is retained; older journals are rejected, never migrated.
+- `dashboard/`, `frontend/`: local portfolio views and separately gated manual
+  recording/setup. Tests must override workspace selection to temporary paths.
+  Never discover/read the real ignored `local-investment/` workspace.
+- `market_intelligence/`: separate opt-in advisory service. Apply its
+  [scoped checklist](../.github/instructions/market-intelligence.instructions.md).
+  Account evidence never enters hosted AI; collection is not trading authority.
+- `research_data/`: offline local snapshots, provenance, scoped readiness and
+  pure fill accounting. Calendar readiness uses `exchange-calendars`; the
+  importer and fill helper use the standard library.
+- Synthetic investment simulation is engineering only. For simulation or
+  selection use [backtest-integrity-review](../.github/skills/backtest-integrity-review/SKILL.md),
+  the [mandate](investment-research-context.md) and [protocol](backtesting-protocol.md).
+  Stop at unmet feasibility gates. There is no execution runtime.
 
-In VS Code, check the chat customization UI/diagnostics for the two agents, four workflow skills, five domain skills, and scoped instructions. If new files are not listed, reload the window or start a new chat. Hook support/enablement depends on the VS Code/Copilot version and workspace trust; inspect hook execution diagnostics and verify an ordinary execution request asks permission. Static checks cannot prove editor discovery or hook activation.
+## Inspect, reproduce, change, verify
 
-## Product boundaries
-
-- The [current context](investment-research-context.md#current-clarification-17-november-2026)
-  clarifies selected savings, first-home LISA and a non-LISA investment-holdings
-  experimental denominator. [Monitoring](monitoring.md) is a local read-only
-  projection with a separate observation cache; provider collection is explicit
-  and gated. The [provider assessment](provider-feasibility.md) was recovered
-  from misplaced Trader documentation without replacing newer GoldScout code.
-
-- The [investment system](investment.md) is a separate GBP evidence journal;
-  proposals are blocked and it has no execution path. Use the
-  [`investment-system-development` skill](../.github/skills/investment-system-development/SKILL.md)
-  for `investment/` changes.
-- Default dashboard startup selects the source checkout's ignored
-  `local-investment` workspace; installed use needs explicit workspace selection.
-  Its local [setup wizard](investment.md#guided-first-run-setup) creates
-  a profile/opened journal only after reviewed confirmation. Startup and reads
-  remain nonmutating. Development tests must override workspace resolution to
-  temporary paths and never discover or read the real local workspace.
-- The [investor mandate](investment-research-context.md) and
-  [backtesting protocol](backtesting-protocol.md) govern portfolio research and
-  suitability claims. Existing campaign tools and synthetic simulations do not
-  close their data, product, or accounting gates. Use
-  [`backtest-integrity-review`](../.github/skills/backtest-integrity-review/SKILL.md)
-  for research and simulation changes.
-- [Market intelligence](intelligence.md) is a separate opt-in advisory system.
-  Follow its [scoped instructions](../.github/instructions/market-intelligence.instructions.md);
-  providers and AI do not gain account or trading authority.
-- The retained Alpaca trading system remains independent. Its stores, strategies,
-  and venue-specific recovery behavior are not investment policy; see the
-  [legacy systems reference](legacy-systems.md).
-
-## Environment and Checks
-
-The validated baseline is Python 3.11.9 and [tested dependencies](../requirements-tested.txt); documented Python 3.10 compatibility remains supported but this CI job does not certify it. Select the project environment and verify the editor interpreter rather than relying on terminal PATH. Use its executable in place of `python` below if necessary.
+1. Locate the state transition and nearest behavior-level test. State a
+   falsifiable hypothesis or focused acceptance check.
+2. Verify the selected interpreter. Python 3.11.9 is the validated baseline;
+   preserve documented Python 3.10 support. Do not hardcode a local interpreter.
+3. Use controlled UTC clocks, exact decimals and temporary synthetic storage.
+   Never access operational databases, receipts, snapshots, logs or credentials.
+4. Make the smallest justified change, run the focused offline slice immediately,
+   then adjacent checks. Shared accounting/data/configuration/tooling contracts
+   require full offline regression and independent read-only Safety Reviewer.
+5. Update related docs, validate customization and inspect the diff. Report exact
+   checks/results, assumptions, review status and absent broker validation.
 
 ```powershell
+python scripts/offline_tests.py --pattern test_campaign*.py
+python scripts/offline_tests.py --pattern test_investment_opening.py
 python scripts/offline_tests.py --pattern test_ai_tooling.py
-python scripts/offline_tests.py --pattern test_ledger.py
 python scripts/offline_tests.py
 python scripts/validate_ai_setup.py
 powershell -NoProfile -File scripts/test_agent_guard.ps1
 git diff --check
 ```
 
-The [offline runner](../scripts/offline_tests.py) isolates cached broker settings, disables dotenv loading and the proxy-only dotenv reader, clears Alpaca credentials/confirmation and the proxy setting, patches standard Python socket connection/send/listen and DNS entry points (including UDP sends), and redirects configured ledger/state/CSV/log/lock paths to a temporary directory before test discovery. It restores the prior broker-settings cache on exit. A pattern matching zero tests fails. Dependencies must already be installed. Test code must still use temporary direct file paths and avoid subprocesses/native network clients: the runner is not an OS sandbox. Temporary redirection is not permission to edit operational files through other commands.
+The [offline runner](../scripts/offline_tests.py) disables dotenv/proxy secret
+loading, scrubs known credential settings including `GOLDSCOUT_ETORO_*` and
+`TRADER_AI_*`, and blocks standard Python
+socket connection/send/listen and DNS entry points, including UDP. A zero-test
+pattern fails. Tests must still use temporary direct paths; the runner is not
+an OS sandbox. Do not bypass it with subprocesses or native network clients.
 
-Install `requirements-tested.txt` for the full regression suite. It includes the
-pinned dashboard and intelligence dependencies used by tests, plus HTTPX for the
-in-process FastAPI test client; this is also the dependency manifest installed by CI.
+The full regression manifest is [requirements-tested.txt](../requirements-tested.txt);
+installations need network, tests do not. Scientific dependencies remain only
+for explicit calendar readiness and precision regression fixtures, not a trading
+runtime. [CI](../.github/workflows/offline-validation.yml) installs the snapshot,
+validates customization, tests the PowerShell guard and runs offline regression
+on Windows/Python 3.11.9 with no broker secrets or persisted checkout credentials.
+Its socket guard is not OS egress isolation. Untrusted code requires a
+credential-free sandbox with outbound egress disabled.
 
-The [CI workflow](../.github/workflows/offline-validation.yml) installs the version snapshot, validates customization, tests the PowerShell policy, and runs the isolated suite on Windows/Python 3.11.9. It references no broker secrets and does not persist checkout credentials. Dependency installation needs network access; the regression phase blocks Python sockets, not all OS egress. Use a credential-free OS/container sandbox with outbound egress disabled for untrusted code. CI execution and package availability must be confirmed by an actual hosted run.
+## Focused checks
 
-## Test Map
-
-| Change | Focused Starting Checks |
+| Contract | Starting test pattern |
 | --- | --- |
-| Order lifecycle / protective coverage | [portfolio](../tests/test_portfolio.py), [repair cases](../tests/test_review2_repairs.py), [next cases](../tests/test_review2_next.py) |
-| Fresh-entry ownership / OTO group linkage | [review 3 ownership](../tests/test_review3_ownership.py) |
-| Ledger / restart / persistence | [ledger](../tests/test_ledger.py), [state validation](../tests/test_state_validation.py) |
-| Candle/session/action data | [data](../tests/test_review2_data.py), [research safety](../tests/test_research_safety.py) |
-| GBP campaign import/readiness/accounting contracts | [campaign dataset](../tests/test_campaign_dataset.py), [readiness](../tests/test_campaign_readiness.py), [fill accounting](../tests/test_campaign_accounting.py) |
-| Offline investment accounting, replay and blocked-proposal contracts | [investment](../tests/test_investment.py), [read-only investment API](../tests/test_investment_dashboard.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
-| Local portfolio awareness, exposure mapping and reminders | [awareness](../tests/test_investment_awareness.py), [durable brief evidence](../tests/test_intelligence_completion.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
-| Monitoring rules, observation cache, collection, Read adapter and durable review inbox | [rules](../tests/test_investment_monitoring.py), [cache](../tests/test_investment_monitoring_store.py), [review inbox](../tests/test_investment_monitoring_reviews.py), [runtime](../tests/test_investment_monitoring_runtime.py), [eToro](../tests/test_investment_etoro.py), [API](../tests/test_investment_dashboard.py), [desktop/mobile](../frontend/tests/dashboard.spec.mjs) |
-| Offline observation staging and reconciliation | [reconciliation](../tests/test_investment_reconciliation.py), [opening accounting](../tests/test_investment_opening.py) |
-| Synthetic-only investment pilot lifecycle and persistence | [trace replay](../tests/test_investment_pilot.py), [temporary journal/recovery](../tests/test_investment_pilot_store.py) |
-| Backtest / monitor timing | [backtest](../tests/test_backtest.py), [monitor](../tests/test_review2_monitor.py) |
-| Experiment runner (spec, dataset, selection, holdout) | [experiments](../tests/test_experiments.py) |
-| Intelligence calendar/contracts/wire schema | [intelligence](../tests/test_market_intelligence.py) |
-| Intelligence storage/control/restart behavior | [controls](../tests/test_intelligence_controls.py) |
-| Intelligence feeds, archive and scheduled polling | [providers](../tests/test_intelligence_providers.py), [news](../tests/test_intelligence_news.py), [archive](../tests/test_intelligence_archive.py), [polling](../tests/test_intelligence_polling.py) |
-| Intelligence AI, observer and dashboard controls | [analysis](../tests/test_intelligence_analysis.py), [completion](../tests/test_intelligence_completion.py), [frontend API](../tests/test_intelligence_frontend.py), [browser](../frontend/tests/intelligence.spec.mjs) |
-| Research statistics / selection | [remaining findings](../tests/test_remaining_findings.py), [final cases](../tests/test_review2_final.py) |
-| AI setup / offline guard | [tooling](../tests/test_ai_tooling.py), [PowerShell policy tests](../scripts/test_agent_guard.ps1) |
+| Local research snapshots, readiness, fill conservation | `test_campaign*.py` |
+| Journal opening/accounting/replay | `test_investment_opening.py`, `test_investment.py` |
+| Backup, setup and recovery | `test_investment_lifecycle.py`, `test_investment_onboarding.py` |
+| Observation previews and roles | `test_investment_reconciliation.py`, `test_investment_roles.py` |
+| Monitoring/cache/review workflow | `test_investment_monitor*.py` |
+| Awareness and advisory intelligence | `test_investment_awareness.py`, `test_intelligence*.py`, `test_market_intelligence.py` |
+| Local API/setup/recording | `test_investment_dashboard.py`, `test_investment_bootstrap.py`, `test_investment_setup.py`, `test_dashboard_api.py` |
+| Customization and safety guards | `test_ai_tooling.py`, `scripts/test_agent_guard.ps1` |
 
-These are starting points, not exhaustive coverage. Read the nearest relevant test and owner, form a falsifiable hypothesis, reproduce, edit narrowly, and immediately validate. Execution/accounting/shared data/config/tooling changes require full offline regression and independent review where available. Final reports list commands/results, review status, unresolved assumptions, and broker validation status.
+These are starting points, not exhaustive coverage; use existing test owners.
+Frontend work also requires applicable browser checks and a current asset build.
+Offline success certifies neither external-provider semantics nor performance.
 
-## Permissions and Hooks
+## Permissions and hooks
 
-The [PreToolUse hook](../.github/hooks/safety.json) invokes [the policy script](../scripts/agent_guard.ps1) on Windows PowerShell; Linux/macOS require `pwsh` installed. It emits documented allow/ask/deny JSON, denies recognized direct secret/operational paths, asks approval for safety-policy edits and execution/external interaction, and fails closed on malformed payloads. It never echoes tool input or secrets.
+The [hook](../.github/hooks/safety.json) invokes
+[the policy script](../scripts/agent_guard.ps1), denying recognized secret and
+operational paths including the default `local-investment/` workspace and asking
+approval for execution/external interaction and safety-policy edits. Invalid
+payloads fail closed. Keep its aliases, move-target inspection and nested
+parallel-tool handling covered by synthetic tests.
 
-The SDK can present the free-form patch tool to the hook as `Edit`, even when the chat displays `apply_patch`. Both aliases are inspected as patches, including move destinations, and require recognizable targets. JSON-only tests of `apply_patch` are insufficient to verify this integration; the policy tests cover raw/structured `Edit`, host envelopes, protected paths, and policy-edit approval.
+Approve only the specific safe command. No broker/authenticated calls,
+operational maintenance, secret access or guard-policy changes without separate
+task-specific approval. Paper environments are not exempt. Hooks cannot parse
+every custom workspace, shell semantic, alias, symlink or integration envelope;
+instructions do not replace filesystem permissions, credential separation or
+OS egress control.
+Never disable a guard or relax assertions to make a test pass.
 
-If an active rejection disagrees with synthetic replay, the session's host envelope may differ from the payload received by the policy process. Check the actual tool alias before changing parsers. Do not disable the hook or allow arbitrary non-JSON strings. If the hook blocks edits to itself, an operator may need to bootstrap a specifically approved compatibility repair outside the agent; preserve deny/ask boundaries, add the regression, remove temporary diagnostics, and verify an actual editor patch as well as offline checks.
-
-Approve only the specific safe offline command. Paper/live API calls, order mutations, account changes, maintenance/corrections, and guard changes need separate task-specific approval. Secrets must be entered directly by the operator, never passed through chat. The hook intentionally asks for all execution tools rather than claiming it can safely parse arbitrary shell code.
-
-Hook decisions cover recognized path fields, protected-name glob searches, and nested parallel calls, not arbitrary aliases/file names, symlinks, every integration schema, shell semantics, or a hostile agent. Invalid JSON, non-object inputs, and recognized file tools without targets are denied; the hook is not a full validator for every tool schema. Disabling hooks or approving unrestricted shell commands defeats that layer. Instructions and hooks do not replace filesystem permissions, credential separation, OS egress controls, or human review. No broker MCP tools or autonomous strategy optimization are configured.
-
-## Maintenance
-
-Keep [safety invariants](./safety-invariants.md) and this guide current when behavior changes. Record significant architectural choices under `docs/decisions/` using [the decision template](./decisions/0000-template.md); do not create a decision for every small edit. Repository memory is a convenience, not authoritative documentation.
-
-Run the validator after changing YAML, agent names/tools, links, hooks, or CI. Test policy changes using synthetic inputs. Periodically replay a known historical bug as an offline regression and confirm the relevant skill is selected; do not intentionally break production code or tune instructions to a single example. Discovery and handoff behavior need a VS Code smoke check after reload.
+Keep agent names, read-only reviewer permissions, workflow-skill discovery,
+hook and CI guards intact. Run customization validation after YAML/link/tool
+metadata changes. Static validation cannot prove editor discovery or hook
+activation; inspect VS Code customization diagnostics and smoke-check after
+reload. Record significant architecture decisions under [decisions](decisions/0000-template.md).

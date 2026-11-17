@@ -12,7 +12,7 @@ from unittest.mock import patch
 from investment import InvestmentError
 from investment import store
 from investment.core import iso
-from investment.service import demo_profile, proposal_export, review_status, snapshot
+from investment.service import snapshot
 from investment.store import import_events, initialize, read
 
 
@@ -129,6 +129,61 @@ def event(identifier, kind, timestamp, account, **values):
 
 
 class InvestmentOpeningTests(unittest.TestCase):
+    def test_existing_opening_checkpoint_hash_is_unchanged(self):
+        from investment.core import replay
+
+        # Immutable checkpoint projection for this synthetic, already released fixture.
+        self.assertEqual(
+            store.state_digest(replay(profile(), [opening()], NOW)),
+            "f3a01d4a83ed25e640e39c2fd73dfc0ad6fbb41b8f3de7308440530b6e492adc")
+
+    def test_multi_commit_v2_checkpoints_match_fixed_legacy_hashes(self):
+        funded_at = NOW + timedelta(seconds=1)
+        observation_at = NOW + timedelta(seconds=2)
+        events = [
+            opening(),
+            event("funding", "contribution", funded_at, "bank", amount_gbp="100"),
+            cash_observation(observation_at, balance="1099"),
+        ]
+        initialize(self.database, profile(), NOW)
+        # Fixed schema-v2 checkpoints pin the projection across separate appends.
+        expected = [
+            "f647c4108d9ee8b952091bdc59daa5f871e10e5fda9a51ccfd0bc1331c633c99",
+            "f3a01d4a83ed25e640e39c2fd73dfc0ad6fbb41b8f3de7308440530b6e492adc",
+            "546c415d71dc826db4bf5b2c953c55f03736ef7d118137c6fd009ac780f05c86",
+            "79c09b9e737bb0a8ea8bc0890fe78b1b4553aae5bc7ff55e7013498125c816da",
+        ]
+        for offset, value in enumerate(events):
+            import_events(self.database, [value], NOW + timedelta(seconds=offset))
+        with closing(sqlite3.connect(self.database)) as connection:
+            checkpoints = connection.execute(
+                "SELECT revision,state_hash FROM commits ORDER BY revision").fetchall()
+        self.assertEqual(checkpoints, list(enumerate(expected)))
+        self.assertEqual(read(self.database, observation_at).revision, 3)
+
+    def test_retired_review_event_in_v2_journal_is_refused_without_writes(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        legacy_review = {
+            "id": "review", "type": "review_acknowledgement",
+            "timestamp": iso(NOW), "available_at": iso(NOW),
+            "evidence": "synthetic policy review", "review_kind": "monthly",
+            "reviewed_revision": 1, "valuation_as_of": iso(NOW),
+        }
+        payload = store.canonical(legacy_review)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            previous = connection.execute(
+                "SELECT hash FROM events WHERE revision=1").fetchone()[0]
+            connection.execute(
+                "INSERT INTO events VALUES (?,?,?,?,?)",
+                (2, legacy_review["id"], payload, previous, store.digest(previous + payload)),
+            )
+            connection.execute("INSERT INTO commits VALUES (?,?)", (2, "0" * 64))
+        before = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "Review acknowledgements require"):
+            read(self.database, NOW)
+        self.assertEqual(self.database.read_bytes(), before)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -906,7 +961,7 @@ class InvestmentOpeningTests(unittest.TestCase):
         initialize(self.database, profile(), NOW)
         with closing(sqlite3.connect(self.database)) as connection:
             connection.execute("PRAGMA user_version=1")
-        with self.assertRaisesRegex(InvestmentError, "version disagree"):
+        with self.assertRaisesRegex(InvestmentError, "schema_version=2.*no migrations"):
             read(self.database, NOW)
         with closing(sqlite3.connect(self.database)) as connection:
             connection.execute("PRAGMA user_version=2")
@@ -956,12 +1011,13 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(result["baseline_as_of"], iso(later))
         self.assertEqual(result["since_baseline_gain_gbp"], "0")
 
-    def test_unimplemented_policy_commands_fail_explicitly(self):
+    def test_unimplemented_review_events_fail_without_mutation(self):
         initialize(self.database, profile(), NOW)
         import_events(self.database, [opening()], NOW)
-        for operation in (review_status, proposal_export):
-            with self.assertRaisesRegex(InvestmentError, "policy"):
-                operation(self.database, NOW)
+        before = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "policy"):
+            import_events(self.database, [{"id": "review", "type": "review_acknowledgement"}], NOW)
+        self.assertEqual(self.database.read_bytes(), before)
 
     def test_opening_requires_valid_unique_broker_holdings(self):
         initialize(self.database, profile(), NOW)
@@ -1041,16 +1097,6 @@ class InvestmentOpeningTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(InvestmentError, "Prior evidence was not available"):
             import_events(self.database, [earlier_confirmation], available_at)
-
-    def test_savings_terms_update_is_version_2_only(self):
-        spec = demo_profile(NOW)
-        deposit = next(account for account in spec["accounts"]
-                       if account["kind"] == "deposit")
-        initialize(self.database, spec, NOW)
-        update = savings_terms_event(NOW, account=deposit["id"])
-        with self.assertRaisesRegex(InvestmentError, "version 2 store"):
-            import_events(self.database, [update], NOW)
-        self.assertEqual(read(self.database, NOW).revision, 0)
 
     def test_savings_terms_event_updates_display_only_facts_without_changing_valuation(self):
         spec = profile()

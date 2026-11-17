@@ -3,8 +3,9 @@
 The local intelligence service collects BLS/BEA calendars and Federal Reserve
 monetary-policy RSS, archives source evidence and optionally generates advisory
 AI briefs. It never places orders, changes stops or suppresses strategy signals.
-`shadow` produces hypothetical calendar observations only. Calendar completeness
-is unverified, so unknown coverage never becomes trading permission.
+There is no order evaluator, broker observer or execution runtime. The persisted
+`shadow` settings value is a historical evidence label with no runtime effect;
+it does not evaluate hypothetical orders. Calendar completeness is unverified.
 
 ## Portfolio-manager awareness
 
@@ -22,7 +23,7 @@ The [2026-11-16 mandate](investment-research-context.md) makes intelligence a
 central supporting capability for substantial long-term investment capital:
 a stable core and capped dynamic experiments, not a household cash planner.
 Reuse the existing service rather than building a parallel ungoverned AI trader.
-Current advisory/shadow contracts and opt-in launch/provider gates are unchanged.
+Current advisory evidence contracts and opt-in launch/provider gates remain.
 
 Prioritise automatic, source-linked portfolio briefs, thesis/watch records,
 economic-event awareness, uncertainty and research-hypothesis generation. The
@@ -67,13 +68,8 @@ python -m pip install -r requirements-intelligence.txt
 python -m market_intelligence initialize --database intelligence.sqlite3
 ```
 
-The bot observer requires `psutil` in the bot's Python environment; it is included
-in these optional requirements. If process identity cannot be checked, the
-observer logs a warning and stops observing without changing trading. Previous
-observations expire normally.
-
 Existing version-1/2/3 intelligence databases require explicit upgrade with the
-service stopped. The trading ledger must never be used as this database:
+service stopped. Foreign or investment stores must never be used as this database:
 
 ```powershell
 python -m market_intelligence upgrade --database intelligence.sqlite3
@@ -113,12 +109,12 @@ approval. After approval, run from the project directory:
 
 ```powershell
 python -m market_intelligence run --database intelligence.sqlite3 --allow-network --collect-news --allow-ai --ai-profiles profiles.json
-python -m dashboard --database bot_ledger.sqlite3 --intelligence-database intelligence.sqlite3 --analysis-controls --analysis-profiles local
+python -m dashboard --intelligence-database intelligence.sqlite3 --analysis-controls --analysis-profiles local
 ```
 
-The dashboard asks for a local analysis-control password directly in the terminal.
-The Intelligence page provides a separate login and CSRF-protected analysis-only
-settings. Account/order APIs remain read-only. No endpoint accepts an arbitrary
+Analysis controls require explicit dashboard opt-in, same-origin and CSRF-protected
+sessions, but there is no password or user login. These browser defenses are not
+authentication and do not protect against other local users. No endpoint accepts an arbitrary
 provider URL, prompt, secret, risk limit or order. Do not expose the loopback service
 remotely. The dashboard can instead be started without controls for read-only use.
 The Intelligence header identifies its own synthetic or recorded source, rather
@@ -144,14 +140,8 @@ is off, an unregistered saved profile is cleared when another setting changes.
 If the service rejects a saved profile while AI is off, use the displayed
 "Clear saved AI profile" action and retry. Requests are queued with database
 identity, base revision and expiry. Pending is not applied. Applied is not proof
-that network capabilities are enabled or that the bot observed the revision. The
-bot observer reads `intelligence.sqlite3` beside its state file asynchronously
-and records only non-authoritative shadow context. Its instance status sidecar
-and per-instance close marker invalidate closed or superseded workers, including
-a delayed replacement after bounded shutdown. If both close-marker writing and
-status invalidation fail, shutdown reports that invalidation could not be
-confirmed. Unreadable or malformed status is an invalidation failure, not a
-successful close. Stale or missing observations remain unknown.
+that network capabilities are enabled. No broker-observed revision or execution
+bridge exists. Stale or missing evidence remains unknown.
 
 AI interpretations are always unverified, factual claims are source quotations,
 and recommendations are only watch/review/wait. Analysis considers recent dated
@@ -178,6 +168,5 @@ Coverage currently consists of the named official sources, not comprehensive
 political/breaking-news coverage. Raw RSS and normalized evidence are archived;
 corporate-action/news completeness and a profitable edge are not established.
 OS DNS and local outages cannot be guaranteed to honor a hard wall-clock deadline.
-The observer is best effort, not protective-monitor telemetry. Live provider, broker
-and hosted-platform validation have not occurred in development. Research campaign
-exclusions for news/LLM signals remain unchanged; no automated entry gate is enabled.
+Live provider and hosted-platform validation have not occurred in development.
+Research exclusions for news/LLM signals remain unchanged; no order gate exists.

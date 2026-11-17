@@ -1,21 +1,34 @@
 ---
 name: ledger-migration-review
-description: "Use when changing SQLite schemas, migrations, transactional accounting, audit corrections, export recovery, or persistence failure handling."
+description: "Use for journal schemas, transactional evidence, replay, backups and persistence failure handling."
 ---
-# Ledger Migration Review
+# Journal integrity review
 
-Read [accounting contracts](../../../docs/safety-invariants.md). Anchor at the transaction/schema owner in `bot/ledger.py` and its callers in portfolio/audit.
+Read [invariants](../../../docs/safety-invariants.md) and, for investment,
+[investment-system-development](../investment-system-development/SKILL.md).
+For the investment journal, only opening-evidence wire `schema_version=2` is
+supported; reject older journals explicitly without migration. Intelligence
+storage is a separate authority with its own schema/upgrade lifecycle; do not
+apply the investment journal's version rule to it; follow its
+[scoped instructions](../../instructions/market-intelligence.instructions.md).
+The historical skill name grants no migration capability for investment journals.
 
-The GBP investment journal in `investment/store.py` is a separate store and
-authority, not a migration or extension of `bot/ledger.py`. For changes to that
-store, read `investment-system-development` as well and test its explicit-init,
-append-only/replay, and no-reader-repair contract in temporary databases.
+1. Identify transaction owner, binding, revision/idempotency and evidence authority.
+2. Use temporary synthetic databases, including altered/older/future schemas;
+   never read/copy operational stores. Investment readers refuse unsupported
+   versions and never repair/migrate. Verify intelligence readers/upgrades against
+   supported older schemas and its explicit upgrade contract; readers may continue
+   to support an older schema without upgrading it.
+3. Validate schema objects before integrity/data queries. Preserve append-only
+   payloads, availability, commit boundaries and replay/restart consistency.
+4. Inject commit/copy/publication failures. Failed commits publish no state;
+   post-commit/report/export failure must not imply rollback or delete evidence.
+5. Cover identical/conflicting IDs, supported corrections/downstream replay,
+   missing facts and exact cash/quantity/role conservation.
+6. Check pinned SQLite backup/replay, no-overwrite destination, handles/sidecars,
+   independent receipt/currentness caveats and temporary cleanup on Windows.
+7. Run focused `test_investment*.py` checks then full offline regression for
+   shared contracts; request independent read-only review.
 
-1. Identify the schema transition or transaction boundary, source-of-truth state, event revision, and idempotency keys.
-2. Construct an old-schema or recovery fixture in a temporary database. Never open or copy the operational ledger for testing.
-3. Verify upgrade/repeat/restart preserves original payloads, account binding, append-only evidence, and replay/snapshot consistency. Future/invalid schemas must be refused.
-4. Inject commit/lock/export failures. Assert a failed commit publishes no quantities/fill counters, persistence quarantine prevents unsafe work, and export failure does not invalidate committed exits.
-5. Exercise identical and conflicting IDs, evidence-backed correction retries, missing evidence, and prior-day accounting where affected. No guessed fee or historical price reconstruction.
-6. Run `python scripts/offline_tests.py --pattern test_ledger.py`, relevant state tests, then full offline tests. Verify backup handle closure and temporary cleanup on Windows.
-
-Reviewer mode uses source/test evidence only. Output: transaction/migration contract, evidence and check results, ranked defects, and residual recovery risks. No operational corrections or quarantine clearance without operator approval.
+Reviewer mode reads only. Report confirmed findings separately from unexecuted
+hypotheses and gaps. Maintenance needs task-specific approval.

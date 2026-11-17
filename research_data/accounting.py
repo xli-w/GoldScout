@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import MAX_EMAX, MIN_EMIN, Decimal, localcontext
 
-from bot.campaign_data.dataset import RFC3339, SAFE_ID
+from research_data.dataset import RFC3339, SAFE_ID
 
 MAX_EVENTS = 100_000
 MAX_DECIMAL_TEXT = 128

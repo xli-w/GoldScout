@@ -1,27 +1,37 @@
 ---
-description: "Use when changing historical data, strategies, experiment specifications, simulation, or research protocols and statistics."
-applyTo: "bot/data.py,bot/history_cache.py,bot/sessions.py,bot/corporate_actions.py,bot/indicators.py,bot/backtest.py,bot/research.py,bot/statistics.py,bot/strategies/**/*.py,bot/experiments/**/*.py,bot/campaign_data/**/*.py,investment/**/*.py,experiments/**/*.json,tests/test_backtest.py,tests/test_experiments.py,tests/test_campaign_dataset.py,tests/test_research_safety.py,tests/test_remaining_findings.py,tests/test_review2_data.py,tests/test_review2_monitor.py,tests/test_review2_final.py,tests/test_investment.py,tests/test_investment_dashboard.py,docs/backtesting-protocol.md,docs/campaign-dataset.md,docs/investment-research-context.md,docs/investment.md"
+description: "Use when changing offline research data, simulation, selection or research documentation."
+applyTo: "research_data/**/*.py,investment/simulation.py,tests/test_campaign*.py,tests/test_investment.py,docs/backtesting-protocol.md,docs/campaign-dataset.md,docs/investment-research-context.md"
 ---
-# Data and Research
+# Data and research
 
-Use `backtest-integrity-review` and [research invariants](../../docs/safety-invariants.md).
-For the implemented GBP record-keeping and blocked proposal path, also use
-[`investment-system-development`](../skills/investment-system-development/SKILL.md).
+Use `backtest-integrity-review`, [invariants](../../docs/safety-invariants.md),
+[mandate](../../docs/investment-research-context.md) and
+[protocol](../../docs/backtesting-protocol.md). For investment also use
+`investment-system-development`.
 
-- All decisions use completed bars and information available at decision time. Validate UTC timestamps, `bar_end`, exact execution boundaries, exchange sessions, early closes, and crypto timeframe alignment.
-- Missing/sparse/off-grid history must not silently become executable complete candles. Preserve source metadata and cache validation.
-- Sort corporate actions globally across pages and apply same-day split/dividend ordering consistently. Reject conflicting or unsupported actions rather than infer terms.
-- Publish ATR/features only after the relevant bar completes. A newly calculated stop must not be applied retrospectively to an earlier range. Mixed-timeframe sizing must use contemporaneously known marks.
-- Share strategy rules with live operation but document simulation differences: fill timing, OHLC ambiguity, slippage, liquidity, estimated fees, and protective order gaps.
-- Record data provenance, date ranges, parameters, seeds, trial count, costs, and benchmark assumptions. Keep risk settings outside automatic optimization.
-- Lock parameters before final holdout evaluation; holdout is report-only. Do not repeatedly tune against it or claim statistical significance/profitability from a favorable backtest.
-
-## Campaign alignment
-
-- Apply the current substantial-capital core-plus-dynamic mandate, not the historical GBP 1,000 trading objective. Asset class and management role are separate dimensions; the illustrative 80-90% / 10-20% range does not approve allocation, loss budgets or replenishment. Compare dynamic and combined net results with a matched all-core counterfactual, attribute shared exposure and internal sleeve transfers, and require approved rules that prevent automatic core-funded loss refill.
-- For the GBP portfolio campaign, apply [investor context](../../docs/investment-research-context.md) and the [protocol](../../docs/backtesting-protocol.md), not generic runner defaults. Verify eligibility, applicable terms for the selected cash comparator, licensed data, point-in-time GBP FX/accounting, costs, and tax assumptions before performance evaluation. Return fail/inconclusive where evidence cannot support the question.
-- Do not use `prepare --allow-network` for this campaign: it uses the Alpaca history client. The separate `bot.campaign_data` importer is offline ingestion/validation only; it is not consumed by the USD minute runner, does not implement combined GBP portfolio accounting, and does not close the campaign's feasibility gates. Independent USD strategy windows cannot answer the combined GBP portfolio question. Obtain explicit scope narrowing or implement approved prerequisites; never relabel existing outputs as portfolio suitability.
-- Keep attempted candidates and earlier manual searches visible. The campaign's 60-candidate total includes baselines; CLI limits of 125 per strategy/500 total are implementation ceilings, not permission to expand that search. Fixed cost cases/windows are not additional candidates. Preserve research-only risk profiles without changing live configuration.
-- Report capability gaps as gaps. The runner stresses finalists/baselines and can evaluate a baseline holdout when no candidate locks; the campaign instead requires adverse-cost selection evidence and no holdout opening when selection fails. Documentation or a valid spec does not enforce those extra gates.
-- The separate [`investment` package](../../investment/) is GBP-only and operator-recorded: it is not the historical portfolio simulator. Preserve its causal availability contract (including delayed marks) and linked unitized returns through zero holdings. Proposals are blocked pending approved and implemented role-aware policy; proposed sales cannot fund buys. Synthetic tests may validate new simulation mechanics, but product performance evaluation remains blocked until source rights, product/account eligibility, comparable cash terms, actions/FX, costs/tax and the frozen research protocol are evidenced.
-- AI/calendars may support portfolio research and hypothesis generation, not self-authorised signals. Existing campaign news/LLM exclusions remain; future structured features or calendar gates require separate approved prospective protocols with source receipt/revisions, validated AI completion, model/prompt/input provenance, trial accounting and failure rules. Today's model on old headlines cannot establish a causal holdout.
+- Stop before product histories/comparative returns at unmet eligibility,
+  persistent data-rights/vintage, cash-terms, actions/FX, costs/tax or frozen-spec
+  gates. No data acquisition, account access or paid/authenticated feeds.
+- Preserve all prior/manual/failed/descriptive trials and exposed/reserved/
+  consumed holdouts. The 60-candidate total ceiling never resets on retirement,
+  registry/dataset changes or mandate revision. Lock before single-use report-only
+  confirmation; no passing candidate means no holdout opening.
+- Keep exact timestamps, completed-information availability, price basis,
+  sessions/early closes and global action ordering. Reject missing/conflicting
+  evidence; never infer continuity, entitlement or executable prices.
+- `research_data` is offline ingestion/provenance/readiness, not a simulator,
+  FX converter or feasibility approval. Complete cutoff views are not causal
+  knowledge at every earlier decision. Fill accounting is pure synthetic
+  cash/quantity conservation, not performance/accounting authority.
+- The retained investment simulator is disconnected synthetic engineering only.
+  Preserve explicit clocks, next-open timing, cash constraints, exact increments,
+  receivable/payment timing and flow-neutral unitization; no real histories.
+- Actual core/dynamic policy and matched all-core comparisons require approval;
+  illustrative weights approve no funding, loss budget or replenishment.
+  No core-funded loss refill or counting core gains as alpha.
+- Existing news/LLM signals remain excluded. New structured/calendar features
+  need prospective separate approval, source/model/prompt/input provenance,
+  receipt/validated completion, complete trial accounting and failure policy.
+  Historical text analyzed by today's model is not causal holdout evidence.
+- Run temporary synthetic fixtures through the offline runner, full suite for
+  shared data and independent read-only review. Report gaps without profit claims.

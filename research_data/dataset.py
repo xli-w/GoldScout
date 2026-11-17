@@ -1,7 +1,4 @@
-"""Strict, local-only importer for the separate GBP campaign dataset contract.
-
-This package is intentionally independent of the minute experiment Dataset v1 and its runner.
-"""
+"""Strict, local-only GBP research snapshots; no journal or simulator integration."""
 
 import csv
 import errno

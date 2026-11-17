@@ -74,12 +74,11 @@ class OfflineEnvironmentTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         operation(*arguments)
 
-    def test_credentials_and_operational_paths_are_isolated_and_restored(self):
+    def test_credentials_and_temporary_workspace_are_isolated_and_restored(self):
         with offline_environment():
             self._assert_isolation_and_restoration()
 
     def test_proxy_credentials_are_isolated_and_restored(self):
-        import config
         import proxy_config
 
         proxy = "http://sample:secret@proxy.invalid:8080"
@@ -93,28 +92,27 @@ class OfflineEnvironmentTests(unittest.TestCase):
                                  side_effect=AssertionError("dotenv reader was not blocked")) as reader:
                 with offline_environment():
                     self.assertEqual(os.environ["TRADER_PROXY_URL"], "")
-                    self.assertEqual(config.TRADER_PROXY_URL, "")
                     os.environ.pop("TRADER_PROXY_URL")
                     self.assertEqual(proxy_config.configured_proxy_url(), "")
                 reader.assert_not_called()
                 self.assertEqual(os.environ["TRADER_PROXY_URL"], proxy)
 
     def _assert_isolation_and_restoration(self):
-        import config
-
-        original_ledger = config.LEDGER_FILE
-        with patch.dict(os.environ, {"ALPACA_API_KEY": "test-sentinel", "CONFIRM_LIVE_TRADING": "yes"}):
+        credentials = {
+            "ALPACA_API_KEY": "test-sentinel",
+            "CONFIRM_LIVE_TRADING": "yes",
+            "GOLDSCOUT_ETORO_API_KEY": "synthetic-api-key",
+            "GOLDSCOUT_ETORO_USER_KEY": "synthetic-user-key",
+            "TRADER_AI_SYNTHETIC": "synthetic-ai-key",
+        }
+        with patch.dict(os.environ, credentials):
             with offline_environment() as directory:
-                self.assertEqual(os.environ["ALPACA_API_KEY"], "")
-                self.assertEqual(config.ALPACA_API_KEY, "")
-                self.assertFalse(config.LIVE_TRADING_CONFIRMED)
-                self.assertTrue(config.IS_PAPER)
-                for name in ("TRADES_CSV", "DAILY_PNL_CSV", "STATE_FILE", "LOG_FILE", "LEDGER_FILE", "LOCK_FILE"):
-                    self.assertEqual(Path(getattr(config, name)).parent, directory)
+                for name in credentials:
+                    self.assertFalse(os.environ.get(name))
                 self.assertTrue(directory.exists())
-            self.assertEqual(os.environ["ALPACA_API_KEY"], "test-sentinel")
             self.assertFalse(directory.exists())
-        self.assertEqual(config.LEDGER_FILE, original_ledger)
+            for name, value in credentials.items():
+                self.assertEqual(os.environ[name], value)
 
 
 if __name__ == "__main__":

@@ -34,8 +34,7 @@ test("synthetic intelligence controls and briefs work without account data",asyn
   await expect(ai).toBeEnabled();
   await appliedChange(()=>ai.check());await expect(ai).toBeChecked();
   await expect(page.getByText("Rate-sensitive instruments may experience volatility around policy communication.").first()).toBeVisible();
-  await appliedChange(()=>page.getByRole("radio",{name:"Shadow",exact:true}).check());
-  await expect(page.getByRole("radio",{name:"Shadow",exact:true})).toBeChecked();
+  await expect(page.getByRole("radio",{name:"Shadow",exact:true})).toHaveCount(0);
   await expect(master).toBeEnabled();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
   expect(errors).toEqual([]);
@@ -45,9 +44,10 @@ test("synthetic intelligence controls and briefs work without account data",asyn
 });
 
 async function mockIntelligence(page,profiles,serviceProfiles=null,controlSessionEnabled=true){
-  const snapshot={source_mode:"demo",database_id:"test",generated_at:"2026-03-08T09:30:00Z",settings:{enabled:false,calendar_enabled:true,news_enabled:true,ai_enabled:false,mode:"advisory",ai_profile:null,revision:0},profiles,controls_enabled:true,source_status:null,calendar:[],news:[],briefs:[],controls:[],budget:null,bot_observed_revision:null};
+  const snapshot={source_mode:"demo",database_id:"test",generated_at:"2026-03-08T09:30:00Z",settings:{enabled:false,calendar_enabled:true,news_enabled:true,ai_enabled:false,mode:"advisory",ai_profile:null,revision:0},profiles,controls_enabled:true,source_status:null,calendar:[],news:[],briefs:[],controls:[],budget:null};
   const requests=[];
   await page.route("**/api/**",route=>route.abort());
+  await page.route("**/api/v1/settings",route=>route.fulfill({json:{mode:"demo",workspace:"demo"}}));
   await page.route("**/api/v1/intelligence/session",route=>route.fulfill({json:{enabled:controlSessionEnabled,csrf:controlSessionEnabled?"test":null}}));
   await page.route("**/api/v1/intelligence",route=>route.fulfill({json:snapshot}));
   await page.route("**/api/v1/intelligence/controls",route=>{
@@ -62,9 +62,8 @@ async function mockIntelligence(page,profiles,serviceProfiles=null,controlSessio
 }
 
 test("intelligence header uses its own source instead of cached account status",async({page})=>{
-  await page.goto("/legacy");
-  await expect(page.getByRole("heading",{name:"Portfolio overview"})).toBeVisible();
-  await expect(page.locator(".topbar-status")).toContainText("SYNTHETIC DEMO");
+  await page.goto("/investment");
+  await expect(page.getByRole("heading",{name:"Long-term investment",exact:true})).toBeVisible();
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.source_mode="recorded";
   await page.getByRole("link",{name:"Intelligence",exact:true}).click();
@@ -159,10 +158,9 @@ test("intelligence retains its last source during refresh and shows unknown afte
   await expect(page.locator(".topbar-status")).toContainText("Source unavailable");
 });
 
-test("intelligence leads with evidence and separates request, application, and observation",async({page})=>{
+test("intelligence leads with evidence and separates request from application",async({page})=>{
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.settings.revision=7;
-  snapshot.bot_observed_revision=5;
   snapshot.controls=[{request_id:"request-7",status:"applied",reason:"Settings applied",effective_revision:7}];
   await page.goto(new URL("/intelligence",mockedFrontendURL).href);
 
@@ -173,7 +171,7 @@ test("intelligence leads with evidence and separates request, application, and o
   const revisions=page.getByLabel("Analysis settings status");
   await expect(revisions).toContainText("Applied / Settings applied");
   await expect(revisions).toContainText("Revision 7");
-  await expect(revisions).toContainText("Revision 5");
+  await expect(revisions).not.toContainText("Bot observed");
   await expect(page.getByText("Enabled for this local session",{exact:true})).toBeVisible();
   await expect(page.getByRole("textbox",{name:"Analysis-control password"})).toHaveCount(0);
 });

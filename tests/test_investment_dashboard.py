@@ -12,7 +12,7 @@ from investment import InvestmentError
 from dashboard.investment_demo import demo_opening_snapshot
 from investment.service import demo_events, demo_profile, snapshot
 from investment import store as investment_store
-from investment.store import acknowledge_review, import_events, initialize
+from investment.store import import_events, initialize
 from test_dashboard_api import MemoryEventLoop
 from test_investment_opening import (NOW as OPENING_NOW, event, opening, profile,
                                      cash_observation, iso, savings_terms,
@@ -103,8 +103,7 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "investment")
             self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 503)
             legacy = client.get("/api/v1/overview")
-            self.assertEqual(legacy.status_code, 503)
-            self.assertEqual(legacy.json()["meta"]["source_mode"], "recorded")
+            self.assertEqual(legacy.status_code, 404)
         self.assertFalse(self.path.exists())
 
     def test_recorded_snapshot_matches_verified_replay_without_mutating_store(self):
@@ -119,7 +118,7 @@ class InvestmentDashboardTests(unittest.TestCase):
                 self.assertEqual(response.json(), expected)
                 self.assertEqual(response.json()["source_mode"], "recorded")
                 self.assert_blocked_proposal(response.json()["proposal"])
-                self.assertEqual(client.get("/api/v1/overview").status_code, 503)
+                self.assertEqual(client.get("/api/v1/overview").status_code, 404)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
 
@@ -520,13 +519,6 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(report["valuation_history"][-1]["gap_reason"],
                          "Historical correction invalidated performance evidence; no new baseline was established.")
 
-    def test_recording_requires_an_explicit_existing_version_two_store(self):
-        self.now = OPENING_NOW
-        initialize(self.path, demo_profile(self.now), self.now)
-        with self.assertRaisesRegex(ValueError, "version 2"):
-            self.client(investment_database=self.path,
-                        investment_recording_enabled=True)
-
     def test_v2_savings_terms_are_read_only_and_do_not_change_portfolio_value(self):
         self.now = OPENING_NOW
         spec = profile()
@@ -634,9 +626,8 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(proposal["manual_transfers"], [])
         self.assertFalse(proposal["execution_enabled"])
 
-    def test_recorded_overweight_proposal_is_blocked_read_only_and_schema_valid(self):
+    def test_recorded_proposal_is_blocked_read_only_and_schema_valid(self):
         spec = demo_profile(self.now)
-        spec["policy"]["targets"] = {"equity": "60", "bond": "20", "cash": "20"}
         spec["products"].append(dict(spec["products"][0], id="bond", sleeve="bond"))
         initialize(self.path, spec, self.now)
         import_events(self.path, demo_events(self.now), self.now)
@@ -645,23 +636,6 @@ class InvestmentDashboardTests(unittest.TestCase):
             response = client.get("/api/investment/v1/snapshot")
             self.assertEqual(response.status_code, 200, response.text)
             self.assert_blocked_proposal(response.json()["proposal"])
-            self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
-                                         headers={"Origin": "http://127.0.0.1"}).status_code, 405)
-        self.assertEqual(self.path.read_bytes(), original)
-
-    def test_acknowledgement_is_visible_but_dashboard_remains_read_only(self):
-        initialize(self.path, demo_profile(self.now), self.now)
-        import_events(self.path, demo_events(self.now), self.now)
-        acknowledge_review(self.path, "review", "monthly", 4, "synthetic review", self.now)
-        expected = snapshot(self.path, self.now)
-        original = self.path.read_bytes()
-        with self.client(investment_database=self.path) as client:
-            response = client.get("/api/investment/v1/snapshot")
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json(), expected)
-            self.assertEqual(response.json()["revision"], 5)
-            self.assertTrue(any("not trade approvals" in item
-                                for item in response.json()["limitations"]))
             self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
                                          headers={"Origin": "http://127.0.0.1"}).status_code, 405)
         self.assertEqual(self.path.read_bytes(), original)
@@ -874,11 +848,6 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(rejected.json()["error"], "stale_observation_preview")
             self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 0)
 
-    def test_legacy_source_does_not_implicitly_supply_investment_records(self):
-        with self.client(database=self.path) as client:
-            self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 503)
-        self.assertFalse(self.path.exists())
-
     def test_invalid_report_is_not_a_success_response(self):
         report = copy.deepcopy(demo_opening_snapshot(self.now))
         report["equity_gbp"] = "NaN"
@@ -887,10 +856,6 @@ class InvestmentDashboardTests(unittest.TestCase):
             response = client.get("/api/investment/v1/snapshot")
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"], "investment_invalid")
-
-    def test_explicit_sources_cannot_be_combined(self):
-        with self.assertRaises(ValueError):
-            create_app(serve_frontend=False, database=self.path, investment_database=self.path)
 
 
 if __name__ == "__main__":

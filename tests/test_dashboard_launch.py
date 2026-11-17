@@ -42,37 +42,29 @@ class DashboardLaunchTests(unittest.TestCase):
         with self.assertRaises(FrontendBuildError):
             verify_frontend(self.static, self.schema)
 
-    def test_production_bundle_binds_investment_schema_as_well_as_legacy_schema(self):
-        production_schema = self.root / "dashboard" / "response.schema.json"
-        production_schema.parent.mkdir()
-        production_schema.write_text("{}")
-        setup_schema = production_schema.with_name("setup.schema.json")
+    def test_production_bundle_binds_current_portfolio_contracts(self):
+        module = self.root / "dashboard" / "assets.py"
+        module.parent.mkdir()
+        setup_schema = module.with_name("setup.schema.json")
         setup_schema.write_text("{}")
-        investment_schema = self.root / "investment" / "response.schema.json"
+        investment_schema = self.root / "investment" / "response-v2.schema.json"
         investment_schema.parent.mkdir()
         investment_schema.write_text("{}")
-        opening_schema = investment_schema.with_name("response-v2.schema.json")
-        opening_schema.write_text("{}")
         awareness_schema = investment_schema.with_name("awareness.schema.json")
         awareness_schema.write_text("{}")
         monitoring_schema = investment_schema.with_name("monitoring.schema.json")
         monitoring_schema.write_text("{}")
-        self.manifest["investment_schema_sha256"] = self.digest(investment_schema)
+        self.manifest["schema_sha256"] = self.digest(investment_schema)
         self.manifest["setup_schema_sha256"] = self.digest(setup_schema)
-        self.manifest["investment_v2_schema_sha256"] = self.digest(opening_schema)
         self.manifest["awareness_schema_sha256"] = self.digest(awareness_schema)
         self.manifest["monitoring_schema_sha256"] = self.digest(monitoring_schema)
         self.save_manifest()
-        with patch("dashboard.assets.__file__", str(production_schema.with_name("assets.py"))):
+        with patch("dashboard.assets.__file__", str(module)):
             self.assertEqual(verify_frontend(self.static), self.static)
             investment_schema.write_text('{"changed":true}')
             with self.assertRaises(FrontendBuildError):
                 verify_frontend(self.static)
             investment_schema.write_text("{}")
-            opening_schema.write_text('{"changed":true}')
-            with self.assertRaises(FrontendBuildError):
-                verify_frontend(self.static)
-            opening_schema.write_text("{}")
             awareness_schema.write_text('{"changed":true}')
             with self.assertRaises(FrontendBuildError):
                 verify_frontend(self.static)
@@ -102,7 +94,7 @@ class DashboardLaunchTests(unittest.TestCase):
             create_app(static_directory=self.root / "missing")
         self.assertIsNotNone(create_app(serve_frontend=False))
 
-    def test_trading_guide_direct_link_serves_frontend(self):
+    def test_investment_guide_direct_link_serves_frontend(self):
         try:
             from fastapi.testclient import TestClient
             from dashboard.app import create_app
@@ -113,7 +105,7 @@ class DashboardLaunchTests(unittest.TestCase):
         with patch("dashboard.app.verify_frontend", return_value=self.static):
             app = create_app(static_directory=self.static)
         with TestClient(app, base_url="http://localhost", backend_options={"loop_factory": MemoryEventLoop}) as client:
-            response = client.get("/guide")
+            response = client.get("/investment-guide")
         self.assertEqual(response.status_code, 200)
         self.assertIn('<script src="/assets/app.js"></script>', response.text)
 
@@ -157,7 +149,7 @@ class DashboardLaunchTests(unittest.TestCase):
         self.assertFalse(factory.call_args.kwargs["investment_recording_enabled"])
 
     def test_explicit_workspace_is_mutually_exclusive_with_other_sources(self):
-        for flag in ("--demo", "--database", "--investment-database"):
+        for flag in ("--demo", "--investment-database"):
             arguments = ["--workspace", str(self.root / "private"), flag]
             if flag != "--demo":
                 arguments.append(str(self.root / "unused"))
@@ -171,8 +163,7 @@ class DashboardLaunchTests(unittest.TestCase):
             with patch("dashboard.__main__.verify_frontend") as verify, redirect_stdout(io.StringIO()):
                 main(["--demo", "--api-only", "--port", "8766"])
         verify.assert_not_called()
-        factory.assert_called_once_with(database=None, scenario="healthy_recorded", telemetry_path=None,
-                                        static_directory=None, serve_frontend=False,
+        factory.assert_called_once_with(static_directory=None, serve_frontend=False,
                                         intelligence_database=None, intelligence_demo=False,
                                         analysis_controls_enabled=False, analysis_profiles=(), investment_database=None,
                                         investment_recording_enabled=False, awareness_profile=None,
@@ -195,7 +186,7 @@ class DashboardLaunchTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()) as output:
                 main(["--investment-database", str(self.root / "investment.sqlite3"), "--api-only"])
         self.assertEqual(factory.call_args.kwargs["investment_database"], self.root / "investment.sqlite3")
-        self.assertIsNone(factory.call_args.kwargs["database"])
+        self.assertNotIn("database", factory.call_args.kwargs)
         self.assertIn("/investment", output.getvalue())
         self.assertFalse((self.root / "investment.sqlite3").exists())
 

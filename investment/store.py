@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 
 from . import InvestmentError
-from .core import MAX_EVENTS, clock, fmt, iso, profile, replay, text
+from .core import MAX_EVENTS, clock, fmt, iso, profile, replay
 
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_DATABASE_BYTES = 32 * 1024 * 1024
@@ -84,52 +84,46 @@ def state_digest(ledger):
         "unit_price": fmt(ledger.unit_price), "peak": fmt(ledger.peak),
         "drawdown": fmt(ledger.drawdown), "performance_valid": ledger.performance_valid,
     }
-    # Cash valuation time is replay-derived; legacy v1 state hashes omit it.
-    if ledger.monthly_review_at is not None:
-        value["reviews"] = {
-            "monthly": iso(ledger.monthly_review_at),
-            "annual": iso(ledger.annual_review_at) if ledger.annual_review_at else None,
-        }
+    # Keep the immutable state-hash projection; cash valuation time is replay-derived.
     if ledger.has_portfolio_attestation:
         value["latest_available_at"] = iso(ledger.latest_available_at)
-    if ledger.spec["schema_version"] == 2:
-        value["opening"] = {
-            "opened": ledger.opened,
-            "baseline_at": iso(ledger.baseline_at) if ledger.baseline_at else None,
-            "baseline_value": fmt(ledger.baseline_value),
-            "baseline_net": fmt(ledger.baseline_net),
+    value["opening"] = {
+        "opened": ledger.opened,
+        "baseline_at": iso(ledger.baseline_at) if ledger.baseline_at else None,
+        "baseline_value": fmt(ledger.baseline_value),
+        "baseline_net": fmt(ledger.baseline_net),
+    }
+    if ledger.baseline_scope_additions != 0:
+        value["opening"]["baseline_scope_additions"] = fmt(
+            ledger.baseline_scope_additions)
+    if ledger.profile_revision:
+        value["profile_revision"] = ledger.profile_revision
+        value["profile_hash"] = digest(canonical(ledger.spec))
+        value["active_accounts"] = sorted(ledger.active_accounts)
+        value["active_products"] = sorted(ledger.active_products)
+        value["scope_additions"] = fmt(ledger.scope_additions)
+    if ledger.historical_correction:
+        value["historical_correction"] = True
+        value["correction_available_at"] = iso(ledger.correction_available_at)
+    if ledger.cash_observations:
+        value["cash_observations"] = {
+            account: observation
+            for account, observation in sorted(ledger.cash_observations.items())
         }
-        if ledger.baseline_scope_additions != 0:
-            value["opening"]["baseline_scope_additions"] = fmt(
-                ledger.baseline_scope_additions)
-        if ledger.profile_revision:
-            value["profile_revision"] = ledger.profile_revision
-            value["profile_hash"] = digest(canonical(ledger.spec))
-            value["active_accounts"] = sorted(ledger.active_accounts)
-            value["active_products"] = sorted(ledger.active_products)
-            value["scope_additions"] = fmt(ledger.scope_additions)
-        if ledger.historical_correction:
-            value["historical_correction"] = True
-            value["correction_available_at"] = iso(ledger.correction_available_at)
-        if ledger.cash_observations:
-            value["cash_observations"] = {
-                account: observation
-                for account, observation in sorted(ledger.cash_observations.items())
-            }
-        if ledger.updated_account_terms:
-            value["account_terms"] = {
-                account: ledger.account_terms[account]
-                for account in sorted(ledger.updated_account_terms)
-            }
-            value["terms_last_time"] = iso(ledger.terms_last_time)
-            value["terms_latest_available_at"] = iso(ledger.terms_latest_available_at)
-        if ledger.role_active:
-            value["role_accounting"] = {
-                "cash": [[*key, fmt(amount)] for key, amount in sorted(ledger.role_cash.items())],
-                "holdings": [[*key, fmt(quantity)]
-                             for key, quantity in sorted(ledger.role_holdings.items())],
-                "attributed_at": iso(ledger.role_last_time),
-            }
+    if ledger.updated_account_terms:
+        value["account_terms"] = {
+            account: ledger.account_terms[account]
+            for account in sorted(ledger.updated_account_terms)
+        }
+        value["terms_last_time"] = iso(ledger.terms_last_time)
+        value["terms_latest_available_at"] = iso(ledger.terms_latest_available_at)
+    if ledger.role_active:
+        value["role_accounting"] = {
+            "cash": [[*key, fmt(amount)] for key, amount in sorted(ledger.role_cash.items())],
+            "holdings": [[*key, fmt(quantity)]
+                         for key, quantity in sorted(ledger.role_holdings.items())],
+            "attributed_at": iso(ledger.role_last_time),
+        }
     return digest(canonical(value))
 
 
@@ -181,15 +175,15 @@ def initialize(database, spec, now=None):
 
 def _read(connection, now):
     version = connection.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (1, 2):
-        raise InvestmentError("Unsupported investment schema; no migrations")
+    if version != 2:
+        raise InvestmentError("Only opening-evidence schema_version=2 is supported; no migrations")
     schema = connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master").fetchall()
     expected = {("table", table, table, sql) for table, sql in TABLE_SQL.items()}
     expected.update(("trigger", f"immutable_{table}_{op.lower()}", table, trigger_sql(table, op))
                     for table in TABLE_SQL for op in ("UPDATE", "DELETE"))
     expected.add(("index", "sqlite_autoindex_events_1", "events", None))
     if len(schema) != len(expected) or set(schema) != expected:
-        raise InvestmentError("Not an investment v1 store")
+        raise InvestmentError("Not an investment store")
     if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
         raise InvestmentError("Investment integrity check failed")
     identities = connection.execute("SELECT id,profile,hash FROM identity LIMIT 2").fetchall()
@@ -243,10 +237,6 @@ def _read(connection, now):
         raise InvestmentError("Duplicate source event in store")
     if commits[-1][1] != state_digest(ledger):
         raise InvestmentError("Investment replay verification failed")
-    committed = {revision for revision, _ in commits}
-    if any(value["reviewed_revision"] not in committed for value in events
-           if value["type"] == "review_acknowledgement"):
-        raise InvestmentError("Review acknowledgement does not reference a committed revision")
     return spec, events, ledger, previous
 
 
@@ -294,9 +284,6 @@ def _append_events(connection, spec, existing, old, previous, values, now):
         else:
             ids[value["id"]] = value
             additions.append(value)
-    if any(value.get("type") == "review_acknowledgement" and
-           value.get("reviewed_revision") != old.revision for value in additions):
-        raise InvestmentError("Review must reference the previously committed revision")
     ledger = replay(spec, existing + additions, now)
     _check_evidence_size(spec, existing + additions)
     for offset, value in enumerate(additions, old.revision + 1):
@@ -329,7 +316,7 @@ def import_events(database, values, now=None):
 
 
 def preview_record(database, value, now=None):
-    """Replay one v2 event without writing; the caller must authenticate previews."""
+    """Replay one event without writing; the caller must authenticate previews."""
     from .service import opening_report
 
     value = parse_json(canonical(value))
@@ -340,8 +327,6 @@ def preview_record(database, value, now=None):
                 connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
             now = clock(now)
             spec, existing, ledger, previous = _read(connection, now)
-            if spec["schema_version"] != 2:
-                raise InvestmentError("Manual recording requires a version 2 store")
             if not isinstance(value, dict) or not isinstance(value.get("id"), str):
                 raise InvestmentError("Invalid source event")
             if value["id"] in ledger.ids:
@@ -386,7 +371,7 @@ def commit_record(database, preview, now=None):
                 connection.execute("BEGIN IMMEDIATE")
                 now = clock(now)
                 spec, existing, ledger, previous = _read(connection, now)
-                if spec["schema_version"] != 2 or digest(canonical(ledger.spec)) != preview["profile_hash"]:
+                if digest(canonical(ledger.spec)) != preview["profile_hash"]:
                     raise InvestmentError("Investment profile changed")
                 expected = preview["revision"]
                 value = preview["event"]
@@ -406,40 +391,3 @@ def commit_record(database, preview, now=None):
                 return {"id": value["id"], "revision": revision}
     except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
         raise InvestmentError("Investment commit failed; transaction rolled back") from exc
-
-
-def acknowledge_review(database, identifier, kind, reviewed_revision, evidence, now=None):
-    """Append a revision-bound manual review; never execute or approve an order."""
-    text(identifier)
-    text(evidence)
-    if kind not in ("monthly", "annual"):
-        raise InvestmentError("Review kind must be monthly or annual")
-    if type(reviewed_revision) is not int or not 0 <= reviewed_revision < MAX_EVENTS:
-        raise InvestmentError("Invalid reviewed revision")
-    try:
-        with closing(_connect(database, False)) as connection:
-            with connection:
-                connection.execute("BEGIN IMMEDIATE")
-                now = clock(now)
-                spec, existing, ledger, previous_hash = _read(connection, now)
-                previous = ledger.ids.get(identifier)
-                if previous is not None:
-                    if (previous["type"] == "review_acknowledgement" and
-                            previous["review_kind"] == kind and
-                            previous["reviewed_revision"] == reviewed_revision and
-                            previous["evidence"] == evidence):
-                        return previous.copy()
-                    raise InvestmentError("Conflicting duplicate event")
-                if ledger.revision != reviewed_revision:
-                    raise InvestmentError("Reviewed revision changed; review the current snapshot")
-                if ledger.valuation_status(now) != "fresh":
-                    raise InvestmentError("Review requires a complete, fresh recorded valuation")
-                _, as_of = ledger.valuation()
-                value = {"id": identifier, "type": "review_acknowledgement",
-                         "timestamp": iso(now), "available_at": iso(now), "evidence": evidence,
-                         "review_kind": kind, "reviewed_revision": reviewed_revision,
-                         "valuation_as_of": iso(as_of)}
-                _append_events(connection, spec, existing, ledger, previous_hash, [value], now)
-                return value
-    except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
-        raise InvestmentError("Investment review acknowledgement failed; transaction rolled back") from exc

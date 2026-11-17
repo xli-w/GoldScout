@@ -9,10 +9,10 @@ from decimal import InvalidOperation, localcontext
 from pathlib import Path
 from unittest.mock import patch
 
-from bot.campaign_data import CampaignDataset, CampaignDatasetError, import_campaign_dataset
-from bot.campaign_data.__main__ import main as campaign_cli
-from bot.campaign_data import readiness as readiness_module
-from bot.campaign_data.readiness import audit_readiness, normalized_product_view
+from research_data import CampaignDataset, CampaignDatasetError, import_campaign_dataset
+from research_data.__main__ import main as campaign_cli
+from research_data import readiness as readiness_module
+from research_data.readiness import audit_readiness, normalized_product_view
 
 
 class CampaignReadinessTests(unittest.TestCase):
@@ -527,7 +527,7 @@ class CampaignReadinessTests(unittest.TestCase):
             path.write_bytes(path.read_bytes().replace(b",100", b",101"))
             return report
 
-        with patch("bot.campaign_data.readiness._audit_dataset", side_effect=audit_then_corrupt):
+        with patch("research_data.readiness._audit_dataset", side_effect=audit_then_corrupt):
             with self.assertRaisesRegex(CampaignDatasetError, "checksum"):
                 self.normalized(dataset_id)
 

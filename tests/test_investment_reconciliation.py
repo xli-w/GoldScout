@@ -5,14 +5,17 @@ from datetime import timedelta
 from io import StringIO
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
 from investment import InvestmentError
 from investment.__main__ import main
+from investment.service import snapshot
 from investment.store import import_events, initialize
 from test_investment_opening import (
-    NOW, cash_observation, event, iso, opening, profile, savings_terms_event,
+    NOW, cash_observation, event, historical_correction, iso, opening, profile,
+    savings_terms_event,
 )
 
 
@@ -182,6 +185,55 @@ class ObservationPreviewTests(unittest.TestCase):
         self.assertEqual(result["accounts"][0]["cash"]["status"], "match")
         self.assertEqual(result["status"], "attention")
         self.assertEqual(result["previous_cash_discrepancies"][0]["difference_gbp"], "-1")
+
+    def test_historical_correction_warns_when_replay_clears_a_prior_cash_difference(self):
+        def commit_hashes():
+            connection = sqlite3.connect(self.database)
+            try:
+                return connection.execute(
+                    "SELECT revision, state_hash FROM commits ORDER BY revision").fetchall()
+            finally:
+                connection.close()
+
+        funding_at = NOW + timedelta(seconds=1)
+        observation_at = NOW + timedelta(seconds=2)
+        funding = event("funding", "contribution", funding_at, "bank", amount_gbp="100")
+        discrepancy = cash_observation(observation_at, balance="1080")
+        import_events(self.database, [funding, discrepancy], observation_at)
+
+        before_correction = snapshot(self.database, observation_at)
+        self.assertEqual(before_correction["cash_observations"][0]["difference_gbp"], "-20")
+        original_hashes = commit_hashes()
+
+        correction_at = NOW + timedelta(seconds=3)
+        import_events(
+            self.database,
+            [historical_correction(funding, {"amount_gbp": "80"}, correction_at)],
+            correction_at,
+        )
+        corrected_hashes = commit_hashes()
+        self.assertNotEqual(corrected_hashes, original_hashes)
+        data = staged()
+        data["accounts"][0]["cash_gbp"] = "1080"
+        data["accounts"][1]["holdings"][0]["quantity"] = "50"
+        for account in data["accounts"]:
+            account.update(
+                observed_at=iso(NOW + timedelta(seconds=4)),
+                available_at=iso(NOW + timedelta(seconds=4)),
+            )
+
+        result = self.preview(data, now=NOW + timedelta(seconds=5))
+        self.assertEqual(result["status"], "attention")
+        self.assertEqual(result["previous_cash_discrepancies"], [])
+        self.assertTrue(any("Historical correction replay may change or clear" in item
+                            for item in result["limitations"]))
+        report = snapshot(self.database, NOW + timedelta(seconds=5))
+        self.assertEqual(report["cash_observations"][0]["difference_gbp"], "0")
+        self.assertTrue(any("Historical correction replay may have changed" in item
+                            for item in report["warnings"]))
+        restarted_report = snapshot(self.database, NOW + timedelta(seconds=5))
+        self.assertEqual(restarted_report, report)
+        self.assertEqual(commit_hashes(), corrected_hashes)
 
     def test_recorded_sixteen_place_cash_and_large_quantity_are_exact(self):
         spec = profile()

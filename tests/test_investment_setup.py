@@ -56,7 +56,7 @@ class InvestmentSetupTests(unittest.TestCase):
         with self.client() as client:
             self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "setup")
             self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 503)
-            self.assertEqual(client.get("/api/v1/overview").status_code, 503)
+            self.assertEqual(client.get("/api/v1/overview").status_code, 404)
             headers = self.session_headers(client)
             preview = self.preview(client, headers)
             self.assertTrue(preview["report"]["complete"])

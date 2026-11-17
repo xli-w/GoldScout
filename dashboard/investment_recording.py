@@ -28,8 +28,6 @@ class RecordingSessions:
         self.sessions = {}
         self.path_identity = self._path_identity()
         ledger = read(database, clock())
-        if ledger.spec["schema_version"] != 2:
-            raise ValueError("Investment recording requires an existing version 2 store")
         self.profile_hash = digest(canonical(ledger.spec))
 
     def _path_identity(self):
@@ -46,8 +44,7 @@ class RecordingSessions:
             ledger = read(self.database, self.clock())
         except (InvestmentError, OSError) as exc:
             raise RecordingError("investment_store_unavailable", 503) from exc
-        if (ledger.spec["schema_version"] != 2 or
-                digest(canonical(ledger.spec)) != self.profile_hash):
+        if digest(canonical(ledger.spec)) != self.profile_hash:
             raise RecordingError("investment_store_changed", 409)
         return ledger
 
@@ -152,9 +149,7 @@ class RecordingSessions:
                 if preview is None or preview["expires"] <= now:
                     raise RecordingError("preview_expired", 409)
                 return preview["response"]
-        ledger = self._verify_store()
-        if ledger.spec["schema_version"] != 2:
-            raise RecordingError("unsupported_investment_store", 409)
+        self._verify_store()
         try:
             preview = preview_record(self.database, value, now)
         except InvestmentError as exc:

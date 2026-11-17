@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from bot.campaign_data.dataset import (
+from research_data.dataset import (
     CampaignDataset,
     CampaignDatasetError,
     _json_dumps,
@@ -14,7 +14,7 @@ from bot.campaign_data.dataset import (
 
 def _parser():
     parser = argparse.ArgumentParser(
-        prog="python -m bot.campaign_data",
+        prog="python -m research_data",
         description="Offline import/validation for daily/weekly GBP campaign data.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -49,7 +49,7 @@ def main(argv=None):
     args = _parser().parse_args(argv)
     try:
         if args.command == "fx-view":
-            from bot.campaign_data.readiness import fx_observation_view
+            from research_data.readiness import fx_observation_view
 
             view = fx_observation_view(args.dataset_dir, args.dataset_id, args.profile)
             print(_json_dumps(view, sort_keys=True, separators=(",", ":")))
@@ -59,7 +59,7 @@ def main(argv=None):
                 return 3
             return 0
         if args.command == "fx-readiness":
-            from bot.campaign_data.readiness import audit_fx_readiness
+            from research_data.readiness import audit_fx_readiness
 
             report = audit_fx_readiness(args.dataset_dir, args.dataset_id, args.profile)
             print(_json_dumps(report, sort_keys=True, separators=(",", ":")))
@@ -68,7 +68,7 @@ def main(argv=None):
                 return 3
             return 0
         if args.command == "normalize":
-            from bot.campaign_data.readiness import normalized_product_view
+            from research_data.readiness import normalized_product_view
 
             view = normalized_product_view(
                 args.dataset_dir, args.dataset_id, args.profile, args.product_id, args.as_of,
@@ -80,7 +80,7 @@ def main(argv=None):
                 return 3
             return 0
         if args.command == "readiness":
-            from bot.campaign_data.readiness import audit_readiness
+            from research_data.readiness import audit_readiness
 
             report = audit_readiness(args.dataset_dir, args.dataset_id, args.profile)
             print(_json_dumps(report, sort_keys=True, indent=2))

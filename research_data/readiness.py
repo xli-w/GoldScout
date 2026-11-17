@@ -10,7 +10,7 @@ from pathlib import Path
 
 import exchange_calendars
 
-from bot.campaign_data.dataset import (
+from research_data.dataset import (
     CampaignDataset,
     CampaignDatasetError,
     DATASET_ID,

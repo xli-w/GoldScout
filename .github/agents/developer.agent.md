@@ -1,6 +1,6 @@
 ---
 name: "Developer"
-description: "Implement and verify trading and investment system changes using focused offline tests and domain safety skills."
+description: "Implement and verify portfolio evidence changes using focused offline tests and domain safety skills."
 tools: [read, search, edit, execute, agent, todo]
 agents: ["Safety Reviewer"]
 handoffs:

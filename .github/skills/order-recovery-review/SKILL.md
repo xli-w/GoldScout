@@ -1,22 +1,29 @@
 ---
 name: order-recovery-review
-description: "Use when changing order submission, partial fills, stop protection, cancellation, replacement, broker reconciliation, or restart recovery."
+description: "Use prospectively to review a separately approved future execution design; no runtime exists."
 ---
-# Order Recovery Review
+# Future order recovery boundary
 
-Read [execution contracts](../../../docs/safety-invariants.md). Anchor at the order-mutating method in `bot/portfolio.py`, or entry gates in `bot/main.py`/`bot/risk_manager.py`.
+Read [invariants](../../../docs/safety-invariants.md) and
+[investment-system-development](../investment-system-development/SKILL.md).
+GoldScout has no execution runtime. Proposals are blocked. This checklist is
+not authorization to build an adapter, contact a venue or access operational data.
 
-1. Trace one lifecycle: durable intent -> submit -> acknowledgement/uncertain outcome -> observations -> accounting -> protection -> restart.
-2. Check known ownership, symbol/side, remaining quantity, GTC/expiry, tick/limit rules, client IDs, and per-order cumulative baselines. Never infer unfamiliar replacement fill provenance.
-3. Build a focused broker-mocked regression for the affected failure: timeout after broker acceptance, partial then canceled fill, stale snapshot, missing protection, side mismatch, duplicate observation, or restart.
-4. Assert confirmed fills are applied exactly once, residual quantity is conserved, and forbidden cancel/submit calls do not occur. Include storage failure before in-memory publication where relevant.
-5. Run relevant portfolio/recovery tests via the offline runner, followed by the full suite for production changes. Review cancellation/re-arm gaps honestly.
+For a separately approved future design:
 
-Reviewer mode: inspect existing evidence only; request checks rather than execute them. Report lifecycle, confirmed findings with file/line, regression coverage, and unresolved broker semantics. Authenticated paper testing requires separate approval and does not prove live behavior.
+1. Establish venue-specific durable intent, ownership, idempotency and ambiguous
+   outcome semantics before any integration. Never reuse another venue's retry
+   assumptions. Non-idempotent uncertain submits cannot be retried based on
+   approximate historical matches.
+2. Trace intent -> submit -> acknowledgement/uncertainty -> observations ->
+   confirmed fills/accounting -> settlement/protection -> restart. Check
+   symbol/side/residual quantity and exact cumulative-fill conservation.
+3. Require explicit failure/suspension/revocation rules, cancellation confirmation
+   before competing actions and honest exposure/protection-gap disclosure.
+4. Define synthetic mocked timeout/partial-fill/cancel-race/stale/foreign-order/
+   restart/commit-failure checks before implementation. No real account calls.
+5. Require independent read-only review and separately approved venue validation.
+   Synthetic traces, persistence exercises and public history schemas cannot
+   establish unique recovery, real approval or live readiness.
 
-The current GBP investment path blocks proposals and has no execution adapter.
-For any future investment order path, also use
-[`investment-system-development`](../investment-system-development/SKILL.md);
-do not transfer Alpaca client-ID/retry assumptions to another venue. Require a
-separately approved adapter and venue-specific evidence for unique recovery
-after an ambiguous non-idempotent submit. Otherwise keep execution manual.
+Reviewer mode inspects source/evidence only; never execute or mutate.

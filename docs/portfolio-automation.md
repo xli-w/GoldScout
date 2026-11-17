@@ -186,9 +186,10 @@ python -m dashboard --investment-database .\investment.sqlite3 --intelligence-da
 ```
 
 The dashboard uses `GET /api/investment/v2/awareness` for the additional notes.
-The existing v1 endpoint and default CLI report retain their original wire
-shape and omit those notes; opt in to CLI version 2 as shown above. Both versions
-validate the complete profile. Without an awareness profile they report disabled.
+`/v1` and `/v2` are technical response-schema identifiers, not product editions.
+The existing v1 endpoint and default CLI report retain their wire shape and omit
+those notes; use `--schema-version 2` to include them. Both schemas validate the
+complete profile. Without an awareness profile they report disabled.
 Missing/foreign stores, invalid bindings or invalid
 profiles are errors, never fallback demo data or automatic store creation.
 Read failures hide previously displayed matching context. The frontend is bound
@@ -300,7 +301,8 @@ These are documentation-screen candidates, not account recommendations. No
 provider-specific export parser should be added until an existing account and a
 permitted, concrete export format are selected and checked locally.
 
-Before any adapter activation, the operator must confirm intended accounts,
+Before activating any provider collection, including the eToro Read adapter,
+the operator must confirm intended accounts,
 provider terms/retention rights, source completeness/latency and a **separate
 read-only credential** with no order/payment/account-setting authority. Never
 test read-only status by attempting an order or cancellation. A future validation
@@ -314,7 +316,7 @@ The operator may prepare and retain a separate local JSON file containing
 normalized observations from a synthetic fixture or an export they are permitted
 to use. It is the staging artifact: the preview reads it without modifying it
 or creating a staging database. It also reads an explicitly selected,
-already-opened v2 investment store in a pinned read-only transaction. It neither
+already-opened investment store in a pinned read-only transaction. It neither
 appends journal evidence nor repairs, imports or changes balances, holdings,
 roles, valuations, buying power or policy. It never contacts a provider.
 
@@ -382,8 +384,16 @@ verified pagination or retention rights. A missing cash value is `null`, not
 zero. An omitted holding is shown as missing when it exists in the journal,
 even if coverage is declared complete; it is never assumed to be zero. Every
 included account and recorded holding must be represented before the overall
-status can be `matched`. Previously recorded cash-observation discrepancies
-remain visible and prevent `matched`; a later match does not resolve them.
+status can be `matched`. Any nonzero cash-observation difference currently
+present in replay prevents `matched`; a later matching observation alone does
+not resolve an earlier difference. However, a historical journal correction
+replays observations against corrected cash and can change an earlier
+difference to zero, causing the preview to omit that discrepancy. When the
+journal contains both historical corrections and cash observations, the preview
+still returns `attention` and explains this limitation. A prior report may be
+the only record of the earlier difference amount; preserve it and review the
+correction evidence. The journal's append-only observation payload itself is
+preserved.
 Stale observations, incomplete coverage, unmapped items, missing records,
 unavailable comparisons and differences yield
 `attention`. Freshness is measured from observation time with the required
@@ -403,10 +413,13 @@ source file as private financial data. The application does not persist preview
 history, deduplicate future imports, retry providers or automatically resolve
 any discrepancy.
 
-No adapter has been selected or implemented. Before doing so, the operator
-must identify an existing account and separately verify provider-enforced
-read-only permissions, exact account coverage, completeness/latency and
-data-use/retention terms. Do not send credentials or statements through chat.
-Any future sync must preserve this separation and must not import guessed fills,
-alter role attribution, turn observed balances into spendable funds, or repair
-the journal automatically.
+No adapter for complete normalized account observations has been selected or
+implemented. The separate eToro Read adapter is explicitly gated but provides
+only partial native evidence; it does not establish source time, account
+identity, GBP value or complete holdings and is live-unvalidated. Before using
+any provider collection, identify the account and separately verify
+provider-enforced read-only permissions, exact coverage, completeness/latency
+and data-use/retention terms. Do not send credentials or statements through chat.
+Any future full-account sync must preserve this separation and must not import
+guessed fills, alter role attribution, turn observed balances into spendable
+funds, or repair the journal automatically.

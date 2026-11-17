@@ -200,13 +200,23 @@ def project(ledger, profile, now, cache=None, source_mode="recorded"):
         history = ledger.cash_observation_history.get(identifier, [])
         differences = [o for o in history if Decimal(o["difference_gbp"]) != 0]
         if differences:
-            finding("cash_difference", identifier, "Unresolved recorded cash differences remain, even after later matches.",
+            finding("cash_difference", identifier,
+                    "Nonzero replayed cash-observation differences remain; later matches do not resolve them.",
                     differences[-1]["evidence"], str(len(differences)))
         account_rows.append({
             "account_id": identifier, "provider": mapping["provider"], "wrapper": mapping["wrapper"],
             "denominator": mapping["denominator"], "freshness": freshness,
             "cash_gbp": fmt(ledger.cash[identifier]),
         })
+    if ledger.historical_correction and ledger.cash_observation_history:
+        finding(
+            "historical_correction", "cash_observations",
+            "Historical correction replay may have changed past cash-observation differences. "
+            "Preserve earlier reports and review original observations and correction evidence.",
+            "Journal contains historical corrections and cash observations; prior difference values "
+            "are not retained as a separate projection.",
+            status="unavailable",
+        )
     with localcontext() as context:
         context.prec = 100
         eligible = ZERO

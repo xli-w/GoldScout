@@ -1,6 +1,5 @@
-"""Local-only dashboard API; importing this module never opens a ledger."""
+"""Local portfolio dashboard; importing this module never opens a journal."""
 
-import copy
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,34 +13,19 @@ from starlette.exceptions import HTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 
-from dashboard.reader import LedgerReader, ReadError, metadata
-from dashboard.telemetry import TelemetryReader, unknown_health
-from dashboard.history import HistoryReader, demo_page
 from dashboard.assets import verify_frontend
 
 
 ROOT = Path(__file__).resolve().parent
-MESSAGES = {
-    "ledger_missing": (503, "Recorded account data is unavailable.", True),
-    "ledger_invalid": (409, "Recorded account data failed validation.", False),
-    "schema_unsupported": (409, "Recorded account schema is unsupported.", False),
-    "source_unavailable": (503, "Recorded account data is temporarily unavailable.", True),
-    "invalid_request": (400, "The dashboard request is invalid.", False),
-    "snapshot_changed": (409, "Recorded history changed. Refresh the snapshot before continuing.", True),
-}
-
-
-def create_app(database=None, scenario="healthy_recorded", clock=None, static_directory=None, telemetry_path=None, process_check=None, serve_frontend=True,
+def create_app(clock=None, static_directory=None, serve_frontend=True,
                intelligence_database=None, intelligence_demo=False, analysis_controls_enabled=False, analysis_profiles=(), investment_database=None,
                investment_recording_enabled=False, awareness_profile=None,
                monitoring_profile=None, monitoring_cache=None, monitoring_reviews=None,
                monitoring_workflow_enabled=False, setup_workspace=None, setup_enabled=False):
-    if database is not None and investment_database is not None:
-        raise ValueError("Select legacy trading or investment storage, not both")
     if setup_enabled and setup_workspace is None:
         raise ValueError("Setup requires a selected workspace")
     if setup_workspace is not None and (
-            investment_database is None or database is not None or intelligence_demo
+            investment_database is None or intelligence_demo
             or Path(investment_database).absolute() !=
             Path(setup_workspace).absolute() / "investment.sqlite3"):
         raise ValueError("Setup requires the workspace's fixed investment journal path")
@@ -64,14 +48,6 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     if serve_frontend:
         static_directory = verify_frontend(static_directory)
     clock = clock or (lambda: datetime.now(timezone.utc))
-    reader = LedgerReader(database) if database is not None else None
-    telemetry = TelemetryReader(telemetry_path or reader.database.with_name("bot_telemetry.json"), process_check) if reader else None
-    fixtures = json.loads((ROOT / "fixtures.json").read_text(encoding="utf-8")) if reader is None else None
-    selected = next((item for item in fixtures["scenarios"] if item["name"] == scenario), None) if fixtures else None
-    if reader is None and selected is None:
-        raise ValueError("Unknown synthetic scenario")
-    validator = Draft202012Validator(
-        json.loads((ROOT / "response.schema.json").read_text(encoding="utf-8")), format_checker=FormatChecker())
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     setup = None
     setup_validator = None
@@ -85,7 +61,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     investment_recording = None
     monitoring_workflow = None
     if investment_recording_enabled:
-        if investment_database is None or reader is not None or intelligence_demo:
+        if investment_database is None or intelligence_demo:
             raise ValueError("Investment recording requires a selected recorded investment store")
         from dashboard.investment_recording import RecordingSessions
         investment_recording = RecordingSessions(
@@ -94,7 +70,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         from dashboard.monitoring_workflow import MonitoringWorkflowSessions
         monitoring_workflow = MonitoringWorkflowSessions()
     if intelligence_database is not None or intelligence_demo:
-        if intelligence_demo and (database is not None or investment_database is not None or intelligence_database is not None):
+        if intelligence_demo and (investment_database is not None or intelligence_database is not None):
             raise ValueError("Synthetic intelligence must not bind operational storage")
         from dashboard.intelligence import IntelligenceWorkspace
         intelligence = IntelligenceWorkspace(
@@ -114,14 +90,8 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     def error(code, status=None):
-        default_status, message, retryable = MESSAGES[code]
-        meta = metadata(clock())
-        meta["source_mode"] = "recorded" if reader or investment_database is not None else "demo"
-        if code in ("ledger_invalid", "schema_unsupported"):
-            meta["ledger"]["freshness"] = "invalid"
-        return JSONResponse(status_code=status or default_status, content={
-            "api_version": "1", "resource": "error", "meta": meta,
-            "data": {"code": code, "message": message, "retryable": retryable},
+        return JSONResponse(status_code=status or 400, content={
+            "error": code, "message": "The dashboard request is invalid.",
         })
 
     @app.middleware("http")
@@ -159,10 +129,6 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         return response
 
-    @app.exception_handler(ReadError)
-    async def read_error(request: Request, exc: ReadError):
-        return error(exc.code)
-
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         return error("invalid_request")
@@ -176,28 +142,23 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         if setup is not None:
             status = setup.status(clock())
             if status["state"] != "ready":
-                return {"mode": "recorded", "scenario": None, "workspace": "setup",
+                return {"mode": "recorded", "workspace": "setup",
                         "setup_state": status["state"]}
-        return {"mode": "recorded" if reader or investment_database is not None else "demo",
-                "scenario": None if reader or investment_database is not None else scenario,
-                "workspace": "investment" if investment_database is not None else "trading" if reader else "demo"}
+        return {"mode": "recorded" if investment_database is not None else "demo",
+                "workspace": "investment" if investment_database is not None else "demo"}
 
     @app.get("/api/investment/v1/snapshot")
     def investment_snapshot():
         from investment import InvestmentError
         from investment.service import snapshot
 
-        if investment_database is None and reader is not None:
-            return JSONResponse(status_code=503, content={"error": "investment_not_configured"})
         try:
             if investment_database is not None:
                 report = snapshot(investment_database, now=clock())
             else:
                 from dashboard.investment_demo import demo_opening_snapshot
                 report = demo_opening_snapshot(now=clock())
-            schema_name = ("response-v2.schema.json" if isinstance(report, dict)
-                           and report.get("schema_version") == 2 else "response.schema.json")
-            schema = json.loads((ROOT.parent / "investment" / schema_name).read_text(encoding="utf-8"))
+            schema = json.loads((ROOT.parent / "investment" / "response-v2.schema.json").read_text(encoding="utf-8"))
             Draft202012Validator(schema, format_checker=FormatChecker()).validate(report)
             return report
         except (InvestmentError, OSError) as exc:
@@ -212,7 +173,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         try:
             if monitoring_profile is not None:
                 result = monitoring_snapshot(investment_database, monitoring_profile, monitoring_cache, clock())
-            elif investment_database is not None or reader is not None:
+            elif investment_database is not None:
                 result = {"enabled": False}
             else:
                 from dashboard.investment_demo import demo_monitoring_snapshot
@@ -750,127 +711,16 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         except Exception:
             return error("invalid_request",409)
 
-    def respond(resource, revision, database_id=None, run_id=None):
-        if investment_database is not None:
-            return error("source_unavailable")
-        now = clock()
-        if reader:
-            snapshot = reader.snapshot(now)
-            telemetry.augment(snapshot, now)
-            if revision is not None and revision != snapshot["meta"]["ledger_revision"]:
-                raise ReadError("source_unavailable")
-            if database_id is not None and database_id != snapshot["meta"]["database_id"]:
-                raise ReadError("source_unavailable")
-            if run_id is not None and run_id != snapshot["meta"]["telemetry_run_id"]:
-                raise ReadError("source_unavailable")
-            envelope = {"api_version": "1", "resource": resource, "meta": snapshot["meta"], "data": snapshot[resource]}
-        else:
-            if "error" in selected["responses"]:
-                return error(selected["responses"]["error"]["code"])
-            if resource not in selected["responses"] and resource != "health":
-                raise ReadError("source_unavailable")
-            meta = copy.deepcopy(fixtures["meta"])
-            meta.update(copy.deepcopy(selected["meta_overrides"]))
-            anchor = datetime.fromisoformat(fixtures["generated_at"].replace("Z", "+00:00"))
-            offset = now - anchor
-
-            def shift(value):
-                if isinstance(value, dict):
-                    return {key: shift(item) for key, item in value.items()}
-                if isinstance(value, list):
-                    return [shift(item) for item in value]
-                if isinstance(value, str) and value.endswith("Z"):
-                    try:
-                        return (datetime.fromisoformat(value.replace("Z", "+00:00")) + offset).isoformat().replace("+00:00", "Z")
-                    except ValueError:
-                        return value
-                return value
-
-            data = selected["responses"].get(resource)
-            if resource == "performance" and scenario == "healthy_recorded":
-                data = json.loads((ROOT / "history-fixture.json").read_text(encoding="utf-8"))
-            if data is None:
-                data = unknown_health({"overview": selected["responses"].get("overview", {"block_reasons": []})})
-            envelope = shift({"api_version": "1", "resource": resource, "meta": meta,
-                              "data": copy.deepcopy(data)})
-        if not validator.is_valid(envelope):
-            raise ReadError("ledger_invalid")
-        return envelope
-
-    @app.get("/api/v1/overview")
-    def overview():
-        return respond("overview", None)
-
-    @app.get("/api/v1/positions")
-    def positions(revision: int | None = None, database_id: str | None = None, run_id: str | None = None):
-        return respond("positions", revision, database_id, run_id)
-
-    @app.get("/api/v1/health")
-    def health(revision: int | None = None, database_id: str | None = None, run_id: str | None = None):
-        return respond("health", revision, database_id, run_id)
-
-    def collection(resource, limit, cursor, after=0, start=None, end=None, symbol=None):
-        if reader:
-            envelope = HistoryReader(reader.database).page(resource, limit, cursor, after, start, end, symbol, clock())
-            if not validator.is_valid(envelope):
-                raise ReadError("ledger_invalid")
-            return envelope
-        if limit < 1 or limit > 1000 or after < 0:
-            raise ReadError("invalid_request")
-        envelope = respond(resource, None)
-        if isinstance(envelope, JSONResponse):
-            return envelope
-        data = envelope["data"]
-        if resource == "events":
-            rows = [row for row in data["items"] if row["sequence"] > after]
-            data["items"] = rows
-        elif resource == "performance":
-            from datetime import date
-            try:
-                for value in (start, end):
-                    if value and date.fromisoformat(value).isoformat() != value:
-                        raise ValueError("date")
-                if start and end and start > end:
-                    raise ValueError("range")
-            except ValueError as exc:
-                raise ReadError("invalid_request") from exc
-            data["daily"] = [row for row in data["daily"] if (not start or row["day"] >= start) and (not end or row["day"] <= end)]
-            data["exits"] = [row for row in data["exits"] if (not start or row["accounting_day"] and row["accounting_day"] >= start) and (not end or row["accounting_day"] and row["accounting_day"] <= end) and (not symbol or row["symbol"] == symbol)]
-            ids = {row["execution_id"] for row in data["exits"]}
-            data["corrections"] = [row for row in data["corrections"] if row["execution_id"] in ids]
-        envelope["data"] = demo_page(data, resource, limit, cursor, [start, end, symbol, after], after)
-        if not validator.is_valid(envelope):
-            raise ReadError("ledger_invalid")
-        return envelope
-
-    @app.get("/api/v1/events")
-    def events(after: int = 0, limit: int = 100, cursor: str | None = None):
-        return collection("events", limit, cursor, after)
-
-    @app.get("/api/v1/orders")
-    def orders(limit: int = 100, cursor: str | None = None):
-        return collection("orders", limit, cursor)
-
-    @app.get("/api/v1/performance")
-    def performance(request: Request, limit: int = 100, cursor: str | None = None, symbol: str | None = None):
-        return collection("performance", limit, cursor, start=request.query_params.get("from"), end=request.query_params.get("to"), symbol=symbol)
-
     if serve_frontend:
         app.mount("/assets", StaticFiles(directory=static_directory / "assets"), name="assets")
 
         @app.get("/")
-        @app.get("/positions")
-        @app.get("/health")
-        @app.get("/activity")
-        @app.get("/history")
         @app.get("/intelligence")
-        @app.get("/guide")
         @app.get("/investment")
         @app.get("/investment/record")
         @app.get("/investment/reviews")
         @app.get("/investment-guide")
         @app.get("/setup")
-        @app.get("/legacy")
         def index():
             return FileResponse(static_directory / "index.html")
 

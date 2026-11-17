@@ -167,6 +167,19 @@ def compare_observations(ledger, staged, max_age_seconds, now):
         for account, observations in sorted(ledger.cash_observation_history.items())
         for observation in observations if Decimal(observation["difference_gbp"]) != 0
     ]
+    corrected_observation_history = ledger.historical_correction and bool(
+        ledger.cash_observation_history)
+    if corrected_observation_history:
+        attention = True
+    limitations = [
+        "Local source, completeness and mappings are operator declarations, not independently verified.",
+        "No omitted observation is treated as zero; this preview does not correct or change the journal.",
+        "Matches are as of observation clocks, not proof of present custody, settlement or buying power.",
+    ]
+    if corrected_observation_history:
+        limitations.append(
+            "Historical correction replay may change or clear prior journal cash-observation differences; "
+            "preserve earlier reports and review original observations and correction evidence.")
     return {
         "schema_version": 1, "portfolio_id": ledger.spec["portfolio_id"],
         "profile_sha256": digest(canonical(ledger.spec)), "revision": ledger.revision,
@@ -177,9 +190,5 @@ def compare_observations(ledger, staged, max_age_seconds, now):
         "status": "attention" if attention or missing_accounts or previous_discrepancies else "matched",
         "accounts": output, "missing_recorded_accounts": missing_accounts,
         "previous_cash_discrepancies": previous_discrepancies,
-        "limitations": [
-            "Local source, completeness and mappings are operator declarations, not independently verified.",
-            "No omitted observation is treated as zero; this preview does not correct or change the journal.",
-            "Matches are as of observation clocks, not proof of present custody, settlement or buying power.",
-        ],
+        "limitations": limitations,
     }

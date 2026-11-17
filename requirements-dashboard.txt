@@ -2,4 +2,3 @@ fastapi==0.115.12
 uvicorn==0.34.3
 jsonschema==4.23.0
 rfc3339-validator==0.1.4
-psutil==6.1.1

@@ -1,15 +1,27 @@
 ---
-description: "Use when changing SQLite accounting, recovery validation, process locks, exports, or audit maintenance."
-applyTo: "bot/ledger.py,bot/audit.py,bot/process_lock.py,bot/trade_logger.py,bot/portfolio.py,tests/test_ledger.py,tests/test_state_validation.py"
+description: "Use when changing journal schemas, transactional accounting, replay, backups or recovery."
+applyTo: "investment/store.py,investment/core.py,investment/lifecycle.py,investment/bootstrap.py,market_intelligence/store.py,tests/test_investment*.py,tests/test_market_intelligence.py"
 ---
-# Accounting and Recovery
+# Evidence accounting and recovery
 
-Read [accounting invariants](../../docs/safety-invariants.md) and use `ledger-migration-review` when changing transactions or schemas.
+Read [invariants](../../docs/safety-invariants.md), use `ledger-migration-review`
+and, for investment, `investment-system-development`.
 
-- SQLite is authoritative; CSVs are derived exports and JSON is a compatibility snapshot. Do not reset/delete a ledger or clear quarantine to bypass an error.
-- Commit exit accounting and resulting recovery state together before publishing quantities or fill counters in memory. Failure must leave published counters unchanged and stop unsafe scheduling.
-- Never hold database transactions across broker requests. Broker/database atomicity is impossible; durable intent and reconciliation are required.
-- Preserve append-only evidence, original payloads, account/environment binding, journal revision checks, and idempotency. Conflicting duplicate IDs are errors.
-- Corrections require stored evidence and explicit operator review; an activity ID alone does not prove price, quantity, currency, or fee allocation. Never invent historical facts.
-- Backups use SQLite's backup API and integrity/recovery checks; copying a live WAL database file is insufficient. Close connections explicitly where required, including Windows backup handles.
-- Tests use temporary databases and cover rollback, restart, repeated migration/correction, conflicting evidence, and export failure separately from committed accounting.
+- For the investment journal only, opening-evidence wire `schema_version=2` is
+  supported. Refuse older/foreign/altered schemas; no migration, compatibility
+  mode or reader repair. Intelligence storage has its own schema lifecycle and
+  explicit upgrade path; some older schemas remain readable without upgrade.
+  Follow its scoped instructions rather than applying the investment journal's
+  version rule.
+- Validate schema objects before integrity checks/data access. Readers never
+  initialize or create sidecars for absent/unsupported stores.
+- Commit evidence/accounting atomically before memory publication. Preserve
+  original payloads, binding, revision/idempotency and downstream replay.
+  Conflicts fail; never invent fees, cost basis or historical facts.
+- Effective and available clocks differ. Preserve exact cash/quantity/role and
+  linked external-flow unitization. Corrections invalidate unsupported history.
+- Backup uses pinned validated SQLite copy/replay to a fresh no-overwrite path;
+  active-WAL file copying and internal hashes alone cannot establish recovery,
+  authenticity or latestness. Maintenance requires explicit operator approval.
+- Tests use temporary stores and cover rollback/restart/conflicting IDs,
+  unsupported-schema rejection, post-commit failures and no-reader mutation.

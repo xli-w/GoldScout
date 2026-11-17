@@ -2,7 +2,7 @@
 
 ## What is implemented
 
-Monitoring reads an existing opened v2 investment journal and an explicitly
+Monitoring reads an existing opened investment journal and an explicitly
 selected local profile. It reports review reminders, missing/stale valuation,
 cash discrepancies, configured instrument concentration, role/denominator gaps,
 cost-coverage limitations and LISA evidence checks. Findings are deterministic,
@@ -17,12 +17,12 @@ Concentration means exact instrument share, not underlying fund overlap.
 The dashboard's synthetic demo includes monitoring without making any account
 calls. Recorded monitoring defaults off. Refresh and optional minute polling
 read only local data. Existing accounting/awareness wire contracts, journal
-formats, manual recording gates, trading and intelligence remain independent.
+formats, manual recording gates and intelligence remain independent.
 
 ## Local profile and commands
 
 Use the selected Python 3.11.9 environment (Python 3.10 remains supported).
-Never select legacy trading/intelligence storage or use operational files for
+Never select foreign/intelligence storage or use operational files for
 tests. The following are operator commands for explicitly selected local files,
 not instructions to initialize or maintain an operational store automatically.
 
@@ -131,7 +131,7 @@ differences. Identical attempt retries are idempotent; conflicting IDs fail.
 ## Local monitoring review inbox
 
 Monitoring findings can be tracked in a separate, local workflow store. This is
-not the investment journal or observation cache. It requires a v2 journal and
+not the investment journal or observation cache. It requires an opened journal and
 monitoring profile, is explicitly initialized at a new path, and must not share
 the journal or cache path:
 
@@ -183,9 +183,10 @@ finding summaries, action status and source revisions; it does not sync on page
 load. When the bound current report differs from the last sync, actions remain
 unavailable until the operator explicitly enables workflow actions and syncs.
 
-Authenticated actions use the separate `--monitoring-workflow` opt-in and
-terminal-entered password. This password is independent of
-`--investment-recording`; it cannot record journal events. Same-origin and CSRF
+Actions use the separate `--monitoring-workflow` opt-in, independent of
+`--investment-recording`; they cannot record journal events. There is no
+password or user login, and browser request defenses are not authentication.
+Same-origin and CSRF
 checks, rate-limited short-lived sessions, bounded JSON, exact portfolio/profile/
 cache-instance binding and revision-bound idempotent actions apply. Actions are
 only acknowledged, deferred or reviewed; they never resolve a finding or approve

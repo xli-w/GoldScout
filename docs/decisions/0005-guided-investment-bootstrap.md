@@ -16,7 +16,7 @@ recording boundaries must not become automatic creation or repair.
 
 Source-checkout startup without a source flag selects `local-investment` beneath
 that checkout. Installed use outside a checkout requires `--workspace`.
-Explicit demo, trading-ledger and investment-journal selections remain distinct.
+Explicit synthetic demo and investment-journal selections remain distinct.
 An absent/empty workspace shows a local wizard; an existing journal
 remains accounting authority. Invalid/unavailable data never triggers reset.
 
@@ -31,7 +31,7 @@ policy approval or trading.
 ## Consequences
 
 Normal onboarding needs no hand-written JSON or separate init command.
-Accounts/products remain fixed under current v2 rules. Unknown prices and late
+Accounts/products evolve only under append-only journal rules. Unknown prices and late
 evidence can leave valuation unavailable. Reloading loses unsubmitted drafts.
 
 The journal, profile copy and setup receipt cannot be published in a single
