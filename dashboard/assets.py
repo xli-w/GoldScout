@@ -32,6 +32,9 @@ def verify_frontend(directory=None, schema=None):
             awareness_schema = investment_schema.with_name("awareness.schema.json")
             if manifest.get("awareness_schema_sha256") != hashlib.sha256(awareness_schema.read_bytes()).hexdigest():
                 raise FrontendBuildError("Frontend portfolio awareness contract does not match this dashboard")
+            monitoring_schema = investment_schema.with_name("monitoring.schema.json")
+            if manifest.get("monitoring_schema_sha256") != hashlib.sha256(monitoring_schema.read_bytes()).hexdigest():
+                raise FrontendBuildError("Frontend monitoring contract does not match this dashboard")
         files = manifest.get("files")
         if not isinstance(files, dict) or "index.html" not in files or not any(name.startswith("assets/") for name in files):
             raise FrontendBuildError("Frontend build is incomplete")

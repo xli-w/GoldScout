@@ -7,6 +7,7 @@ import validate from "./investment-validator.js";
 import validateV2 from "./investment-validator-v2.js";
 import { label, timestamp } from "./api";
 import { PortfolioAwareness } from "./PortfolioAwareness";
+import { PortfolioMonitoring } from "./PortfolioMonitoring";
 
 export type InvestmentSnapshot = {
   schema_version: 1; source_mode: "demo" | "recorded"; portfolio_id: string;
@@ -692,6 +693,7 @@ export function InvestmentView({ now }: { now: number }) {
             <a href="#investment-overview">Overview</a>
             {data.schema_version === 2 && <a href="#investment-roles">Management roles</a>}
             <a href="#investment-performance">Performance history</a>
+            <a href="#investment-monitoring">Monitoring</a>
             <a href="#investment-records">Journal records</a>
             <a href="#investment-accounts">Cash and holdings</a>
             <a href="#investment-awareness">Portfolio awareness</a>
@@ -737,6 +739,7 @@ export function InvestmentView({ now }: { now: number }) {
               </div>
             </details>}
           </section>}
+          <PortfolioMonitoring portfolioId={data.portfolio_id} revision={data.revision} />
           <details className="investment-detail" id="investment-awareness">
             <summary>Optional local portfolio awareness</summary>
             <PortfolioAwareness portfolioId={data.portfolio_id} revision={data.revision} />

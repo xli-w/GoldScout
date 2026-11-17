@@ -7,7 +7,15 @@ remains separate with its original stops, ownership checks and recovery.
 
 ## Current mandate
 
-The 2026-11-16 mandate is a central manager for the investor's substantial,
+The [17 November clarification](investment-research-context.md#current-clarification-17-november-2026)
+supersedes conflicting scope/denominator assumptions below: selected savings,
+first-home LISA and investments; approximately five years; irregular
+contributions; illustrative experimental share of non-LISA investment holdings
+only, excluding savings and LISA. No weights or loss limits are approved.
+The [monitoring guide](monitoring.md) distinguishes local findings and the gated
+eToro Read adapter from verified provider connectivity or investment policy.
+
+The previous 2026-11-16 mandate described a central manager for the investor's substantial,
 designated long-term investment capital across selected bank savings, bonds and
 investments. Household spending accounts, emergency reserves and miscellaneous
 small savings are outside the product scope. The earlier GBP 1,000 example is

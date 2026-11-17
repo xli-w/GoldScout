@@ -54,6 +54,12 @@
 .chart-empty { display: flex; justify-content: center; align-items: center; gap: 12px; min-height: 180px; border-block: 1px solid var(--line); margin-bottom: 25px; color: var(--muted); font-size: 13px; }
 .history-heading { margin-top: 30px; }
 .history-group { margin-top: 28px; }
+.portfolio-monitoring { min-width: 0; overflow-wrap: anywhere; }
+.portfolio-monitoring li { margin-block: 10px; }
+.monitoring-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 14px; }
+.monitoring-actions button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.monitoring-actions button:disabled { opacity: 0.6; cursor: wait; }
+.monitoring-actions label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .investment-recording { border-top: 1px solid var(--line); padding-top: 18px; }
 .recording-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: end; }
 .recording-form > label { display: grid; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }

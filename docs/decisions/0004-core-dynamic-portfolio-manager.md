@@ -5,6 +5,14 @@ policy-dependent proposals, research and execution gated
 
 Date: 2026-11-16
 
+Amendment, 2026-11-17: the confirmed
+[current context](../investment-research-context.md#current-clarification-17-november-2026)
+includes selected savings and a first-home LISA. The illustrative experimental
+denominator is non-LISA investment holdings, excluding savings and LISA, not
+all designated capital. Human approval of individual actions initially precedes
+any separately approved standing authority. Historical wording below is retained
+as provenance; no exact allocation or loss budget is approved by either version.
+
 ## Context
 
 The investor clarified that the managed money is substantial long-term investment

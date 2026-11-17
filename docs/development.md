@@ -10,6 +10,13 @@ In VS Code, check the chat customization UI/diagnostics for the two agents, four
 
 ## Product boundaries
 
+- The [current context](investment-research-context.md#current-clarification-17-november-2026)
+  clarifies selected savings, first-home LISA and a non-LISA investment-holdings
+  experimental denominator. [Monitoring](monitoring.md) is a local read-only
+  projection with a separate observation cache; provider collection is explicit
+  and gated. The [provider assessment](provider-feasibility.md) was recovered
+  from misplaced Trader documentation without replacing newer GoldScout code.
+
 - The [investment system](investment.md) is a separate GBP evidence journal;
   proposals are blocked and it has no execution path. Use the
   [`investment-system-development` skill](../.github/skills/investment-system-development/SKILL.md)
@@ -59,6 +66,7 @@ The [CI workflow](../.github/workflows/offline-validation.yml) installs the vers
 | GBP campaign import/readiness/accounting contracts | [campaign dataset](../tests/test_campaign_dataset.py), [readiness](../tests/test_campaign_readiness.py), [fill accounting](../tests/test_campaign_accounting.py) |
 | Offline investment accounting, replay and blocked-proposal contracts | [investment](../tests/test_investment.py), [read-only investment API](../tests/test_investment_dashboard.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
 | Local portfolio awareness, exposure mapping and reminders | [awareness](../tests/test_investment_awareness.py), [durable brief evidence](../tests/test_intelligence_completion.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
+| Monitoring rules, observation cache, collection and Read adapter | [rules](../tests/test_investment_monitoring.py), [cache](../tests/test_investment_monitoring_store.py), [runtime](../tests/test_investment_monitoring_runtime.py), [eToro](../tests/test_investment_etoro.py), [API](../tests/test_investment_dashboard.py), [desktop/mobile](../frontend/tests/dashboard.spec.mjs) |
 | Offline observation staging and reconciliation | [reconciliation](../tests/test_investment_reconciliation.py), [opening accounting](../tests/test_investment_opening.py) |
 | Synthetic-only investment pilot lifecycle and persistence | [trace replay](../tests/test_investment_pilot.py), [temporary journal/recovery](../tests/test_investment_pilot_store.py) |
 | Backtest / monitor timing | [backtest](../tests/test_backtest.py), [monitor](../tests/test_review2_monitor.py) |

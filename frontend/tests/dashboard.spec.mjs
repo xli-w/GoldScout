@@ -3,6 +3,42 @@ import { readFileSync } from "node:fs";
 
 const fixtures = JSON.parse(readFileSync(new URL("../../dashboard/fixtures.json", import.meta.url), "utf8"));
 
+test("monitoring shows synthetic findings and invalidates them on failed refresh", async ({ page }) => {
+  let unavailable = false;
+  await page.route("**/api/investment/v1/monitoring", async route => {
+    if (unavailable) return route.fulfill({ status: 503, json: { error: "unavailable" } });
+    return route.continue();
+  });
+
+  await page.goto("/investment");
+  const section = page.getByRole("region", { name: "Portfolio monitoring", exact: true });
+  await expect(section.getByText(/Synthetic monitoring demonstration/)).toBeVisible();
+  await expect(section.getByText(/blocked_unvalidated/)).toBeVisible();
+  await expect(section.getByText(/Unresolved recorded cash differences/)).toBeVisible();
+  await expect(section.getByRole("checkbox")).not.toBeChecked();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
+  unavailable = true;
+  await section.getByRole("button", { name: "Refresh monitoring", exact: true }).click();
+  await expect(section.getByRole("alert")).toContainText("unavailable");
+  await expect(section.getByText(/Unresolved recorded cash differences/)).toHaveCount(0);
+});
+
+test("monitoring refuses mismatched revisions and malformed responses", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/monitoring")).json();
+  let malformed = false;
+  await page.route("**/api/investment/v1/monitoring", route => route.fulfill({
+    json: malformed ? { ...report, dynamic_pct: "NaN" } : { ...report, portfolio_revision: report.portfolio_revision + 1 },
+  }));
+  await page.goto("/investment");
+  const section = page.getByRole("region", { name: "Portfolio monitoring", exact: true });
+  await expect(section.getByRole("alert")).toContainText("revision changed");
+  await expect(section.getByText(/Synthetic monitoring demonstration/)).toHaveCount(0);
+  malformed = true;
+  await section.getByRole("button", { name: "Refresh monitoring", exact: true }).click();
+  await expect(section.getByRole("alert")).toContainText("unavailable");
+  await expect(section.getByText(/Synthetic monitoring demonstration/)).toHaveCount(0);
+});
+
 test("investment workspace opens investment and does not present legacy-only pages", async ({ page }) => {
   let legacyRequests = 0;
   await page.route("**/api/v1/settings", route => route.fulfill({
@@ -497,7 +533,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   report.valuation_history = history;
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(returnChart).toBeVisible();
-  await page.getByText("Journal records", { exact: true }).click();
+  await page.locator("#investment-records > summary").click();
   await expect(page.getByText(/Lifetime gain and prior cost basis are unavailable/)).toBeVisible();
   const attribution = page.getByRole("region", { name: "Recorded fees and income" });
   await expect(attribution.getByText("Recorded transaction fees")).toBeVisible();
@@ -585,7 +621,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.clock.setFixedTime(new Date("2025-01-01T12:00:00Z"));
   await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Age unavailable (future or invalid clock)");
   await page.clock.setFixedTime(new Date("2026-01-05T12:00:00Z"));
-  await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
+  await expect(page.locator("#investment-accounts")).toHaveAttribute("open", "");
   await expect(page.getByRole("columnheader", { name: "Mark as of" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
   await page.getByText("Proposal status and capability limits", { exact: true }).click();

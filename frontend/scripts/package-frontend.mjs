@@ -24,6 +24,7 @@ writeFileSync(join(output, "dashboard-build.json"), JSON.stringify({
   investment_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "response.schema.json"))),
   investment_v2_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "response-v2.schema.json"))),
   awareness_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "awareness.schema.json"))),
+  monitoring_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "monitoring.schema.json"))),
 }, null, 2) + "\n");
 rmSync(packaged, { recursive: true, force: true });
 cpSync(output, packaged, { recursive: true });

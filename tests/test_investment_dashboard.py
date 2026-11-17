@@ -30,6 +30,34 @@ class InvestmentDashboardTests(unittest.TestCase):
         return TestClient(create_app(serve_frontend=False, clock=lambda: self.now, **options),
                           base_url="http://127.0.0.1", backend_options={"loop_factory": MemoryEventLoop})
 
+    def test_monitoring_demo_disabled_and_recorded_reads_preserve_journal(self):
+        import json
+        from test_investment_monitoring import monitoring_profile, assignments
+        from investment.store import read
+        from investment.core import iso
+        from investment.monitoring import project
+        with self.client() as client:
+            data = client.get("/api/investment/v1/monitoring").json()
+            self.assertEqual(data["source_mode"], "demo")
+            self.assertFalse(data["affects_trading"])
+            self.assertTrue(data["findings"])
+        investment_store.initialize(self.path, profile(), OPENING_NOW)
+        investment_store.import_events(self.path, [opening(), *assignments()], OPENING_NOW)
+        monitoring = monitoring_profile(profile())
+        path = self.path.with_name("monitoring.json")
+        path.write_text(json.dumps(monitoring), encoding="utf-8")
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            self.assertEqual(client.get("/api/investment/v1/monitoring").json(), {"enabled": False})
+        with self.client(investment_database=self.path, monitoring_profile=path) as client:
+            response = client.get("/api/investment/v1/monitoring")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), project(read(self.path, self.now), monitoring, self.now))
+            self.assertEqual(client.post("/api/investment/v1/monitoring", json={}).status_code, 405)
+            path.write_text("{}", encoding="utf-8")
+            self.assertEqual(client.get("/api/investment/v1/monitoring").status_code, 503)
+        self.assertEqual(self.path.read_bytes(), original)
+
     def test_synthetic_investment_is_valid_and_cannot_mutate_any_account(self):
         with self.client() as client:
             response = client.get("/api/investment/v1/snapshot")

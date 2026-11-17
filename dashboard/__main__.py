@@ -23,6 +23,8 @@ def main(argv=None):
                         help="Enable authenticated manual edits to the selected v2 investment store")
     parser.add_argument("--awareness-profile", type=Path,
                         help="Operator-owned local exposure/reminder JSON; requires both investment and intelligence stores")
+    parser.add_argument("--monitoring-profile", type=Path, help="Local nonsecret monitoring JSON for the selected investment store")
+    parser.add_argument("--monitoring-cache", type=Path, help="Existing separately initialized observation cache; never collects")
     args = parser.parse_args(argv)
     if args.intelligence_demo and (not args.demo or args.intelligence_database):
         parser.error("--intelligence-demo requires --demo without an intelligence database")
@@ -32,6 +34,10 @@ def main(argv=None):
         parser.error("--investment-recording requires --investment-database")
     if args.awareness_profile is not None and (args.investment_database is None or args.intelligence_database is None):
         parser.error("--awareness-profile requires --investment-database and --intelligence-database")
+    if args.monitoring_profile is not None and args.investment_database is None:
+        parser.error("--monitoring-profile requires --investment-database")
+    if args.monitoring_cache is not None and args.monitoring_profile is None:
+        parser.error("--monitoring-cache requires --monitoring-profile")
     if not 1024 <= args.port <= 65535:
         parser.error("Port must be between 1024 and 65535")
     if args.database is None and args.telemetry is not None:
@@ -58,7 +64,8 @@ def main(argv=None):
                          investment_recording_password=getpass.getpass(
                              "Local investment-recording password (12+ characters): ")
                          if args.investment_recording else None,
-                         awareness_profile=args.awareness_profile)
+                         awareness_profile=args.awareness_profile,
+                         monitoring_profile=args.monitoring_profile, monitoring_cache=args.monitoring_cache)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
     except ValueError as exc:

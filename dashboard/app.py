@@ -33,11 +33,16 @@ MESSAGES = {
 
 def create_app(database=None, scenario="healthy_recorded", clock=None, static_directory=None, telemetry_path=None, process_check=None, serve_frontend=True,
                intelligence_database=None, intelligence_demo=False, analysis_password=None, analysis_profiles=(), investment_database=None,
-               investment_recording_password=None, awareness_profile=None):
+               investment_recording_password=None, awareness_profile=None,
+               monitoring_profile=None, monitoring_cache=None):
     if database is not None and investment_database is not None:
         raise ValueError("Select legacy trading or investment storage, not both")
     if awareness_profile is not None and (investment_database is None or intelligence_database is None or intelligence_demo):
         raise ValueError("Portfolio awareness requires explicit investment and intelligence stores")
+    if monitoring_profile is not None and investment_database is None:
+        raise ValueError("Monitoring profile requires an explicit investment store")
+    if monitoring_cache is not None and monitoring_profile is None:
+        raise ValueError("Monitoring cache requires an explicit monitoring profile")
     if serve_frontend:
         static_directory = verify_frontend(static_directory)
     clock = clock or (lambda: datetime.now(timezone.utc))
@@ -153,6 +158,26 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
             return JSONResponse(status_code=503, content={"error": "investment_unavailable", "message": str(exc)})
         except SchemaValidationError:
             return JSONResponse(status_code=409, content={"error": "investment_invalid", "message": "Investment report failed schema validation."})
+
+    @app.get("/api/investment/v1/monitoring")
+    def investment_monitoring():
+        from investment import InvestmentError
+        from investment.monitoring import monitoring_snapshot
+        try:
+            if monitoring_profile is not None:
+                result = monitoring_snapshot(investment_database, monitoring_profile, monitoring_cache, clock())
+            elif investment_database is not None or reader is not None:
+                result = {"enabled": False}
+            else:
+                from dashboard.investment_demo import demo_monitoring_snapshot
+                result = demo_monitoring_snapshot(clock())
+            schema = json.loads((ROOT.parent / "investment" / "monitoring.schema.json").read_text(encoding="utf-8"))
+            Draft202012Validator(schema, format_checker=FormatChecker()).validate(result)
+            return result
+        except (InvestmentError, OSError):
+            return JSONResponse(status_code=503, content={"error": "portfolio_monitoring_unavailable"})
+        except SchemaValidationError:
+            return JSONResponse(status_code=409, content={"error": "portfolio_monitoring_invalid"})
 
     @app.get("/api/investment/v{version}/awareness")
     def investment_awareness(version: int):

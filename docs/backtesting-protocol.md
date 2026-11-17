@@ -1,5 +1,12 @@
 # Backtesting Protocol
 
+The [17 November investor clarification](investment-research-context.md#current-clarification-17-november-2026)
+and [provider assessment](provider-feasibility.md) inform portfolio monitoring,
+not permission to run historical product research. Savings/LISA observations,
+irregular contributions and a non-LISA experimental denominator do not close
+any data, product, cost, tax, FX or frozen-protocol gate. Preserve all earlier
+trials and consumed holdouts.
+
 ## Current investment protocol boundary
 
 The [current mandate](investment-research-context.md#current-long-term-investment-mandate)

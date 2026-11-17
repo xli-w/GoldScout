@@ -6,7 +6,7 @@ from investment.core import clock, iso, replay
 from investment.service import report
 
 
-def demo_opening_snapshot(now=None):
+def _demo_ledger(now):
     now = clock(now)
     opened_at = now - timedelta(days=120)
     role_at = opened_at + timedelta(hours=1)
@@ -111,4 +111,30 @@ def demo_opening_snapshot(now=None):
             product_id="bond-fund", currency="GBP", price_gbp="52",
         ),
     ])
-    return report(replay(profile, events, now), now, "demo")
+    return replay(profile, events, now)
+
+
+def demo_opening_snapshot(now=None):
+    now = clock(now)
+    return report(_demo_ledger(now), now, "demo")
+
+
+def demo_monitoring_snapshot(now=None):
+    from investment.monitoring import project
+    from investment.store import canonical, digest
+
+    now = clock(now)
+    ledger = _demo_ledger(now)
+    profile = {
+        "schema_version": 1, "portfolio_id": ledger.spec["portfolio_id"],
+        "investment_profile_sha256": digest(canonical(ledger.spec)),
+        "observed_at": iso(now), "concentration_threshold_pct": "60",
+        "accounts": [
+            {"account_id": a["id"], "provider": "etoro" if a["kind"] == "broker" else "manual",
+             "wrapper": "other", "denominator": a["kind"] == "broker",
+             "max_age_seconds": 7 * 86400, "last_reviewed_at": None,
+             "review_interval_days": 30, "evidence": "Synthetic monitoring configuration only"}
+            for a in ledger.spec["accounts"]
+        ],
+    }
+    return project(ledger, profile, now, source_mode="demo")

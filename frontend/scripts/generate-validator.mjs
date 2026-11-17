@@ -9,6 +9,7 @@ for (const [path, output] of [
   ["../../investment/response.schema.json", "../src/investment-validator.js"],
   ["../../investment/response-v2.schema.json", "../src/investment-validator-v2.js"],
   ["../../investment/awareness.schema.json", "../src/awareness-validator.js"],
+  ["../../investment/monitoring.schema.json", "../src/monitoring-validator.js"],
 ]) {
   const schema = JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
   const ajv = new Ajv2020({ strict: false, code: { source: true, esm: true, formats: _`formats` } });

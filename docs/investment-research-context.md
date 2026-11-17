@@ -1,6 +1,29 @@
 # Investment Research Context
 
-## Current long-term investment mandate
+## Current clarification: 17 November 2026
+
+The investor confirmed selected savings, a first-home Stocks and Shares LISA,
+and longer-term investments, with an approximately five-year horizon and
+irregular modest contributions. NatWest Digital Regular Saver, Moneybox S&S
+LISA and eToro are current provider examples, not hard-coded choices. A temporary
+30% loss would be uncomfortable, especially in the core; it is not an approved
+loss budget or automatic sell rule. Capital and exact risk limits remain unknown.
+
+The illustrative 10-20% experimental sleeve is measured against **investment
+holdings outside the LISA**, excluding savings and the LISA, not against all
+designated capital. It is not an implemented target/cap or authority to refill
+losses. Monitoring treats cash separately from that holdings-only denominator.
+Human approval of individual future actions comes first; standing-policy
+automation remains a separately approved future option. Current proposals and
+execution remain blocked.
+
+This clarification was recovered from work accidentally made in Trader and
+confirmed during GoldScout monitoring planning. It supersedes conflicting
+scope/denominator assumptions in the previous mandate below, not its safeguards,
+causal accounting or preserved campaign search/holdout history.
+See [provider feasibility](provider-feasibility.md) and [monitoring](monitoring.md).
+
+## Previous long-term investment mandate and retained safeguards
 
 On 2026-11-16 the investor clarified that GoldScout should manage substantial,
 designated long-term investment capital, not emergency reserves, day-to-day

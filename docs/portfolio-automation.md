@@ -1,5 +1,12 @@
 # Local portfolio awareness and observation preview
 
+The newer [monitoring slice](monitoring.md) adds deterministic local findings and
+a separate observation cache without changing awareness wire contracts.
+The [recovered provider assessment](provider-feasibility.md) supplements the
+historical discovery below; no provider has passed account-level activation.
+Follow the [current context](investment-research-context.md#current-clarification-17-november-2026)
+where its selected savings/LISA scope supersedes earlier investment-capital wording.
+
 ## Implemented boundary
 
 Portfolio awareness is a read-only local projection of an existing investment

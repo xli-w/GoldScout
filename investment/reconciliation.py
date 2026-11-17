@@ -57,6 +57,13 @@ def preview_observations(database, staged, max_age_seconds, now=None):
     if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 365 * 86400:
         raise InvestmentError("Explicit maximum observation age must be 1 to 31536000 seconds")
     ledger, now = read_with_clock(database, now)
+    return compare_observations(ledger, staged, max_age_seconds, now)
+
+
+def compare_observations(ledger, staged, max_age_seconds, now):
+    """Pure comparison against a caller's pinned replay, shared with monitoring."""
+    if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 365 * 86400:
+        raise InvestmentError("Explicit maximum observation age must be 1 to 31536000 seconds")
     if ledger.spec["schema_version"] != 2 or not ledger.opened:
         raise InvestmentError("Reconciliation requires a v2 store with opening evidence")
     fields(staged, ("schema_version", "portfolio_id", "currency", "source", "evidence",

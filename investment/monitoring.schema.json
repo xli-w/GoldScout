@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {"type": "object", "additionalProperties": false, "required": ["enabled"], "properties": {"enabled": {"const": false}}},
+    {"$ref": "#/$defs/report"}
+  ],
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 500},
+    "time": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "maybeTime": {"oneOf": [{"$ref": "#/$defs/time"}, {"type": "null"}]},
+    "decimal": {"oneOf": [{"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$", "maxLength": 300}, {"type": "null"}]},
+    "account": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account_id", "provider", "wrapper", "denominator", "freshness", "cash_gbp"],
+      "properties": {
+        "account_id": {"$ref": "#/$defs/text"}, "provider": {"$ref": "#/$defs/text"},
+        "wrapper": {"enum": ["LISA", "other", "unknown"]}, "denominator": {"type": ["boolean", "null"]},
+        "freshness": {"enum": ["fresh", "stale", "unavailable"]}, "cash_gbp": {"$ref": "#/$defs/decimal"}
+      }
+    },
+    "provider": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account_id", "provider", "readiness", "last_attempt_at", "last_attempt_status", "last_success_at", "source_as_of", "freshness", "currency", "coverage", "native_summary"],
+      "properties": {
+        "account_id": {"$ref": "#/$defs/text"}, "provider": {"$ref": "#/$defs/text"},
+        "readiness": {"enum": ["manual", "blocked_unvalidated"]},
+        "last_attempt_at": {"$ref": "#/$defs/maybeTime"}, "last_success_at": {"$ref": "#/$defs/maybeTime"},
+        "source_as_of": {"$ref": "#/$defs/maybeTime"},
+        "last_attempt_status": {"enum": ["success", "failed", null]},
+        "freshness": {"enum": ["fresh", "stale", "unavailable"]},
+        "currency": {"enum": ["GBP", "USD", "EUR", null]}, "coverage": {"enum": ["complete", "partial", "unknown"]},
+        "native_summary": {"oneOf": [
+          {"type": "null"},
+          {"type": "object", "additionalProperties": false, "required": ["credit_usd", "position_count"],
+           "properties": {"credit_usd": {"type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$", "maxLength": 100},
+                          "position_count": {"type": "integer", "minimum": 0, "maximum": 1000}}}
+        ]}
+      }
+    },
+    "finding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "rule", "rule_version", "subject", "status", "severity", "explanation", "calculation", "evidence", "recommendation"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"}, "rule": {"$ref": "#/$defs/text"}, "rule_version": {"const": 1},
+        "subject": {"$ref": "#/$defs/text"}, "status": {"enum": ["review", "unavailable"]},
+        "severity": {"const": "warning"}, "explanation": {"$ref": "#/$defs/text"},
+        "calculation": {"type": ["string", "null"], "maxLength": 500}, "evidence": {"$ref": "#/$defs/text"},
+        "recommendation": {"enum": ["review", "wait"]}
+      }
+    },
+    "report": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "schema_version", "source_mode", "portfolio_id", "portfolio_revision", "profile_hash", "generated_at", "cache_revision", "status", "dynamic_pct", "eligible_holdings_gbp", "accounts", "providers", "findings", "limitations", "affects_trading", "accounting_writes"],
+      "properties": {
+        "enabled": {"const": true}, "schema_version": {"const": 1}, "source_mode": {"enum": ["recorded", "demo"]},
+        "portfolio_id": {"$ref": "#/$defs/text"}, "portfolio_revision": {"type": "integer", "minimum": 0},
+        "profile_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "generated_at": {"$ref": "#/$defs/time"},
+        "cache_revision": {"type": ["integer", "null"], "minimum": 0}, "status": {"enum": ["attention", "not_evaluated"]},
+        "dynamic_pct": {"$ref": "#/$defs/decimal"}, "eligible_holdings_gbp": {"$ref": "#/$defs/decimal"},
+        "accounts": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/account"}},
+        "providers": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/provider"}},
+        "findings": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/finding"}},
+        "limitations": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/text"}},
+        "affects_trading": {"const": false}, "accounting_writes": {"const": false}
+      }
+    }
+  }
+}

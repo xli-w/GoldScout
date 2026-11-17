@@ -1,5 +1,12 @@
 # GoldScout Local Dashboard
 
+The [monitoring panel](monitoring.md) adds evidence-bound findings, provider
+readiness and an optional separate observation cache. In recorded mode select
+`--monitoring-profile` and optionally `--monitoring-cache` alongside the existing
+investment store. Refresh never collects, reads provider secrets or changes
+accounting. Demo mode uses synthetic monitoring. The eToro Read adapter is
+engineering-tested only; account-level activation remains gated.
+
 ## Long-term investment view
 
 The default dashboard and its account views are read-only. The separate

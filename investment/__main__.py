@@ -1,8 +1,9 @@
-"""Explicit local CLI: python -m investment. Never invokes a broker."""
+"""Investment records and local monitoring. Only explicit approved monitor-collect may make provider reads."""
 
 import argparse
 import json
 import sys
+import threading
 
 from . import InvestmentError
 from .core import clock, replay
@@ -43,6 +44,24 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     reconcile.add_argument("--database", required=True)
     reconcile.add_argument("--observations", required=True)
     reconcile.add_argument("--max-age-seconds", type=int, required=True)
+    template = commands.add_parser("monitor-template", help="print an unconfigured local monitoring profile; never collects")
+    template.add_argument("--database", required=True)
+    template.add_argument("--max-age-seconds", type=int, required=True)
+    template.add_argument("--review-interval-days", type=int, required=True)
+    for name in ("monitor", "monitor-init", "monitor-stage", "monitor-purge", "monitor-collect"):
+        command = commands.add_parser(name, help="explicit monitoring; only monitor-collect can use network")
+        command.add_argument("--database", required=True)
+        command.add_argument("--monitoring-profile", required=True)
+        command.add_argument("--cache", required=name != "monitor")
+        if name == "monitor-init":
+            command.add_argument("--retention-seconds", type=int, required=True)
+        if name == "monitor-stage":
+            command.add_argument("--attempt", required=True, help="operator-normalized attempt JSON, not provider exports")
+        if name == "monitor-collect":
+            command.add_argument("--account-id", required=True)
+            command.add_argument("--approval", required=True, help="nonsecret time-bounded operator attestation")
+            command.add_argument("--allow-network", action="store_true")
+            command.add_argument("--watch", action="store_true", help="explicit daily loop; stops on errors or approval expiry")
     acknowledge = commands.add_parser("acknowledge-review", help="record a manual review, not an order approval")
     acknowledge.add_argument("--database", required=True)
     acknowledge.add_argument("--kind", choices=("monthly", "annual"), required=True)
@@ -77,6 +96,52 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             from .reconciliation import preview_observations
             value = preview_observations(args.database, load_json(args.observations),
                                          args.max_age_seconds, requested_now)
+        elif args.command == "monitor-template":
+            from .store import canonical, digest, read_with_clock
+            from .core import iso
+            ledger, observed = read_with_clock(args.database, requested_now)
+            if (ledger.spec["schema_version"] != 2 or not ledger.opened
+                    or not 1 <= args.max_age_seconds <= 365 * 86400
+                    or not 1 <= args.review_interval_days <= 3660):
+                raise InvestmentError("Template requires an opened v2 journal and bounded explicit age/review intervals")
+            value = {
+                "schema_version": 1, "portfolio_id": ledger.spec["portfolio_id"],
+                "investment_profile_sha256": digest(canonical(ledger.spec)),
+                "observed_at": iso(observed), "concentration_threshold_pct": None,
+                "accounts": [
+                    {"account_id": a["id"], "provider": "manual", "wrapper": "unknown",
+                     "denominator": None, "max_age_seconds": args.max_age_seconds,
+                     "last_reviewed_at": None, "review_interval_days": args.review_interval_days,
+                     "evidence": "Unconfigured; operator must verify wrapper, provider and denominator locally"}
+                    for a in ledger.spec["accounts"]],
+            }
+        elif args.command.startswith("monitor"):
+            from .monitoring import monitoring_snapshot, validate_profile
+            from .monitoring_store import initialize_cache, append_attempt, purge_expired
+            from .store import read_with_clock
+            ledger, observed = read_with_clock(args.database, requested_now)
+            monitoring = load_json(args.monitoring_profile)
+            validate_profile(monitoring, ledger, observed)
+            if args.command == "monitor-init":
+                initialize_cache(args.cache, monitoring, args.retention_seconds)
+                value = {"initialized": True, "accounting_writes": False}
+            elif args.command == "monitor-stage":
+                value = {"revision": append_attempt(args.cache, monitoring, load_json(args.attempt), observed),
+                         "accounting_writes": False}
+            elif args.command == "monitor-purge":
+                value = purge_expired(args.cache, monitoring, observed)
+            elif args.command == "monitor-collect":
+                from .monitoring_runtime import collect_once
+                while True:
+                    value = collect_once(args.database, monitoring, args.cache, args.account_id,
+                                         load_json(args.approval), allow_network=args.allow_network,
+                                         now=requested_now)
+                    if not args.watch:
+                        break
+                    print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout, flush=True)
+                    threading.Event().wait(86400)
+            else:
+                value = monitoring_snapshot(args.database, args.monitoring_profile, args.cache, observed)
         elif args.command == "acknowledge-review":
             acknowledgement = acknowledge_review(args.database, args.id, args.kind,
                                                   args.reviewed_revision, args.evidence, requested_now)
@@ -97,6 +162,9 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     except InvestmentError as exc:
         print(f"InvestmentError: {exc}", file=stderr)
         return 2
+    except KeyboardInterrupt:
+        print("Command interrupted. Preserve any earlier commit receipts; monitoring never changes accounts.", file=stderr)
+        return 130
 
 
 if __name__ == "__main__":

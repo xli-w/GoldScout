@@ -40,6 +40,17 @@ These are development contracts, not a certification of live readiness. Current 
 
 ## Separate GBP Investment Path
 
+- The [17 November context](investment-research-context.md#current-clarification-17-november-2026)
+  clarifies selected savings, first-home LISA and investments. The illustrative
+  dynamic denominator is non-LISA investment holdings, excluding savings, LISA
+  and cash in the monitoring calculation. It does not approve any target or
+  loss budget. Prior scope statements below are historical where inconsistent.
+- Monitoring is a local read-only projection; its separately initialized,
+  purgeable observation cache is not accounting authority. Collection requires
+  explicit activation and account/permission/retention approval, never a browser
+  refresh. Native-currency evidence cannot manufacture GBP valuation, and
+  failed collection cannot refresh source clocks or repair journal differences.
+
 - Product scope is designated substantial long-term investment capital, not
   household cash/emergency budgeting; see the [current mandate](investment-research-context.md).
   The [core-plus-dynamic direction](decisions/0004-core-dynamic-portfolio-manager.md)
