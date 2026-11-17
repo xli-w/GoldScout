@@ -203,10 +203,19 @@ holdings at one defensible effective time. Unknown prices remain unknown, and
 late evidence may leave the baseline unavailable. Time inputs use the computer's
 local timezone and are stored as UTC.
 
-**Accounts and products cannot currently be added to an existing journal.**
-Review the initial scope carefully. The policy stays null and roles start
-unassigned. There is no provider connection, allocation approval or trading.
-Monitoring and its separate stores can be configured later.
+An existing journal can append product definitions, rename accounts/products,
+retire zero-exposure accounts/products, and add an account through a separate
+scope-addition record. Account and product IDs, bindings, currency, product
+classification and quantity rules remain immutable; retirement preserves the
+identity and all prior evidence. An account can be retired only with zero cash
+and holdings, and a product only with zero holdings. Adding a funded account
+requires exact balances for the full active scope and contemporaneous prices
+for every existing and new holding. The added account value is unitization
+neutral, is not an external contribution, and requires an existing valid
+performance baseline. Incomplete or inconsistent snapshots are refused.
+The policy stays null and roles start unassigned. There is no provider
+connection, allocation approval or trading. Monitoring and its separate
+stores can be configured later.
 
 Unsubmitted drafts exist only in browser memory and disappear on reload or
 navigation away. Preview state is held only by the local server and expires after
@@ -230,8 +239,17 @@ the server with Ctrl+C and restart:
 ```
 
 Open `http://127.0.0.1:8765/investment/record`. Setup does not enable recording;
-the separate launch flag is still required. See the [journal lifecycle guide](investment-journal.md) for private
-storage, partial-completion behavior, backups and recovery.
+the separate launch flag is still required. If using a different workspace or
+an explicitly selected journal, retain its original `--workspace` or
+`--investment-database` selection when restarting.
+
+The v2 overview's **Next steps** panel highlights recorded valuation and
+baseline gaps, cash observations and fixed-scope limits. It uses the existing
+snapshot; it does not verify balances, infer missing history, set a freshness
+threshold or establish that a backup exists. Review the dated evidence rather
+than treating the panel as an all-clear. Its demo version is synthetic.
+See the [journal lifecycle guide](investment-journal.md) for private storage,
+partial-completion behavior, explicit backups and restore rehearsals.
 
 ### Starting a local v2 journal manually
 
@@ -398,13 +416,19 @@ unknown opening price, which leaves its valuation incomplete rather than
 inventing a value. A cash observation remains separate evidence: a discrepancy
 is shown, not applied as a balance adjustment.
 
-The only browser correction is an append-only replacement of the amount in the
-immediately latest contribution, withdrawal or interest event. The original
-event remains in the audit history; the correction retains its effective time
-and records when the correction became available. Opening entries, fills,
-marks, observations, older events and event identity cannot be corrected this
-way. Corrections do not reconcile statement discrepancies automatically.
-Review acknowledgements and cash-only valuation confirmations remain CLI-only.
+Browser corrections are append-only and may replace fields in a recorded
+contribution, withdrawal, transfer, interest, dividend, buy, sell, split or
+mark. The replacement keeps the original effective time and records when the
+new evidence became available; the original payload and its availability remain
+in the journal. The complete downstream replay must still satisfy cash,
+quantity, role and valuation invariants or the correction is refused. Opening
+records, profile/scope changes, role assignments, cash observations and review
+attestations are not correctable. A historical correction always makes
+performance unavailable, even when the revised replay is valid; the system
+does not automatically establish a new baseline. A complete current valuation
+may also remain unavailable until new contemporaneous evidence is recorded.
+Corrections do not reconcile statement discrepancies automatically. Review
+acknowledgements and cash-only valuation confirmations remain CLI-only.
 
 ### Version 2 management-role accounting
 
@@ -947,8 +971,8 @@ following remain unsupported/unverified:
 - Historical source rights/vintages and full product/action/FX/cash-rate coverage.
 - Executed FX, non-GBP account balances, settlement-specific broker funding.
 - Distribution entitlement/payment reconciliation, automatic cash interest/tier/
-  term accrual, corrections beyond the immediately latest contribution,
-  withdrawal or interest amount, and operational migrations.
+  term accrual, corrections to opening/profile/scope/role-assignment/observation/
+  review records, and operational migrations.
 - Money-weighted return, inflation, tax scenarios, matched savings/passive curves
   and dated look-through concentration.
 - Validated spread/slippage/quote/cost models for executable proposals.

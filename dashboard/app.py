@@ -247,7 +247,9 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     def investment_recording_session(request: Request):
         if investment_recording is None:
             return {"enabled": False, "csrf": None,
-                    "accounts": [], "products": [], "latest_correctable_event": None}
+                    "accounts": [], "products": [], "latest_correctable_event": None,
+                    "correctable_events": [], "current_balances": {},
+                    "current_holdings": [], "opened": False}
         from dashboard.investment_recording import RecordingError
 
         try:

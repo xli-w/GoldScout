@@ -2,6 +2,7 @@
 
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, localcontext, InvalidOperation
+from copy import deepcopy
 import json
 import re
 
@@ -175,6 +176,8 @@ EVENT_FIELDS = {
 }
 
 CORRECTABLE_CASH_EVENTS = {"contribution", "withdrawal", "interest"}
+CORRECTABLE_EVENTS = set(EVENT_FIELDS) | {"dividend"}
+CORRECTABLE_EVENTS.discard("role_assignment")
 
 
 def event(value, spec, now):
@@ -217,15 +220,16 @@ def event(value, spec, now):
             raise InvestmentError("Invalid correction evidence clock")
         replacement = value["replacement_event"]
         if (not isinstance(replacement, dict) or
-                replacement.get("type") not in CORRECTABLE_CASH_EVENTS):
-            raise InvestmentError("Only latest cash flows and interest can be corrected")
+                replacement.get("type") not in CORRECTABLE_EVENTS):
+            raise InvestmentError("This event type is not eligible for correction")
         event(replacement, spec, now)
-        if (replacement["timestamp"] != value["timestamp"] or
+        if (replacement["timestamp"] > value["timestamp"] or
                 replacement["available_at"] != value["available_at"] or
                 replacement["evidence"] != value["evidence"] or
                 replacement["id"] == value["original_event_id"] or
                 replacement["id"] == value["id"]):
-            raise InvestmentError("Correction replacement must use the correction evidence clock")
+            raise InvestmentError("Correction replacement must preserve its effective clock "
+                                  "and use the correction evidence clock")
         return value
     if isinstance(value, dict) and value.get("type") == "opening":
         if spec["schema_version"] != 2:
@@ -260,6 +264,93 @@ def event(value, spec, now):
                 raise InvestmentError("Opening quantity is not an exact product increment")
             if holding["price_gbp"] is not None:
                 number(holding["price_gbp"], positive=True)
+        return value
+    if isinstance(value, dict) and value.get("type") == "profile_change":
+        if spec["schema_version"] != 2:
+            raise InvestmentError("Profile amendments require an explicit version 2 store")
+        common = ("id", "type", "timestamp", "available_at", "evidence", "action")
+        text(value.get("id"))
+        text(value.get("evidence"))
+        timestamp, available = clock(value.get("timestamp")), clock(value.get("available_at"))
+        if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
+            raise InvestmentError("Profile amendments require a contemporaneous evidence clock")
+        action = value.get("action")
+        candidate = deepcopy(spec)
+        if action == "add_product":
+            fields(value, common + ("product",))
+            candidate["products"].append(value["product"])
+        elif action == "rename":
+            fields(value, common + ("target", "entity_id", "name"))
+            target, entity_id = value["target"], text(value["entity_id"])
+            text(value["name"])
+            if target == "account":
+                entities = candidate["accounts"]
+            elif target == "product":
+                entities = candidate["products"]
+            else:
+                raise InvestmentError("Profile rename target must be an account or product")
+            entity = next((item for item in entities if item["id"] == entity_id), None)
+            if entity is None:
+                raise InvestmentError("Unknown profile identity")
+            entity["name"] = value["name"]
+        elif action == "retire":
+            fields(value, common + ("target", "entity_id"))
+            target, entity_id = value["target"], text(value["entity_id"])
+            if target == "account":
+                entities = candidate["accounts"]
+            elif target == "product":
+                entities = candidate["products"]
+            else:
+                raise InvestmentError("Profile retirement target must be an account or product")
+            if not any(item["id"] == entity_id for item in entities):
+                raise InvestmentError("Unknown profile identity")
+        else:
+            raise InvestmentError("Unsupported profile amendment")
+        profile(candidate)
+        return value
+    if isinstance(value, dict) and value.get("type") == "scope_addition":
+        if spec["schema_version"] != 2:
+            raise InvestmentError("Scope additions require an explicit version 2 store")
+        fields(value, ("id", "type", "timestamp", "available_at", "evidence",
+                       "account", "balances_gbp", "holdings"))
+        for key in ("id", "evidence"):
+            text(value[key])
+        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
+            raise InvestmentError("Scope additions require complete contemporaneous evidence")
+        candidate = deepcopy(spec)
+        account = value["account"]
+        if (not isinstance(account, dict) or set(account) !=
+                {"id", "name", "kind", "binding", "currency"}):
+            raise InvestmentError("Scope addition requires a new immutable account identity")
+        candidate["accounts"].append(account)
+        profile(candidate)
+        balances = value["balances_gbp"]
+        account_ids = {item["id"] for item in candidate["accounts"]}
+        if (not isinstance(balances, dict) or account["id"] not in balances or
+                not set(balances) <= account_ids):
+            raise InvestmentError("Scope addition requires every account balance")
+        if any(not isinstance(amount, str) or not RECORDED_BALANCE.fullmatch(amount)
+               or Decimal(amount) > Decimal("1e24") for amount in balances.values()):
+            raise InvestmentError("Invalid exact scope-addition cash balance")
+        holdings = value["holdings"]
+        if not isinstance(holdings, list) or len(holdings) > 5000:
+            raise InvestmentError("Scope-addition holdings exceed the supported bound")
+        accounts = {item["id"]: item for item in candidate["accounts"]}
+        products = {item["id"]: item for item in candidate["products"]}
+        seen = set()
+        for holding in holdings:
+            fields(holding, ("account_id", "product_id", "quantity", "price_gbp"))
+            account_id, product_id = holding["account_id"], holding["product_id"]
+            if (account_id not in accounts or accounts[account_id]["kind"] != "broker"
+                    or product_id not in products or (account_id, product_id) in seen):
+                raise InvestmentError("Invalid or duplicate scope-addition holding")
+            seen.add((account_id, product_id))
+            quantity = number(holding["quantity"], positive=True)
+            increment = number(products[product_id]["quantity_increment"], positive=True)
+            if quantity % increment:
+                raise InvestmentError("Scope-addition quantity is not an exact product increment")
+            number(holding["price_gbp"], positive=True)
         return value
     if isinstance(value, dict) and value.get("type") == "cash_observation":
         if spec["schema_version"] != 2:
@@ -383,20 +474,32 @@ class Ledger:
     """Replay from empty inception; exact cash/holdings, conservative performance."""
 
     def __init__(self, spec):
-        self.spec = profile(spec)
-        self.cash = {a["id"]: ZERO for a in spec["accounts"]}
+        self.spec = deepcopy(profile(spec))
+        self.cash = {a["id"]: ZERO for a in self.spec["accounts"]}
         self.holdings = {}
         self.marks = {}
         self.cash_observations = {}
         self.cash_observation_history = {}
-        self.account_terms = {a["id"]: a.get("terms") for a in spec["accounts"]}
+        self.account_terms = {a["id"]: a.get("terms") for a in self.spec["accounts"]}
         self.updated_account_terms = set()
         self.terms_last_time = clock(spec["created_at"])
         self.terms_latest_available_at = self.terms_last_time
         self.net = ZERO
         self.fees = ZERO
+        self.active_accounts = {a["id"] for a in self.spec["accounts"]}
+        self.active_products = {p["id"] for p in self.spec["products"]}
+        self.retired_accounts = set()
+        self.retired_products = set()
+        self.profile_revision = 0
+        self.profile_history = []
+        self.scope_additions = ZERO
+        self.scope_addition_history = []
+        self.historical_correction = False
+        self.correction_available_at = self.terms_last_time
+        self.baseline_suppressed = False
         self.revision = 0
         self.last_time = clock(spec["created_at"])
+        self.profile_last_time = self.last_time
         self.cash_valuation_at = self.last_time
         self.ids = {}
         self.units = ZERO
@@ -413,6 +516,7 @@ class Ledger:
             self.baseline_at = None
             self.baseline_value = None
             self.baseline_net = None
+            self.baseline_scope_additions = ZERO
             self.valuation_history = []
             self.superseded_ids = set()
             self.role_active = False
@@ -472,10 +576,11 @@ class Ledger:
     def checkpoint(self, timestamp):
         total, _ = self.valuation(timestamp)
         if self.spec["schema_version"] == 2 and self.baseline_at is None:
-            if total is not None:
+            if total is not None and not self.baseline_suppressed:
                 self.baseline_at = timestamp
                 self.baseline_value = total
                 self.baseline_net = self.net
+                self.baseline_scope_additions = self.scope_additions
                 self.units = total
                 self.unit_price = Decimal(1)
                 self.performance_valid = True
@@ -499,13 +604,16 @@ class Ledger:
         capital_basis = None
         twr = None
         drawdown = None
-        if complete:
-            capital_basis = self.baseline_value + self.net - self.baseline_net
+        if complete and not self.historical_correction:
+            capital_basis = (self.baseline_value + self.net - self.baseline_net +
+                             self.scope_additions - self.baseline_scope_additions)
             gain = equity - capital_basis
             if self.performance_valid and self.units > 0 and self.baseline_at is not None:
                 twr = (self.unit_price - 1) * 100
                 drawdown = -self.drawdown * 100
-        if available_at > at:
+        if self.historical_correction:
+            gap_reason = "Historical correction invalidated performance evidence; no new baseline was established."
+        elif available_at > at:
             gap_reason = "Some valuation evidence became available after this event clock."
         elif not complete:
             gap_reason = "A complete contemporaneous valuation is unavailable."
@@ -538,9 +646,20 @@ class Ledger:
         for key in ("cash", "holdings", "marks", "ids", "cash_observations",
                     "account_terms"):
             saved[key] = saved[key].copy()
+        saved["spec"] = deepcopy(self.spec)
+        saved["active_accounts"] = self.active_accounts.copy()
+        saved["active_products"] = self.active_products.copy()
+        saved["retired_accounts"] = self.retired_accounts.copy()
+        saved["retired_products"] = self.retired_products.copy()
+        saved["profile_history"] = self.profile_history.copy()
+        saved["scope_addition_history"] = self.scope_addition_history.copy()
         if self.spec["schema_version"] == 2:
             saved["role_cash"] = self.role_cash.copy()
             saved["role_holdings"] = self.role_holdings.copy()
+        saved["historical_correction"] = self.historical_correction
+        saved["scope_additions"] = self.scope_additions
+        saved["scope_addition_history"] = self.scope_addition_history.copy()
+        saved["profile_history"] = self.profile_history.copy()
         saved["updated_account_terms"] = saved["updated_account_terms"].copy()
         saved["cash_observation_history"] = {
             account: observations.copy()
@@ -562,9 +681,12 @@ class Ledger:
         timestamp = clock(value["timestamp"])
         order_time = max(self.last_time, self.monthly_review_at or self.last_time)
         if self.spec["schema_version"] == 2:
-            order_time = max(order_time, self.terms_last_time, self.role_last_time)
+            order_time = max(order_time, self.terms_last_time, self.role_last_time,
+                             self.profile_last_time)
         if timestamp < order_time:
-            raise InvestmentError("Events must be timestamp ordered; no corrections")
+            raise InvestmentError("Events must be timestamp ordered")
+        if self.historical_correction and self.correction_available_at > timestamp:
+            raise InvestmentError("Prior correction evidence was not available at this event clock")
         kind = value["type"]
         if kind != "cash_observation" and any(
                 clock(observation["timestamp"]) == timestamp
@@ -595,6 +717,132 @@ class Ledger:
             return True
         if self.spec["schema_version"] == 2 and not self.opened:
             raise InvestmentError("Explicit opening evidence is required before other events")
+        if self.spec["schema_version"] == 2 and kind not in (
+                "profile_change", "scope_addition", "correction"):
+            account_id = value.get("account_id")
+            product_id = value.get("product_id")
+            destination = value.get("destination_account_id")
+            if (account_id is not None and account_id not in self.active_accounts or
+                    product_id is not None and product_id not in self.active_products or
+                    destination is not None and destination not in self.active_accounts):
+                raise InvestmentError("Events cannot use a retired account or product")
+        if self.spec["schema_version"] == 2 and kind == "profile_change":
+            if max(self.latest_available_at, self.terms_latest_available_at) > timestamp:
+                raise InvestmentError("Prior evidence was not available at the profile-change clock")
+            action = value["action"]
+            if action == "add_product":
+                self.spec["products"].append(deepcopy(value["product"]))
+                self.active_products.add(value["product"]["id"])
+            elif action == "rename":
+                collection = (self.spec["accounts"] if value["target"] == "account"
+                              else self.spec["products"])
+                entity = next(item for item in collection if item["id"] == value["entity_id"])
+                entity["name"] = value["name"]
+            elif action == "retire":
+                entity_id = value["entity_id"]
+                if value["target"] == "account":
+                    if (self.cash[entity_id] != 0 or any(
+                            account == entity_id and quantity != 0
+                            for (account, _), quantity in self.holdings.items())):
+                        raise InvestmentError("Account retirement requires zero cash and holdings")
+                    self.active_accounts.remove(entity_id)
+                    self.retired_accounts.add(entity_id)
+                else:
+                    if any(product == entity_id and quantity != 0
+                           for (_, product), quantity in self.holdings.items()):
+                        raise InvestmentError("Product retirement requires zero holdings")
+                    self.active_products.remove(entity_id)
+                    self.retired_products.add(entity_id)
+            self.profile_revision += 1
+            self.profile_history.append(value.copy())
+            self.ids[value["id"]] = value.copy()
+            self.revision += 1
+            self.profile_last_time = timestamp
+            return True
+        if self.spec["schema_version"] == 2 and kind == "scope_addition":
+            if max(self.latest_available_at, self.terms_latest_available_at) > timestamp:
+                raise InvestmentError("Prior evidence was not available at the scope-addition clock")
+            if any(item["product_id"] not in self.active_products
+                   for item in value["holdings"]):
+                raise InvestmentError("Scope addition cannot use a retired product")
+            account = value["account"]
+            account_id = account["id"]
+            if account_id in self.active_accounts:
+                raise InvestmentError("Scope addition account identity already exists")
+            balances = value["balances_gbp"]
+            expected_accounts = self.active_accounts | {account_id}
+            if set(balances) != expected_accounts:
+                raise InvestmentError("Scope addition requires every active account balance")
+            if any(Decimal(balances[item]) != amount for item, amount in self.cash.items()
+                   if item in self.active_accounts):
+                raise InvestmentError("Scope addition cash snapshot differs from recorded balances")
+            supplied = {
+                (item["account_id"], item["product_id"]): item
+                for item in value["holdings"]
+            }
+            existing = {
+                key: amount for key, amount in self.holdings.items()
+                if amount > 0 and key[0] in self.active_accounts
+            }
+            new_holdings = {
+                key: item for key, item in supplied.items() if key[0] == account_id
+            }
+            if any(supplied.get(key, {}).get("quantity") != fmt(amount)
+                   for key, amount in existing.items()):
+                raise InvestmentError("Scope addition holdings differ from recorded quantities")
+            if set(supplied) != set(existing) | set(new_holdings):
+                raise InvestmentError("Scope addition must cover all existing and added holdings")
+            if not self.baseline_at or not self.performance_valid or self.units <= 0:
+                raise InvestmentError("Scope addition requires an existing valid performance baseline")
+            before = sum((self.cash[item] for item in self.active_accounts), ZERO)
+            for key, amount in existing.items():
+                before += amount * number(supplied[key]["price_gbp"], positive=True)
+            addition = Decimal(balances[account_id])
+            for key, item in new_holdings.items():
+                addition += number(item["quantity"], positive=True) * number(
+                    item["price_gbp"], positive=True)
+            if before <= 0 or before + addition > Decimal("1e24"):
+                raise InvestmentError("Scope addition requires bounded positive prior equity")
+            if addition > Decimal("1e24"):
+                raise InvestmentError("Scope addition exceeds the accounting bound")
+            previous_units, previous_price = self.units, self.unit_price
+            self.observe(before)
+            previous_price = self.unit_price
+            self.spec["accounts"].append(deepcopy(account))
+            self.active_accounts.add(account_id)
+            self.cash[account_id] = Decimal(balances[account_id])
+            self.account_terms[account_id] = None
+            for key, item in supplied.items():
+                self.marks[key] = (
+                    number(item["price_gbp"], positive=True), timestamp, timestamp)
+            for key, item in new_holdings.items():
+                self.holdings[key] = number(item["quantity"], positive=True)
+            if self.role_active:
+                self.role_cash[(account_id, "unassigned")] = self.cash[account_id]
+                for key, item in new_holdings.items():
+                    self.role_holdings[(*key, "unassigned")] = number(
+                        item["quantity"], positive=True)
+                self.role_last_time = timestamp
+            after = before + addition
+            self.scope_additions += addition
+            self.units = previous_units * after / before
+            self.unit_price = previous_price
+            self.cash_valuation_at = timestamp
+            self.last_time = timestamp
+            self.latest_available_at = timestamp
+            self.profile_revision += 1
+            self.profile_history.append(value.copy())
+            self.scope_addition_history.append({
+                "id": value["id"], "account_id": account_id,
+                "amount_gbp": fmt(addition), "timestamp": value["timestamp"],
+                "available_at": value["available_at"], "evidence": value["evidence"],
+            })
+            self.ids[value["id"]] = value.copy()
+            self.revision += 1
+            self.observe(after)
+            if self.spec["schema_version"] == 2 and after > Decimal("1e24"):
+                raise InvestmentError("Scope-addition valuation exceeds the accounting bound")
+            return True
         if kind == "role_assignment":
             if max(self.latest_available_at, self.terms_latest_available_at) > timestamp:
                 raise InvestmentError("Prior evidence was not available at the attribution clock")
@@ -796,6 +1044,88 @@ class Ledger:
         return True
 
 
+def _replay_corrected_prefix(spec, prefix, correction, ledger, now):
+    event(correction, ledger.spec, now)
+    latest_ordered = max(
+        ledger.last_time, ledger.monthly_review_at or ledger.last_time,
+        ledger.terms_last_time, ledger.role_last_time, ledger.profile_last_time)
+    if clock(correction["timestamp"]) < latest_ordered:
+        raise InvestmentError("Historical correction must not predate the latest event")
+    by_id = {}
+    replacements = {}
+    superseded = set()
+    corrections = []
+    for source in prefix[:-1]:
+        if source.get("type") != "correction":
+            by_id[source["id"]] = source
+            continue
+        prior = by_id.get(source["original_event_id"])
+        replacement = source["replacement_event"]
+        if (prior is None or prior["id"] in superseded or
+                prior.get("type") not in CORRECTABLE_EVENTS or
+                replacement["type"] != prior["type"] or
+                replacement["timestamp"] != prior["timestamp"] or
+                replacement["id"] in by_id or replacement["id"] in replacements):
+            raise InvestmentError("Correction target or replacement is not eligible")
+        replacements[prior["id"]] = replacement
+        superseded.add(prior["id"])
+        by_id[replacement["id"]] = replacement
+        corrections.append(source)
+
+    original = by_id.get(correction["original_event_id"])
+    replacement = correction["replacement_event"]
+    if (original is None or original["id"] in superseded or
+            original.get("type") not in CORRECTABLE_EVENTS or
+            replacement["type"] != original["type"] or
+            replacement["timestamp"] != original["timestamp"] or
+            replacement["id"] in by_id or replacement["id"] in replacements):
+        raise InvestmentError("Correction target or replacement is not eligible")
+    replacements[original["id"]] = replacement
+    superseded.add(original["id"])
+    corrections.append(correction)
+
+    effective = []
+    for source in prefix:
+        if source.get("type") == "correction":
+            continue
+        current = source
+        visited = set()
+        while current["id"] in replacements:
+            if current["id"] in visited:
+                raise InvestmentError("Correction chain contains a cycle")
+            visited.add(current["id"])
+            current = replacements[current["id"]]
+        effective.append(current)
+
+    rebuilt = replay(spec, effective, now)
+    rebuilt.baseline_at = ledger.baseline_at
+    rebuilt.baseline_value = ledger.baseline_value
+    rebuilt.baseline_net = ledger.baseline_net
+    rebuilt.baseline_scope_additions = ledger.baseline_scope_additions
+    rebuilt.baseline_suppressed = ledger.baseline_suppressed or ledger.baseline_at is None
+    rebuilt.historical_correction = True
+    rebuilt.performance_valid = False
+    rebuilt.correction_available_at = max(
+        ledger.correction_available_at, clock(correction["available_at"]))
+    rebuilt.last_time = max(rebuilt.last_time, clock(correction["timestamp"]))
+    rebuilt.latest_available_at = max(
+        rebuilt.latest_available_at, rebuilt.correction_available_at)
+    rebuilt.revision = len(prefix)
+    rebuilt.superseded_ids = superseded
+    rebuilt.ids = {}
+    for source in prefix:
+        rebuilt.ids[source["id"]] = source.copy()
+    for item in corrections:
+        rebuilt.ids[item["replacement_event"]["id"]] = item["replacement_event"].copy()
+    for point in rebuilt.valuation_history:
+        point["gain_since_baseline_gbp"] = None
+        point["twr_pct"] = None
+        point["max_drawdown_pct"] = None
+        point["gap_reason"] = (
+            "Historical correction invalidated performance evidence; no new baseline was established.")
+    return rebuilt
+
+
 def replay(spec, events, now=None, on_revision=None):
     now = clock(now)
     if not isinstance(events, list) or len(events) > MAX_EVENTS:
@@ -815,9 +1145,9 @@ def replay(spec, events, now=None, on_revision=None):
             unpriced_flow_holdings = set()
             last_event = None
             last_reversible = None
-            for value in events:
+            for index, value in enumerate(events):
                 if isinstance(value, dict) and value.get("id") in ledger.ids:
-                    event(value, spec, now)
+                    event(value, ledger.spec, now)
                     if json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) != json.dumps(
                             ledger.ids[value["id"]], sort_keys=True, separators=(",", ":"), allow_nan=False):
                         raise InvestmentError("Conflicting duplicate event")
@@ -829,7 +1159,7 @@ def replay(spec, events, now=None, on_revision=None):
                     unpriced_flow_holdings = set()
                 kind = value.get("type") if isinstance(value, dict) else None
                 metadata_only = (isinstance(value, dict) and
-                                 kind in ("savings_terms", "role_assignment"))
+                                 kind in ("savings_terms", "role_assignment", "profile_change"))
                 valuation_event = (not metadata_only and isinstance(value, dict) and
                                    kind != "cash_observation")
                 if isinstance(value, dict) and kind == "review_acknowledgement":
@@ -844,47 +1174,17 @@ def replay(spec, events, now=None, on_revision=None):
                     if history_relevant:
                         ledger.record_valuation(previous)
                 if kind == "correction":
-                    event(value, spec, now)
-                    replacement = value["replacement_event"]
-                    original = last_event
-                    if (last_reversible is None or original is None or
-                            original["id"] != value["original_event_id"] or
-                            replacement["id"] in ledger.ids or
-                            value["id"] in ledger.ids or
-                            original.get("type") not in CORRECTABLE_CASH_EVENTS or
-                            replacement["type"] != original["type"] or
-                            replacement["account_id"] != original["account_id"] or
-                            timestamp != clock(original["timestamp"])):
-                        raise InvestmentError("Only the latest cash flow or interest event can be corrected")
-                    unchanged = {key: item for key, item in replacement.items()
-                                 if key not in ("id", "available_at", "evidence", "amount_gbp")}
-                    original_unchanged = {key: item for key, item in original.items()
-                                          if key not in ("id", "available_at", "evidence", "amount_gbp")}
-                    if unchanged != original_unchanged:
-                        raise InvestmentError("Corrections may change only the recorded amount")
-                    state = last_reversible
-                    ledger.cash[original["account_id"]] = state["cash"]
-                    ledger.role_cash = state["role_cash"].copy()
-                    ledger.role_holdings = state["role_holdings"].copy()
-                    ledger.role_active = state["role_active"]
-                    ledger.role_last_time = state["role_last_time"]
-                    for name, saved in state["scalars"].items():
-                        setattr(ledger, name, saved)
-                    del ledger.valuation_history[state["history_length"]:]
-                    ledger.apply(replacement, now)
-                    ledger.revision += 1
-                    ledger.ids[value["id"]] = value.copy()
-                    ledger.superseded_ids.add(original["id"])
+                    ledger = _replay_corrected_prefix(
+                        spec, events[:index + 1], value, ledger, now)
                     if on_revision is not None:
                         on_revision(ledger, previous)
                     last_event = value
                     last_reversible = None
-                    if not metadata_only:
-                        if timestamp != previous:
-                            history_relevant = valuation_event
-                        elif valuation_event:
-                            history_relevant = True
-                        previous = timestamp
+                    previous = ledger.last_time
+                    group_timestamp = previous
+                    history_relevant = True
+                    same_clock_income = False
+                    unpriced_flow_holdings.clear()
                     continue
                 if (spec["schema_version"] == 2 and kind in
                         ("contribution", "withdrawal")):

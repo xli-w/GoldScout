@@ -87,7 +87,7 @@ These are development contracts, not a certification of live readiness. Current 
   journal cannot submit orders, reserve cash or update investment accounting.
   An ambiguous submission cannot be retried or adopted in the trace. Do not
   connect it to a broker or use it as an execution gate.
-- The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; readers never create, migrate, repair, or mutate it. The default dashboard's narrow setup capability requires terminal-issued authorization, a bound preview and explicit confirmation before creating a new v2 journal; ordinary startup/status/preview creates no files. Existing or invalid stores are never overwritten or repaired, and setup never grants ongoing recording authority. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
+- The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; readers never create, migrate, repair, or mutate it. The default dashboard's narrow setup capability has no user login; it requires a same-origin, CSRF-protected session, a bound preview and explicit confirmation before creating a new v2 journal. These browser defenses are not authentication; ordinary startup/status/preview creates no files. Existing or invalid stores are never overwritten or repaired, and setup never grants ongoing recording authority. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
 - The [investment backup and restore commands](investment-journal.md) copy a
   pinned, validated journal using SQLite in an operator-controlled directory,
   validate copied evidence, commit boundaries and replay, and publish to a new
@@ -101,8 +101,12 @@ These are development contracts, not a certification of live readiness. Current 
   common valuation whose evidence was available at that clock. V2 is
   operator-recorded by CLI or explicitly enabled local dashboard, with no
   allocation policy, review approval, proposal export or migration. No v2
-  freshness threshold is configured. Never infer FX, entitlement, unrecorded
-  interest or distributions; corrections remain narrowly evidence-backed.
+  freshness threshold is configured. Never infer FX, entitlement or unrecorded
+  interest/distributions. V2 profile amendments are append-only; identity,
+  account binding/currency and product classification/quantity rules are
+  immutable. Retirement requires zero exposure. A funded account scope addition
+  requires complete same-clock balances and held-position prices, is unitization
+  neutral rather than an external flow, and requires an existing valid baseline.
 - V2 cash observations are separate append-only evidence, never balance mutations.
   Calculate any difference against recorded cash at that observation clock; preserve
   the dated discrepancy and evidence source. A statement observation cannot refresh
@@ -134,9 +138,14 @@ These are development contracts, not a certification of live readiness. Current 
   authentication. Writes are same-origin, CSRF-protected, previewed and revision-bound.
   Stale revisions fail closed. Browser sessions/previews are temporary and no
   browser path contacts a bank/broker, moves funds, approves orders or executes
-  trades. Corrections are append-only and limited to the amount of the
-  immediately latest contribution, withdrawal or interest event; statement
-  observations remain evidence and are never automatic balance corrections.
+  trades. Corrections may replace supported financial-event facts only by
+  appending evidence and replaying all downstream events; invalid cash,
+  quantity, role or chronology state is refused. Original payload and
+  availability are retained. Historical corrections invalidate performance
+  and never establish a new baseline automatically. Opening records,
+  profile/scope events, role assignments, observations and review attestations
+  are not correctable; observations remain separate evidence and never
+  automatically adjust balances.
 - Dashboard monitoring inbox reads never initialize or sync the explicitly
   selected review store. Review actions require the separate
   monitoring-workflow opt-in, a current report sync, exact portfolio,

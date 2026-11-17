@@ -407,6 +407,119 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(report["recorded_corrections"][0]["original_event_id"],
                          "recorded-contribution")
 
+    def test_profile_change_and_scope_addition_recording_previews_are_schema_valid(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        import_events(self.path, [opening()], self.now)
+        rename_at = OPENING_NOW + timedelta(hours=1)
+        self.now = rename_at
+        with self.client(
+                investment_database=self.path,
+                investment_recording_enabled=True) as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            rename = {
+                "id": "rename-equity", "type": "profile_change",
+                "timestamp": iso(rename_at), "available_at": iso(rename_at),
+                "evidence": "Synthetic product documentation", "action": "rename",
+                "target": "product", "entity_id": "equity", "name": "Renamed equity",
+            }
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "rename-equity", "event": rename}, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["after"]["recorded_profile_changes"][0]["name"],
+                             "Renamed equity")
+            self.assertEqual(preview.json()["after"]["since_baseline_gain_gbp"], "0")
+            receipt = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(receipt.status_code, 200, receipt.text)
+
+            scope_at = rename_at + timedelta(hours=1)
+            self.now = scope_at
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers["X-CSRF-Token"] = session["csrf"]
+            self.assertEqual(session["products"][0]["name"], "Renamed equity")
+            scope = {
+                "id": "add-scope", "type": "scope_addition",
+                "timestamp": iso(scope_at), "available_at": iso(scope_at),
+                "evidence": "Synthetic common-clock statements",
+                "account": {"id": "scope", "name": "Additional broker", "kind": "broker",
+                            "binding": "scope-test", "currency": "GBP"},
+                "balances_gbp": {"bank": "1000", "broker": "100", "scope": "10"},
+                "holdings": [
+                    {"account_id": "broker", "product_id": "equity", "quantity": "50",
+                     "price_gbp": "10"},
+                    {"account_id": "broker", "product_id": "bond", "quantity": "20",
+                     "price_gbp": "20"},
+                    {"account_id": "scope", "product_id": "equity", "quantity": "2",
+                     "price_gbp": "5"},
+                ],
+            }
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "add-scope", "event": scope}, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["after"]["recorded_scope_additions_gbp"], "20")
+            self.assertEqual(preview.json()["after"]["net_contributions_gbp"], "0")
+            receipt = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(receipt.status_code, 200, receipt.text)
+            result = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(result.status_code, 200, result.text)
+
+        report = result.json()
+        self.assertEqual(report["recorded_scope_additions_gbp"], "20")
+        self.assertEqual(report["net_contributions_gbp"], "0")
+        self.assertEqual(report["accounts"][-1]["id"], "scope")
+
+    def test_opt_in_non_cash_historical_correction_invalidates_performance(self):
+        self.now = OPENING_NOW
+        initialize(self.path, profile(), self.now)
+        marked_at = OPENING_NOW + timedelta(hours=1)
+        mark = event("historical-mark", "mark", marked_at, "broker",
+                     product_id="equity", price_gbp="11")
+        import_events(self.path, [opening(), mark], marked_at)
+
+        corrected_at = marked_at + timedelta(days=1)
+        self.now = corrected_at
+        replacement = dict(
+            mark, id="replacement-mark", price_gbp="12",
+            available_at=iso(corrected_at), evidence="Synthetic corrected mark evidence")
+        correction = {
+            "id": "correction-mark", "type": "correction",
+            "timestamp": iso(corrected_at), "available_at": iso(corrected_at),
+            "evidence": "Synthetic corrected mark evidence",
+            "original_event_id": mark["id"], "replacement_event": replacement,
+        }
+        with self.client(
+                investment_database=self.path,
+                investment_recording_enabled=True) as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "correct-historical-mark", "event": correction},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertIsNone(preview.json()["after"]["since_baseline_gain_gbp"])
+            receipt = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(receipt.status_code, 200, receipt.text)
+            result = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(result.status_code, 200, result.text)
+
+        report = result.json()
+        self.assertEqual(report["holdings"][1]["value_gbp"], "600")
+        self.assertIsNone(report["since_baseline_gain_gbp"])
+        self.assertEqual(report["valuation_history"][-1]["gap_reason"],
+                         "Historical correction invalidated performance evidence; no new baseline was established.")
+
     def test_recording_requires_an_explicit_existing_version_two_store(self):
         self.now = OPENING_NOW
         initialize(self.path, demo_profile(self.now), self.now)

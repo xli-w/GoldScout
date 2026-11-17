@@ -6,7 +6,7 @@ import sqlite3
 import threading
 
 from investment import InvestmentError
-from investment.core import CORRECTABLE_CASH_EVENTS, clock
+from investment.core import CORRECTABLE_EVENTS, clock, fmt
 from investment.store import canonical, commit_record, digest, preview_record, read
 
 
@@ -96,31 +96,41 @@ class RecordingSessions:
         result = {
             "enabled": True,
             "csrf": record["csrf"], "accounts": [], "products": [],
-            "latest_correctable_event": None, "opened": False,
+            "latest_correctable_event": None, "correctable_events": [],
+            "current_balances": {}, "current_holdings": [], "opened": False,
         }
         ledger = self._verify_store()
         result["opened"] = ledger.opened
         result["accounts"] = [
             {"id": account["id"], "name": account["name"], "kind": account["kind"]}
             for account in ledger.spec["accounts"]
+            if account["id"] in ledger.active_accounts
         ]
         result["products"] = [
             {"id": product["id"], "name": product["name"],
              "sleeve": product["sleeve"],
-             "quantity_increment": product["quantity_increment"]}
+             "quantity_increment": product["quantity_increment"],
+             "minimum_notional_gbp": product["minimum_notional_gbp"]}
             for product in ledger.spec["products"]
+            if product["id"] in ledger.active_products
         ]
-        latest = next(reversed(ledger.ids.values()), None)
-        if latest and latest.get("type") in CORRECTABLE_CASH_EVENTS:
-            result["latest_correctable_event"] = {
-                key: latest[key] for key in (
-                    "id", "type", "account_id", "currency", "amount_gbp", "timestamp",
-                    "available_at", "evidence")
-            }
-            if "role" in latest:
-                result["latest_correctable_event"]["role"] = latest["role"]
-            if "role_evidence" in latest:
-                result["latest_correctable_event"]["role_evidence"] = latest["role_evidence"]
+        result["current_balances"] = {
+            account: fmt(amount) for account, amount in ledger.cash.items()
+            if account in ledger.active_accounts
+        }
+        result["current_holdings"] = [
+            {"account_id": account, "product_id": product, "quantity": fmt(quantity)}
+            for (account, product), quantity in sorted(ledger.holdings.items())
+            if quantity > 0 and account in ledger.active_accounts and
+            product in ledger.active_products
+        ]
+        correctable = [
+            value.copy() for value in ledger.ids.values()
+            if value.get("type") in CORRECTABLE_EVENTS and
+            value["id"] not in ledger.superseded_ids
+        ]
+        result["correctable_events"] = correctable[-1000:]
+        result["latest_correctable_event"] = correctable[-1] if correctable else None
         response = dict(result)
         response["_token"] = token
         return response
@@ -196,6 +206,13 @@ class RecordingSessions:
             if isinstance(exc.__cause__, (sqlite3.Error, OSError)):
                 raise RecordingError("investment_store_unavailable", 503) from exc
             raise RecordingError("confirmation_rejected", 409) from exc
+        with self.lock:
+            pending["receipt"] = receipt
+        try:
+            ledger = read(self.database, now)
+        except InvestmentError as exc:
+            raise RecordingError("investment_store_unavailable", 503) from exc
+        self.profile_hash = digest(canonical(ledger.spec))
         with self.lock:
             pending["receipt"] = receipt
         return receipt

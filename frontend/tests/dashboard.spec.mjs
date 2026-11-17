@@ -77,7 +77,108 @@ test("recording route clearly reports when local opt-in is disabled", async ({ p
   await expect(page.getByRole("heading", { name: "Record evidence" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recording is disabled" })).toBeVisible();
   await expect(page.getByText(/explicitly selected version-2 store and local opt-in/)).toBeVisible();
+  await expect(page.getByText(/--investment-recording/, { exact: false }).first()).toBeVisible();
+  await expect(page.getByText(/--workspace or --investment-database/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview record" })).toHaveCount(0);
+});
+
+test("next steps reflect incomplete evidence and historical differences without writes", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  const replay = structuredClone(report);
+  expect(replay.complete).toBe(true);
+  expect(replay.baseline_as_of).not.toBeNull();
+  expect(replay.twr_pct).toBeNull();
+  const originalHolding = { ...report.holdings[0] };
+  report.source_mode = "recorded";
+  report.complete = false;
+  report.as_of = null;
+  report.equity_gbp = null;
+  report.baseline_as_of = null;
+  report.since_baseline_gain_gbp = null;
+  report.twr_pct = null;
+  report.max_drawdown_pct = null;
+  report.holdings[0] = { ...originalHolding, value_gbp: null, mark_at: null, mark_available_at: null };
+  report.cash_observations = [];
+  for (const account of report.accounts) account.cash_observation = null;
+  let mutations = 0;
+  page.on("request", request => { if (!["GET", "HEAD"].includes(request.method())) mutations++; });
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", scenario: null, workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+  const steps = page.getByRole("region", { name: "Next steps" });
+  await expect(steps).toContainText("A complete common-clock valuation is unavailable");
+  await expect(steps).toContainText(`No recorded mark: ${originalHolding.name}`);
+  await expect(steps).toContainText("The performance baseline is unavailable");
+  await expect(steps).toContainText("No cash observations have been recorded");
+  await expect(steps).toContainText("Backup status is unknown");
+  await expect(steps).toContainText("A funded account addition needs a complete, contemporaneous snapshot");
+
+  report.holdings[0] = { ...originalHolding, mark_available_at: report.generated_at };
+  report.cash_observations = [
+    { account_id: report.accounts[0].id, balance_gbp: "100", difference_gbp: "0.001",
+      timestamp: "2026-01-01T12:00:00Z", available_at: "2026-01-01T12:00:00Z",
+      source: "Synthetic statement", evidence: "Synthetic earlier difference" },
+    { account_id: report.accounts[0].id, balance_gbp: "100", difference_gbp: "0",
+      timestamp: "2026-01-02T12:00:00Z", available_at: "2026-01-02T12:00:00Z",
+      source: "Synthetic statement", evidence: "Synthetic later match" },
+  ];
+  report.accounts[0].cash_observation = { ...report.cash_observations[1] };
+  delete report.accounts[0].cash_observation.account_id;
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(steps).toContainText("A complete common-clock valuation is unavailable");
+  await expect(steps.getByText(/No recorded mark:/)).toHaveCount(0);
+  await expect(steps).toContainText("Earlier recorded cash differences");
+  await expect(steps).toContainText("Later matching observations do not resolve");
+  await steps.getByRole("link", { name: "Review cash evidence" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#investment-accounts")).toHaveAttribute("open", "");
+  await expect(page.getByRole("region", { name: "Cash evidence overview" })).toBeVisible();
+
+  report.complete = replay.complete;
+  report.as_of = replay.as_of;
+  report.equity_gbp = replay.equity_gbp;
+  report.baseline_as_of = replay.baseline_as_of;
+  report.since_baseline_gain_gbp = replay.since_baseline_gain_gbp;
+  report.twr_pct = replay.twr_pct;
+  report.max_drawdown_pct = replay.max_drawdown_pct;
+  report.holdings = replay.holdings;
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(steps).toContainText("Recorded valuation is complete at its recorded clock");
+  await expect(steps).toContainText("Time-weighted return or drawdown is unavailable");
+  await expect(steps).not.toContainText("The performance baseline is unavailable");
+  await expect(steps).not.toContainText("Backup verified");
+  expect(mutations).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await steps.getByRole("link", { name: "Backup and recovery guidance" }).click();
+  await expect(page.getByRole("heading", { name: "Backup and recovery" })).toBeVisible();
+  await expect(page.getByText(/investment-journal\.md/)).toBeVisible();
+});
+
+test("demo next steps are explicitly illustrative and do not claim backup status", async ({ page }) => {
+  await page.goto("/investment");
+  const steps = page.getByRole("region", { name: "Next steps" });
+  await expect(steps).toContainText("Synthetic demonstration");
+  await expect(steps).toContainText("Backup status is unknown");
+  await expect(steps).not.toContainText("Backup verified");
+  await expect(steps).toContainText("Unassigned roles are not policy or targets");
+  const contrast = await steps.evaluate(element => {
+    const luminance = value => {
+      const channels = value.match(/\d+/g).slice(0, 3).map(channel => {
+        const n = Number(channel) / 255;
+        return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const background = luminance(getComputedStyle(element).backgroundColor);
+    const color = luminance(getComputedStyle(element).color);
+    const link = luminance(getComputedStyle(element.querySelector("a")).color);
+    return [color, link].map(value =>
+      (Math.max(value, background) + 0.05) / (Math.min(value, background) + 0.05));
+  });
+  expect(contrast[0]).toBeGreaterThanOrEqual(4.5);
+  expect(contrast[1]).toBeGreaterThanOrEqual(4.5);
 });
 
 test("unknown workspace does not guess an account source", async ({ page }) => {
@@ -260,6 +361,7 @@ test("investment view displays a non-executable sell proposal", async ({ page })
   };
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
+  await expect(page.getByRole("region", { name: "Next steps" })).toHaveCount(0);
   await expect(page.getByText("Legacy v1 asset-class target view", { exact: true })).toBeVisible();
   await page.getByText("Legacy v1 asset-class target view", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Legacy v1 allocation and drift" })).toBeVisible();
@@ -281,6 +383,7 @@ test("investment browser rejects invalid money instead of displaying an invented
   await expect(page.getByRole("heading", { name: "Investment data unavailable" })).toBeVisible();
   await expect(page.getByText("Investment response failed validation.")).toBeVisible();
   await expect(page.getByText("Portfolio value", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Next steps" })).toHaveCount(0);
 });
 
 test("opening records show since-baseline value without inventing lifetime gain", async ({ page }) => {
@@ -324,7 +427,8 @@ test("opening records show since-baseline value without inventing lifetime gain"
       destination_account_id: null, amount_gbp: "10", timestamp: at,
       available_at: at, evidence: "synthetic withdrawal evidence", role: "unassigned",
     }],
-    recorded_corrections: [],
+    recorded_corrections: [], recorded_profile_changes: [],
+    recorded_scope_additions_gbp: "0", recorded_scope_additions: [],
     cash_observations: [
       { account_id: "bank", balance_gbp: "990", difference_gbp: "-10",
         timestamp: "2025-12-01T12:00:00Z", available_at: "2025-12-01T12:00:00Z",
@@ -358,13 +462,13 @@ test("opening records show since-baseline value without inventing lifetime gain"
         gain_since_baseline_gbp: "-80", twr_pct: null, max_drawdown_pct: null,
         gap_reason: null },
     ],
-    accounts: [{ id: "bank", name: "Savings", kind: "deposit", cash_gbp: "1000",
+    accounts: [{ id: "bank", name: "Savings", kind: "deposit", status: "active", cash_gbp: "1000",
       cash_observation: { balance_gbp: "999", difference_gbp: "-1", timestamp: at,
         available_at: at, source: "synthetic statement", evidence: "synthetic evidence" },
       terms: { annual_rate_pct: "4.25", rate_basis: "AER", effective_from: "2026-01-01",
         observed_at: at, available_at: at, source: "synthetic statement",
         maturity_date: "2027-01-01", notice_days: 90 } },
-      { id: "broker", name: "Broker", kind: "broker", cash_gbp: "500",
+      { id: "broker", name: "Broker", kind: "broker", status: "active", cash_gbp: "500",
         cash_observation: null, terms: null }],
     holdings: [{ account_id: "broker", product_id: "fund", name: "Fund", sleeve: "equity",
       quantity: "50", value_gbp: "500", mark_at: at, mark_available_at: at }],
@@ -389,8 +493,11 @@ test("opening records show since-baseline value without inventing lifetime gain"
     enabled: true, csrf: "synthetic-csrf", opened,
     accounts: [{ id: "bank", name: "Savings", kind: "deposit" },
       { id: "broker", name: "Broker", kind: "broker" }],
-    products: [{ id: "fund", name: "Fund", sleeve: "equity", quantity_increment: "1" }],
+    products: [{ id: "fund", name: "Fund", sleeve: "equity", quantity_increment: "1",
+      minimum_notional_gbp: "1" }],
     latest_correctable_event: latestCorrectable,
+    correctable_events: latestCorrectable ? [latestCorrectable] : [],
+    current_balances: { bank: "1000", broker: "500" }, current_holdings: [],
   } }));
   await page.route("**/api/investment/v1/recording/preview", async route => {
     const request = route.request().postDataJSON();
@@ -643,7 +750,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.getByLabel("Record type").selectOption("correction");
   await page.getByLabel("Corrected GBP amount").fill("20");
   await page.getByLabel("Source evidence / correction reason").fill("Synthetic corrected receipt");
-  await expect(page.getByText(/Correcting latest Contribution/)).toBeVisible();
+  await expect(page.getByText(/Correcting Contribution/)).toBeVisible();
   await page.getByRole("button", { name: "Preview record" }).click();
   await expect(confirmationEvent).toContainText('"replacement_event"');
   await expect(confirmationEvent).toContainText('"amount_gbp": "20"');
@@ -653,6 +760,50 @@ test("opening records show since-baseline value without inventing lifetime gain"
   expect(previewEvent.replacement_event.amount_gbp).toBe("20");
   expect(previewEvent.replacement_event.currency).toBe("GBP");
   expect(previewEvent.replacement_event.role).toBe("dynamic");
+  await page.getByLabel("Record type").selectOption("profile_change");
+  await page.getByRole("region", { name: "Manual recording" })
+    .getByRole("combobox").nth(1).selectOption("rename");
+  await page.getByLabel("Identity type").selectOption("product");
+  await page.getByRole("region", { name: "Manual recording" })
+    .getByRole("combobox").nth(3).selectOption("fund");
+  await page.getByLabel("New name").fill("Renamed fund");
+  await page.getByLabel("Evidence clock (effective and available at, your local timezone)")
+    .fill("2026-01-02T12:00");
+  await page.getByLabel("Source evidence / correction reason").fill("Synthetic product documentation");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(confirmationEvent).toContainText('"action": "rename"');
+  await expect(confirmationEvent).toContainText('"entity_id": "fund"');
+  await expect(confirmationEvent).toContainText('"name": "Renamed fund"');
+  await page.getByRole("button", { name: "Cancel preview" }).click();
+  await page.getByLabel("Record type").selectOption("scope_addition");
+  await page.getByLabel("New account ID").fill("scope");
+  await page.getByLabel("Account name").fill("Additional broker");
+  await page.getByLabel("Account binding alias").fill("synthetic-binding");
+  const scopeBalances = page.getByRole("group", { name: "Complete contemporaneous GBP balances" });
+  await scopeBalances.getByRole("textbox").nth(0).fill("1000");
+  await scopeBalances.getByRole("textbox").nth(1).fill("500");
+  await scopeBalances.getByRole("textbox").nth(2).fill("10");
+  await page.getByRole("button", { name: "Add new-account holding" }).click();
+  const scopeHoldings = page.getByRole("group", {
+    name: "All existing and new long holdings with prices at the same clock",
+  });
+  await scopeHoldings.getByLabel("Account").selectOption("scope");
+  await scopeHoldings.getByLabel("Fund").selectOption("fund");
+  await scopeHoldings.getByLabel("Quantity").fill("2");
+  await scopeHoldings.getByLabel("GBP price per unit").fill("5");
+  await page.getByLabel("Evidence clock (effective and available at, your local timezone)")
+    .fill("2026-01-03T12:00");
+  await page.getByLabel("Source evidence / correction reason").fill("Synthetic common-clock statement");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  expect(previewEvent.type).toBe("scope_addition");
+  expect(previewEvent.account).toMatchObject({
+    id: "scope", name: "Additional broker", binding: "synthetic-binding", kind: "broker",
+  });
+  expect(previewEvent.balances_gbp).toEqual({ bank: "1000", broker: "500", scope: "10" });
+  expect(previewEvent.holdings).toEqual([{
+    account_id: "scope", product_id: "fund", quantity: "2", price_gbp: "5",
+  }]);
+  await page.getByRole("button", { name: "Cancel preview" }).click();
   await expect(page.getByLabel("Record type")).toBeVisible();
   await page.getByLabel("Record type").selectOption("role_assignment");
   await page.getByRole("region", { name: "Manual recording" }).getByLabel("Management role").selectOption("core");

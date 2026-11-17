@@ -48,6 +48,14 @@ offline investment CLI. Proposals are blocked for both store versions until
 role-aware policy, weights, products and loss/transfer rules are approved and
 implemented.
 
+The v2 investment overview includes read-only **Next steps** guidance based on
+the validated snapshot: valuation and performance gaps, recorded cash
+differences, fixed profile scope, recording opt-in and backup guidance. It
+does not check backup files or verify that account evidence is current; a
+complete valuation is complete only at its recorded clock. The demo uses
+illustrative evidence. The in-app investment guide points to the
+[journal lifecycle procedure](investment-journal.md) for explicit maintenance.
+
 Use `python -m dashboard --demo` for synthetic investment and legacy previews.
 The root opens the GBP investment view using synthetic v2 opening evidence;
 `/legacy` opens the separate trading demo. The investment demo's role labels

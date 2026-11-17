@@ -68,6 +68,10 @@
 .chart-empty { display: flex; justify-content: center; align-items: center; gap: 12px; min-height: 180px; border-block: 1px solid var(--line); margin-bottom: 25px; color: var(--muted); font-size: 13px; }
 .history-heading { margin-top: 30px; }
 .history-group { margin-top: 28px; }
+.investment-next-steps { padding: 14px 16px; border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
+.investment-next-steps h2 { margin-top: 0; }
+.investment-next-steps li { margin-block: 8px; line-height: 1.5; }
+.investment-next-steps a { color: #78e1b0; text-decoration: underline; }
 .portfolio-monitoring { min-width: 0; overflow-wrap: anywhere; }
 .portfolio-monitoring li { margin-block: 10px; }
 .monitoring-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 14px; }

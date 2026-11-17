@@ -86,9 +86,11 @@ confirmation. Do not reset the search history because the mandate changed.
 The current separate GBP investment path supports v1 empty-inception and v2
 evidence-backed opening accounting. V2 records core/dynamic/unassigned roles
 independently of asset class and account, local read-only portfolio awareness,
-and narrow evidence-backed corrections; it does not implement approved role
-budgets, transfers, investment proposals, a historical product simulator or a
-broker adapter. Provider sync is discovery only. The [investment guide](investment.md)
+append-only profile evolution, unitization-neutral account scope additions, and
+evidence-backed historical corrections with downstream replay and performance
+invalidation; it does not implement approved role budgets, transfers, investment
+proposals, a historical product simulator or a broker adapter. Provider sync is
+discovery only. The [investment guide](investment.md)
 defines current capabilities and gates; the [protocol](backtesting-protocol.md)
 defines research admission. Public-document research may inform design, but
 market-data acquisition/performance runs remain blocked at unmet product,

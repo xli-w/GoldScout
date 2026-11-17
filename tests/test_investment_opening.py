@@ -93,6 +93,23 @@ def correction(original, replacement_amount, available_at):
     }
 
 
+def historical_correction(original, replacement_values, correction_at):
+    evidence = "synthetic historical correction evidence"
+    replacement = deepcopy(original)
+    replacement.update(replacement_values)
+    replacement.update({
+        "id": "replacement-" + original["id"],
+        "available_at": iso(correction_at),
+        "evidence": evidence,
+    })
+    return {
+        "id": "historical-correction-" + original["id"], "type": "correction",
+        "timestamp": iso(correction_at), "available_at": iso(correction_at),
+        "evidence": evidence, "original_event_id": original["id"],
+        "replacement_event": replacement,
+    }
+
+
 def savings_terms_event(timestamp, available_at=None, account="bank",
                         identifier="bank-terms-update"):
     available_at = timestamp if available_at is None else available_at
@@ -132,6 +149,126 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(store.commit_record(self.database, preview, NOW), receipt)
         self.assertEqual(read(self.database, NOW).revision, 2)
 
+    def test_profile_amendments_are_append_only_and_survive_replay(self):
+        initialize(self.database, profile(), NOW)
+        rename_at = NOW + timedelta(hours=1)
+        add_product = {
+            "id": "add-product", "type": "profile_change",
+            "timestamp": iso(rename_at), "available_at": iso(rename_at),
+            "evidence": "synthetic product documentation", "action": "add_product",
+            "product": {"id": "cash-fund", "name": "Cash fund", "sleeve": "bond",
+                        "currency": "GBP", "quantity_increment": "1",
+                        "minimum_notional_gbp": "1"},
+        }
+        rename_product = {
+            "id": "rename-product", "type": "profile_change",
+            "timestamp": iso(rename_at + timedelta(hours=1)),
+            "available_at": iso(rename_at + timedelta(hours=1)),
+            "evidence": "synthetic corrected product name", "action": "rename",
+            "target": "product", "entity_id": "cash-fund", "name": "Short gilt fund",
+        }
+        import_events(self.database, [opening(), add_product, rename_product],
+                       rename_at + timedelta(hours=1))
+
+        ledger = read(self.database, rename_at + timedelta(hours=1))
+        self.assertEqual(
+            next(item for item in ledger.spec["products"] if item["id"] == "cash-fund")["name"],
+            "Short gilt fund",
+        )
+        self.assertEqual(ledger.revision, 3)
+        self.assertEqual(len(ledger.profile_history), 2)
+
+    def test_funded_account_scope_addition_is_unitization_neutral(self):
+        initialize(self.database, profile(), NOW)
+        scope_at = NOW + timedelta(hours=1)
+        account = {
+            "id": "scope", "name": "Additional broker", "kind": "broker",
+            "binding": "scope-test", "currency": "GBP",
+        }
+        scope_addition = {
+            "id": "scope-addition", "type": "scope_addition",
+            "timestamp": iso(scope_at), "available_at": iso(scope_at),
+            "evidence": "synthetic common-clock statements", "account": account,
+            "balances_gbp": {"bank": "1000", "broker": "100", "scope": "10"},
+            "holdings": [
+                {"account_id": "broker", "product_id": "equity", "quantity": "50",
+                 "price_gbp": "10"},
+                {"account_id": "broker", "product_id": "bond", "quantity": "20",
+                 "price_gbp": "20"},
+                {"account_id": "scope", "product_id": "equity", "quantity": "2",
+                 "price_gbp": "5"},
+            ],
+        }
+        import_events(self.database, [opening(), scope_addition], scope_at)
+
+        result = snapshot(self.database, scope_at)
+        ledger = read(self.database, scope_at)
+        self.assertEqual(ledger.net, 0)
+        self.assertEqual(ledger.units, 2020)
+        self.assertEqual(ledger.unit_price, 1)
+        self.assertEqual(ledger.scope_additions, 20)
+        self.assertEqual(result["since_baseline_gain_gbp"], "0")
+
+    def test_retirement_requires_zero_exposure_and_preserves_identity(self):
+        initialize(self.database, profile(), NOW)
+        timestamp = NOW + timedelta(hours=1)
+        retirement = {
+            "id": "retire-bank", "type": "profile_change",
+            "timestamp": iso(timestamp), "available_at": iso(timestamp),
+            "evidence": "synthetic retirement record", "action": "retire",
+            "target": "account", "entity_id": "bank",
+        }
+        with self.assertRaisesRegex(InvestmentError, "zero"):
+            import_events(self.database, [opening(), retirement], timestamp)
+
+        emptying = event("withdraw-bank", "withdrawal", timestamp, "bank",
+                         amount_gbp="1000")
+        import_events(self.database, [opening(), emptying], timestamp)
+        retired_at = timestamp + timedelta(hours=1)
+        retirement["timestamp"] = iso(retired_at)
+        retirement["available_at"] = iso(retired_at)
+        import_events(self.database, [retirement], retired_at)
+        ledger = read(self.database, retired_at)
+        self.assertIn("bank", ledger.cash)
+        self.assertIn("bank", ledger.retired_accounts)
+
+    def test_scope_addition_cannot_reintroduce_retired_product(self):
+        initialize(self.database, profile(), NOW)
+        sold_at = NOW + timedelta(hours=1)
+        retire_at = sold_at + timedelta(hours=1)
+        retired_product = {
+            "id": "retire-bond", "type": "profile_change",
+            "timestamp": iso(retire_at), "available_at": iso(retire_at),
+            "evidence": "synthetic retirement record", "action": "retire",
+            "target": "product", "entity_id": "bond",
+        }
+        import_events(self.database, [
+            opening(),
+            event("sell-bond", "sell", sold_at, "broker", product_id="bond",
+                  quantity="20", price_gbp="20", fee_gbp="0"),
+            retired_product,
+        ], retire_at)
+
+        scope_at = retire_at + timedelta(hours=1)
+        scope_addition = {
+            "id": "scope-with-retired-bond", "type": "scope_addition",
+            "timestamp": iso(scope_at), "available_at": iso(scope_at),
+            "evidence": "synthetic common-clock statements",
+            "account": {"id": "scope", "name": "Additional broker", "kind": "broker",
+                        "binding": "scope-test", "currency": "GBP"},
+            "balances_gbp": {"bank": "1000", "broker": "500", "scope": "10"},
+            "holdings": [
+                {"account_id": "broker", "product_id": "equity", "quantity": "50",
+                 "price_gbp": "10"},
+                {"account_id": "scope", "product_id": "bond", "quantity": "1",
+                 "price_gbp": "20"},
+            ],
+        }
+        before = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "retired product"):
+            import_events(self.database, [scope_addition], scope_at)
+        self.assertEqual(self.database.read_bytes(), before)
+
     def test_latest_cash_flow_correction_preserves_evidence_and_replaces_accounting_effect(self):
         initialize(self.database, profile(), NOW)
         contribution = event("funding", "contribution", NOW, "bank", amount_gbp="100")
@@ -160,21 +297,80 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertIsNone(result["equity_gbp"])
         self.assertEqual(import_events(self.database, [correction_event], available), 3)
 
-    def test_cash_correction_is_only_for_latest_cash_amount_and_not_observations(self):
+    def test_historical_correction_replays_downstream_and_invalidates_performance(self):
+        initialize(self.database, profile(), NOW)
+        opening_event = dict(opening(), balances_gbp={"bank": "1000", "broker": "100"},
+                             holdings=[])
+        first = event("first-flow", "contribution", NOW + timedelta(hours=1),
+                      "bank", amount_gbp="100")
+        interest = event("interest", "interest", NOW + timedelta(hours=2),
+                         "bank", amount_gbp="5")
+        last = event("last-flow", "contribution", NOW + timedelta(hours=3),
+                     "bank", amount_gbp="10")
+        import_events(self.database, [opening_event, first, interest, last],
+                      NOW + timedelta(hours=3))
+
+        correction_at = NOW + timedelta(hours=4)
+        correction_event = historical_correction(
+            interest, {"amount_gbp": "2"}, correction_at)
+        import_events(self.database, [correction_event], correction_at)
+
+        ledger = read(self.database, correction_at)
+        result = snapshot(self.database, correction_at)
+        self.assertEqual(ledger.cash["bank"], 1112)
+        self.assertEqual(ledger.net, 110)
+        self.assertEqual(ledger.ids["interest"]["amount_gbp"], "5")
+        self.assertIn("interest", ledger.superseded_ids)
+        self.assertFalse(ledger.performance_valid)
+        self.assertIsNone(result["since_baseline_gain_gbp"])
+        self.assertIsNone(result["twr_pct"])
+        self.assertEqual(result["recorded_corrections"][0]["replaced_type"], "interest")
+
+    def test_historical_correction_is_rejected_when_downstream_replay_breaks_cash(self):
+        initialize(self.database, profile(), NOW)
+        opening_event = dict(opening(), balances_gbp={"bank": "1000", "broker": "100"},
+                             holdings=[])
+        funding = event("broker-funding", "contribution", NOW + timedelta(hours=1),
+                        "broker", amount_gbp="100")
+        purchase = event("later-purchase", "buy", NOW + timedelta(hours=2),
+                         "broker", product_id="equity", quantity="150",
+                         price_gbp="1", fee_gbp="0")
+        import_events(self.database, [opening_event, funding, purchase],
+                      NOW + timedelta(hours=2))
+        correction_at = NOW + timedelta(hours=3)
+        correction_event = historical_correction(
+            funding, {"amount_gbp": "20"}, correction_at)
+        with self.assertRaisesRegex(InvestmentError, "cash"):
+            import_events(self.database, [correction_event], correction_at)
+        self.assertEqual(read(self.database, correction_at).cash["broker"], 50)
+
+    def test_historical_cash_correction_can_replay_earlier_amounts_but_not_observations(self):
         initialize(self.database, profile(), NOW)
         contribution = event("funding", "contribution", NOW, "bank", amount_gbp="100")
         interest = event("interest", "interest", NOW, "bank", amount_gbp="5")
         import_events(self.database, [opening(), contribution, interest], NOW)
         later = NOW + timedelta(days=1)
-        with self.assertRaisesRegex(InvestmentError, "latest"):
-            import_events(self.database, [correction(contribution, "80", later)], later)
+        import_events(self.database, [correction(contribution, "80", later)], later)
+        self.assertEqual(read(self.database, later).cash["bank"], 1085)
         observation = cash_observation(NOW, identifier="observation")
         observation["timestamp"] = iso(later)
         observation["available_at"] = iso(later)
         import_events(self.database, [observation], later)
-        with self.assertRaisesRegex(InvestmentError, "latest cash"):
-            import_events(self.database, [correction(interest, "4", later)], later)
-        self.assertEqual(read(self.database, later).revision, 4)
+        correction_at = later + timedelta(days=1)
+        import_events(
+            self.database,
+            [historical_correction(interest, {"amount_gbp": "4"}, correction_at)],
+            correction_at,
+        )
+        self.assertEqual(read(self.database, correction_at).cash["bank"], 1084)
+        self.assertEqual(read(self.database, correction_at).revision, 6)
+        with self.assertRaisesRegex(InvestmentError, "eligible"):
+            import_events(
+                self.database,
+                [historical_correction(observation, {"balance_gbp": "999"},
+                                        correction_at + timedelta(days=1))],
+                correction_at + timedelta(days=1),
+            )
 
     def test_revision_bound_commit_rejects_stale_or_conflicting_input(self):
         initialize(self.database, profile(), NOW)

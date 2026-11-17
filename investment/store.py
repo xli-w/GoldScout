@@ -99,6 +99,18 @@ def state_digest(ledger):
             "baseline_value": fmt(ledger.baseline_value),
             "baseline_net": fmt(ledger.baseline_net),
         }
+        if ledger.baseline_scope_additions != 0:
+            value["opening"]["baseline_scope_additions"] = fmt(
+                ledger.baseline_scope_additions)
+        if ledger.profile_revision:
+            value["profile_revision"] = ledger.profile_revision
+            value["profile_hash"] = digest(canonical(ledger.spec))
+            value["active_accounts"] = sorted(ledger.active_accounts)
+            value["active_products"] = sorted(ledger.active_products)
+            value["scope_additions"] = fmt(ledger.scope_additions)
+        if ledger.historical_correction:
+            value["historical_correction"] = True
+            value["correction_available_at"] = iso(ledger.correction_available_at)
         if ledger.cash_observations:
             value["cash_observations"] = {
                 account: observation
@@ -337,7 +349,7 @@ def preview_record(database, value, now=None):
             _check_evidence_size(spec, existing + [value])
             updated = replay(spec, existing + [value], now)
             result = {
-                "profile_hash": digest(canonical(spec)),
+                "profile_hash": digest(canonical(ledger.spec)),
                 "revision": ledger.revision,
                 "previous_hash": previous,
                 "event": value,
@@ -374,7 +386,7 @@ def commit_record(database, preview, now=None):
                 connection.execute("BEGIN IMMEDIATE")
                 now = clock(now)
                 spec, existing, ledger, previous = _read(connection, now)
-                if spec["schema_version"] != 2 or digest(canonical(spec)) != preview["profile_hash"]:
+                if spec["schema_version"] != 2 or digest(canonical(ledger.spec)) != preview["profile_hash"]:
                     raise InvestmentError("Investment profile changed")
                 expected = preview["revision"]
                 value = preview["event"]

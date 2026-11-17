@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "recorded_flow_events", "recorded_corrections", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "role_accounting", "role_accounting_at", "role_assignments", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "recorded_flow_events", "recorded_corrections", "recorded_profile_changes", "recorded_scope_additions_gbp", "recorded_scope_additions", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "role_accounting", "role_accounting_at", "role_assignments", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -38,16 +38,26 @@
       "type": "array", "maxItems": 10000,
       "items": {"$ref": "#/$defs/recordedCorrection"}
     },
+    "recorded_profile_changes": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/recordedProfileChange"}
+    },
+    "recorded_scope_additions_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+    "recorded_scope_additions": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/recordedScopeAddition"}
+    },
     "twr_pct": {"$ref": "#/$defs/nullableDecimal"},
     "max_drawdown_pct": {"$ref": "#/$defs/nullableDecimal"},
     "accounts": {
       "type": "array", "minItems": 1, "maxItems": 50,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "name", "kind", "cash_gbp", "terms", "cash_observation"],
+        "required": ["id", "name", "kind", "status", "cash_gbp", "terms", "cash_observation"],
         "properties": {
           "id": {"$ref": "#/$defs/text"}, "name": {"$ref": "#/$defs/text"},
           "kind": {"enum": ["broker", "deposit"]},
+          "status": {"enum": ["active", "retired"]},
           "cash_gbp": {"anyOf": [{"$ref": "#/$defs/nonnegativeDecimal"}, {"type": "null"}]},
           "terms": {"anyOf": [{"$ref": "#/$defs/accountTerms"}, {"type": "null"}]},
           "cash_observation": {"anyOf": [{"$ref": "#/$defs/cashObservation"}, {"type": "null"}]}
@@ -240,12 +250,38 @@
         "id": {"$ref": "#/$defs/text"},
         "original_event_id": {"$ref": "#/$defs/text"},
         "replacement_event_id": {"$ref": "#/$defs/text"},
-        "replaced_type": {"enum": ["contribution", "withdrawal", "interest"]},
+        "replaced_type": {"enum": ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "split", "mark"]},
         "role": {"enum": ["core", "dynamic", "unassigned"]},
         "role_evidence": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "account_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "original_amount_gbp": {"$ref": "#/$defs/nullableDecimal"},
+        "replacement_amount_gbp": {"$ref": "#/$defs/nullableDecimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "recordedProfileChange": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "action", "target", "entity_id", "name", "timestamp", "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
+        "action": {"enum": ["add_product", "rename", "retire", "scope_addition"]},
+        "target": {"enum": ["account", "product"]},
+        "entity_id": {"$ref": "#/$defs/text"},
+        "name": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "recordedScopeAddition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "account_id", "amount_gbp", "timestamp", "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
         "account_id": {"$ref": "#/$defs/text"},
-        "original_amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
-        "replacement_amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
         "timestamp": {"$ref": "#/$defs/utc"},
         "available_at": {"$ref": "#/$defs/utc"},
         "evidence": {"$ref": "#/$defs/text"}
@@ -275,9 +311,25 @@
               "as_of": {"$ref": "#/$defs/utc"},
               "equity_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
               "capital_basis_gbp": {"$ref": "#/$defs/decimal"},
-              "net_contributions_gbp": {"$ref": "#/$defs/decimal"},
-              "gap_reason": {"type": "null"}
-            }
+              "net_contributions_gbp": {"$ref": "#/$defs/decimal"}
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "gap_reason": {"type": "null"}
+                }
+              },
+              {
+                "properties": {
+                  "gain_since_baseline_gbp": {"type": "null"},
+                  "twr_pct": {"type": "null"},
+                  "max_drawdown_pct": {"type": "null"},
+                  "gap_reason": {
+                    "const": "Historical correction invalidated performance evidence; no new baseline was established."
+                  }
+                }
+              }
+            ]
           },
           "else": {
             "properties": {

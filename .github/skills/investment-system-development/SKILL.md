@@ -39,16 +39,24 @@ limits below explicit.
   market intelligence. Keep that separation; never reuse an operational store.
 - The released contract is GBP-only and operator-recorded. V1 starts at
   explicitly evidenced empty inception; v2 supports evidenced opening cash and
-  long holdings without inventing prior transactions or cost basis. V2 supports
-  only narrow evidence-backed corrections to the immediately latest
-  contribution, withdrawal or interest event; this does not authorize guessed
-  history, FX, automatic accrual/entitlement, MWR, inflation, historical
-  portfolio research or broker execution.
+  long holdings without inventing prior transactions or cost basis. V2 profile
+  amendments are append-only: identity, account binding/currency and product
+  classification/quantity rules remain fixed; retirement requires zero
+  exposure. Funded account scope additions require complete contemporaneous
+  balances and held-position prices and are unitization-neutral, not external
+  contributions. Supported financial-event corrections replay all downstream
+  events, retain original evidence/availability, fail on broken accounting, and
+  make historical performance unavailable without automatically establishing a
+  new baseline. Opening, profile/scope, role-assignment, observation and review
+  events are not correctable. These features do not authorize guessed history,
+  FX, automatic accrual/entitlement, MWR, inflation, historical portfolio
+  research or broker execution.
 - Public v2 proposal routes are blocked until role-aware policy, approved
   targets/products and loss/transfer rules exist; v2 has no proposal export.
   V1 CLI export returns a blocked envelope, not an order proposal. Dashboard
-  routes remain read-only except explicitly enabled, authenticated v2 manual
-  recording. Do not add a broker path as a convenience to an accounting change.
+  routes remain read-only except explicitly enabled v2 manual recording.
+  Same-origin and CSRF defenses are not user authentication. Do not add a broker
+  path as a convenience to an accounting change.
 - Manual review acknowledgements bind a previously committed revision, require a
   complete fresh valuation, and never approve trades or suppress five-point drift.
   Monthly and annual clocks are separate; an annual review counts as monthly.

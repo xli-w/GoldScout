@@ -22,6 +22,65 @@ The illustrative core/dynamic range is not an approved allocation. See the
 and the [investor mandate](docs/investment-research-context.md) for the agreed
 product direction.
 
+## Architecture
+
+```mermaid
+flowchart TB
+  Operator["Operator"] --> UI["Local dashboard and investment CLI"]
+
+  subgraph Investment["GBP investment: evidence and reporting"]
+    Recording["Manual evidence<br/>and opt-in dashboard recording"]
+    Journal["Investment journal<br/>separate store"]
+    Reports["Replay, valuation and reports<br/>proposals blocked"]
+    Recording --> Journal --> Reports
+  end
+
+  subgraph Monitoring["Optional local monitoring and awareness"]
+    Cache["Observation cache<br/>separate store"]
+    Findings["Monitoring findings"]
+    Inbox["Review inbox<br/>separate store"]
+    Awareness["Portfolio awareness"]
+    Cache --> Findings
+    Findings -->|optional review sync| Inbox
+  end
+
+  subgraph Intelligence["Optional advisory intelligence"]
+    Sources["Public calendar and news sources"]
+    Service["Collection and optional AI analysis"]
+    IntelligenceStore["Intelligence evidence<br/>separate store"]
+    Sources --> Service --> IntelligenceStore
+  end
+
+  subgraph Legacy["Separate legacy systems"]
+    Alpaca["Alpaca API"]
+    Trading["Trading bot<br/>strategy, risk and execution"]
+    Ledger["Trading ledger<br/>separate store"]
+    History["Historical datasets"]
+    Research["Backtests and research<br/>no live orders"]
+    Alpaca <--> Trading <--> Ledger
+    History --> Research
+  end
+
+  UI -->|explicit manual records| Recording
+  Reports --> UI
+  Journal --> Findings
+  Journal --> Awareness
+  IntelligenceStore -->|existing public context and briefs| Awareness
+  Findings --> UI
+  Inbox --> UI
+  Awareness --> UI
+  Provider["eToro Read adapter<br/>gated, live unvalidated"] -->|optional collection| Cache
+  Ledger -->|legacy view| UI
+```
+
+The dashboard is read-only by default; setup and later recording have separate
+confirmation and opt-in gates. Monitoring collection and review workflows have
+separate gates. Intelligence supplies advisory context only, not trading or
+investment authority. The dashboard selects recorded investment or legacy data,
+while demo data is synthetic. See the [monitoring](docs/monitoring.md),
+[intelligence](docs/intelligence.md) and [legacy systems](docs/legacy-systems.md)
+guides for details and limitations.
+
 ## Start the local investment workspace
 
 With the documented dependencies and frontend build available, run:

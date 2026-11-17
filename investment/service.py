@@ -99,8 +99,10 @@ def opening_report(ledger, now, source_mode="recorded"):
         context.prec = 100
         equity, as_of = ledger.valuation()
         baseline = ledger.baseline_value
-        gain = (equity - baseline - (ledger.net - ledger.baseline_net)
-                if equity is not None and baseline is not None else None)
+        gain = (equity - baseline - (ledger.net - ledger.baseline_net) -
+                (ledger.scope_additions - ledger.baseline_scope_additions)
+                if equity is not None and baseline is not None and
+                not ledger.historical_correction else None)
         recorded_interest = sum(
             (number(value["amount_gbp"]) for value in ledger.ids.values()
              if value.get("type") == "interest" and
@@ -156,15 +158,41 @@ def opening_report(ledger, now, source_mode="recorded"):
                 "id": value["id"], "original_event_id": value["original_event_id"],
                 "replacement_event_id": value["replacement_event"]["id"],
                 "replaced_type": value["replacement_event"]["type"],
-                "account_id": value["replacement_event"]["account_id"],
+                "account_id": value["replacement_event"].get("account_id"),
                 "role": value["replacement_event"].get("role", "unassigned"),
                 "role_evidence": value["replacement_event"].get("role_evidence"),
-                "original_amount_gbp": ledger.ids[value["original_event_id"]]["amount_gbp"],
-                "replacement_amount_gbp": value["replacement_event"]["amount_gbp"],
+                "original_amount_gbp": ledger.ids[value["original_event_id"]].get("amount_gbp"),
+                "replacement_amount_gbp": value["replacement_event"].get("amount_gbp"),
                 "timestamp": value["timestamp"], "available_at": value["available_at"],
                 "evidence": value["evidence"],
             }, ("timestamp", "available_at"))
             for value in ledger.ids.values() if value.get("type") == "correction"
+        ]
+        def reported_profile_change(value):
+            if value["type"] == "scope_addition":
+                target, entity = "account", value["account"]
+                action = "scope_addition"
+            elif value["action"] == "add_product":
+                target, entity = "product", value["product"]
+                action = "add_product"
+            elif value["action"] == "rename":
+                target, entity = value["target"], {
+                    "id": value["entity_id"], "name": value["name"],
+                }
+                action = "rename"
+            else:
+                target, entity = value["target"], {"id": value["entity_id"]}
+                action = "retire"
+            return _reported_timestamps({
+                "id": value["id"], "action": action, "target": target,
+                "entity_id": entity["id"], "name": entity.get("name"),
+                "timestamp": value["timestamp"],
+                "available_at": value["available_at"], "evidence": value["evidence"],
+            }, ("timestamp", "available_at"))
+
+        recorded_profile_changes = [
+            reported_profile_change(value)
+            for value in ledger.profile_history
         ]
         products = {item["id"]: item for item in ledger.spec["products"]}
         holdings = []
@@ -184,6 +212,10 @@ def opening_report(ledger, now, source_mode="recorded"):
                        and equity is not None and ledger.baseline_at is not None)
         warnings = ([] if equity is not None else
                     ["A complete common-clock valuation is unavailable."])
+        if ledger.historical_correction:
+            warnings.append(
+                "Historical corrections preserve original evidence but invalidate historical performance; "
+                "no new baseline was established.")
         for account, observations in sorted(ledger.cash_observation_history.items()):
             discrepancies = [
                 observation for observation in observations
@@ -263,9 +295,16 @@ def opening_report(ledger, now, source_mode="recorded"):
             "recorded_income_events": recorded_income_events,
             "recorded_flow_events": recorded_flow_events,
             "recorded_corrections": recorded_corrections,
+            "recorded_profile_changes": recorded_profile_changes,
+            "recorded_scope_additions_gbp": fmt(ledger.scope_additions),
+            "recorded_scope_additions": [
+                _reported_timestamps(value, ("timestamp", "available_at"))
+                for value in ledger.scope_addition_history
+            ],
             "twr_pct": fmt((ledger.unit_price - 1) * 100) if performance else None,
             "max_drawdown_pct": fmt(-ledger.drawdown * 100) if performance else None,
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"],
+                          "status": "active" if a["id"] in ledger.active_accounts else "retired",
                           "cash_gbp": fmt(ledger.cash[a["id"]]) if ledger.opened else None,
                           "terms": _reported_timestamps(
                               ledger.account_terms[a["id"]],
@@ -297,6 +336,7 @@ def opening_report(ledger, now, source_mode="recorded"):
                 "Fee and income totals include only explicitly recorded events; completeness, tax and entitlement are not verified.",
                 "Role allocations are operator evidence, not independent custody verification or risk budgets.",
                 "Allocation policy, proposals and execution are not implemented for this store.",
+                "Profile changes preserve identity and prior evidence; retired definitions remain in the journal.",
             ],
         }
 
