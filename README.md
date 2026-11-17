@@ -32,8 +32,10 @@ python -m dashboard --demo
 
 The investment command prints a synthetic report without creating a store. The
 dashboard command serves synthetic data; build the frontend first as described
-in the [dashboard guide](docs/dashboard.md). Neither command starts the trading
-bot or accesses a broker.
+in the [dashboard guide](docs/dashboard.md). The dashboard opens the GBP
+investment view with synthetic v2 opening evidence; its separate legacy trading
+demo remains at `/legacy`. Neither command starts the trading bot or accesses a
+broker.
 
 Recorded investment reporting requires an explicitly initialized and selected
 investment store. Dashboard investment recording is off unless separately

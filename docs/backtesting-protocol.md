@@ -231,8 +231,9 @@ eligibility, or data-license terms, and it authorizes no account/API calls.
   does not establish a client-assigned durable order ID, linked/OCO protection,
   or a generic historical OHLCV feed. Therefore, GBP API access, exact product
   eligibility, licensed historical prices, and safe recovery after an
-  ambiguous submission remain unverified. Trading 212 is a research candidate,
-  not a selected or safe unattended adapter.
+  ambiguous submission remain unverified. Trading 212 was later selected for
+  an [offline-only execution pilot investigation](investment.md#trading-212-pilot-offline-recovery-engineering-only),
+  not as a verified adapter or authorization for research or account access.
 - **Alpaca:** The public [non-US account guidance](https://alpaca.markets/learn/live-trading-account-non-us)
   and [US funding documentation](https://docs.alpaca.markets/us/docs/funding-accounts)
   concern the existing US Trading API account path. Alpaca's separate

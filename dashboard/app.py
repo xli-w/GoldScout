@@ -134,12 +134,16 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     @app.get("/api/investment/v1/snapshot")
     def investment_snapshot():
         from investment import InvestmentError
-        from investment.service import demo_snapshot, snapshot
+        from investment.service import snapshot
 
         if investment_database is None and reader is not None:
             return JSONResponse(status_code=503, content={"error": "investment_not_configured"})
         try:
-            report = snapshot(investment_database, now=clock()) if investment_database is not None else demo_snapshot(now=clock())
+            if investment_database is not None:
+                report = snapshot(investment_database, now=clock())
+            else:
+                from dashboard.investment_demo import demo_opening_snapshot
+                report = demo_opening_snapshot(now=clock())
             schema_name = ("response-v2.schema.json" if isinstance(report, dict)
                            and report.get("schema_version") == 2 else "response.schema.json")
             schema = json.loads((ROOT.parent / "investment" / schema_name).read_text(encoding="utf-8"))
@@ -424,7 +428,9 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         @app.get("/intelligence")
         @app.get("/guide")
         @app.get("/investment")
+        @app.get("/investment/record")
         @app.get("/investment-guide")
+        @app.get("/legacy")
         def index():
             return FileResponse(static_directory / "index.html")
 

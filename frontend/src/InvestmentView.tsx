@@ -512,7 +512,10 @@ function InvestmentRecording() {
   if (!session) return <section className="history-group" aria-label="Manual recording">
     <h2>Manual portfolio records</h2><p role="status">Checking recording controls.</p>
   </section>;
-  if (!session.enabled) return null;
+  if (!session.enabled) return <section className="history-group" aria-label="Manual recording">
+    <h2>Recording is disabled</h2>
+    <p>Recording requires an explicitly selected version-2 store and local opt-in. This page cannot connect to a bank or broker, place orders, or move money.</p>
+  </section>;
   if (!session.authenticated) return <section className="history-group investment-recording" aria-label="Manual recording">
     <h2>Manual portfolio recording</h2>
     <p>Local-only, opt-in record editing. No bank or broker is contacted, and no order or transfer can be made.</p>
@@ -671,8 +674,12 @@ export function InvestmentView({ now }: { now: number }) {
       : !data ? <div className="error-state" role="alert"><ShieldAlert size={30} /><h2>Investment data unavailable</h2>
         <p>{query.error instanceof Error ? query.error.message : "The investment source could not be reached."}</p></div>
         : <>
-          <div className="demo-band"><span>{data.source_mode === "demo" ? "SYNTHETIC INVESTMENT DEMO" : "RECORDED INVESTMENT"}</span><span>Recording is opt-in / execution disabled</span></div>
-          <section aria-label="Valuation evidence">
+          <div className="demo-band"><span>{data.source_mode === "demo" ? "SYNTHETIC INVESTMENT DEMO" : "RECORDED INVESTMENT"}</span>
+            <span>{data.source_mode === "demo"
+              ? "Illustrative evidence and roles only; no targets, policy, or investment recommendation."
+              : "Operator-supplied evidence; recording requires opt-in."}</span>
+            <span>Execution disabled</span></div>
+          <section id="investment-overview" aria-label="Valuation evidence">
             <p className="position-note">Valuation as of {timestamp(data.as_of)} ({evidenceAge(data.as_of, now)}{data.as_of !== null && Date.parse(data.as_of) <= now ? " ago" : ""}). Revision {data.revision}. {data.complete ? "Complete at the recorded clock." : "Incomplete valuation; no complete portfolio total."} Recorded inputs are not current broker verification.</p>
             <p className="position-note">Ages use the browser clock. No freshness threshold or current valuation is inferred.</p>
           </section>
@@ -681,10 +688,27 @@ export function InvestmentView({ now }: { now: number }) {
             <div><span>Net contributions</span><strong>{pounds(data.net_contributions_gbp)}</strong><small>Deposits are not profit</small></div>
             <div><span>{data.schema_version === 2 ? "Gain since baseline" : "Investment gain"}</span><strong>{pounds(data.schema_version === 2 ? data.since_baseline_gain_gbp : data.gain_gbp)}</strong><small>Net of recorded fees</small></div>
           </section>
-          <PortfolioAwareness portfolioId={data.portfolio_id} revision={data.revision} />
-          {data.schema_version === 2 && <section className="history-group" aria-label="Management role accounting">
+          <nav className="investment-sections" aria-label="Investment sections">
+            <a href="#investment-overview">Overview</a>
+            {data.schema_version === 2 && <a href="#investment-roles">Management roles</a>}
+            <a href="#investment-performance">Performance history</a>
+            <a href="#investment-records">Journal records</a>
+            <a href="#investment-accounts">Cash and holdings</a>
+            <a href="#investment-awareness">Portfolio awareness</a>
+            <a href="#investment-policy">Proposal and limits</a>
+          </nav>
+          <section className="investment-boundary" aria-label="Proposal boundary">
+            <ShieldAlert size={18} />
+            <p><strong>{data.proposal.status === "blocked" ? "Proposals are blocked." : "Proposal is review-only."}</strong> Recorded balances and illustrative role attribution are not approved targets or trade authority.</p>
+            {data.schema_version === 2 && data.source_mode === "recorded" &&
+              <NavLink className="text-link" to="/investment/record">Record evidence</NavLink>}
+          </section>
+          {data.warnings.length > 0 && <section className="investment-warnings" role="status"><h2>Evidence and valuation warnings</h2><ul>{data.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul></section>}
+          {data.schema_version === 2 && <section className="history-group" id="investment-roles" aria-label="Management role accounting">
             <h2>Management roles</h2>
-            <p className="position-note">Roles are operator-attributed independently of account and asset class. Unassigned funds are not assumed to be core or dynamic. Role-to-role transfers and proposals are unavailable.</p>
+            <p className="position-note">{data.source_mode === "demo"
+              ? "Synthetic role attribution is shown only to demonstrate accounting. It is not a target, approved allocation, or recommendation."
+              : "Roles are operator-attributed independently of account and asset class."} Unassigned funds are not assumed to be core or dynamic. Role-to-role transfers and proposals are unavailable.</p>
             <p className="position-note">Recorded role balances reflect the latest journal, not necessarily the portfolio valuation clock. Latest role change: {timestamp(data.role_accounting_at, "None")}.</p>
             <div className="table-scroll" tabIndex={0}><table>
               <thead><tr><th>Role</th><th>Cash</th><th>Recorded value</th></tr></thead>
@@ -702,14 +726,23 @@ export function InvestmentView({ now }: { now: number }) {
                 </li>)}
               </ul>
             </details>)}
-            {data.role_assignments.length > 0 && <div className="table-scroll" tabIndex={0} aria-label="Role attribution history">
+            {data.role_assignments.length > 0 && <details className="investment-detail">
+              <summary>Role attribution history ({data.role_assignments.length})</summary>
+              <div className="table-scroll" tabIndex={0} aria-label="Role attribution history">
               <table><thead><tr><th>Attribution clock</th><th>Role</th><th>Account</th><th>Asset</th><th>Amount / quantity</th><th>Evidence</th></tr></thead>
                 <tbody>{data.role_assignments.slice(-100).map(item => <tr key={item.id}>
                   <td>{timestamp(item.timestamp)}</td><td>{label(item.role)}</td><td>{item.account_id}</td>
                   <td>{item.product_id ?? "GBP cash"}</td><td>{item.amount}</td><td>{item.evidence}</td>
                 </tr>)}</tbody></table>
-            </div>}
+              </div>
+            </details>}
           </section>}
+          <details className="investment-detail" id="investment-awareness">
+            <summary>Optional local portfolio awareness</summary>
+            <PortfolioAwareness portfolioId={data.portfolio_id} revision={data.revision} />
+          </details>
+          <details className="investment-detail" id="investment-records">
+            <summary>Journal records</summary>
           {data.schema_version === 2 && <section className="history-group" aria-label="Recorded fees and income">
             <h2>Recorded fees and income</h2>
             <p className="position-note">Totals cover explicit journal events, including any before the baseline; coverage, tax and entitlement are not verified.</p>
@@ -749,7 +782,6 @@ export function InvestmentView({ now }: { now: number }) {
             </>}
           </section>}
           {data.schema_version === 2 && <p className="position-note">Baseline as of {timestamp(data.baseline_as_of)}. Lifetime gain and prior cost basis are unavailable. No valuation freshness threshold is configured.</p>}
-          {data.schema_version === 2 && data.source_mode === "recorded" && <InvestmentRecording />}
           {data.schema_version === 2 && data.recorded_flow_events.length > 0 &&
             <section className="history-group" aria-label="Recorded capital flows">
               <h2>Recorded contributions, withdrawals and transfers</h2>
@@ -782,18 +814,28 @@ export function InvestmentView({ now }: { now: number }) {
                 </table>
               </div>
             </section>}
-          <dl className="health-facts">
-            <div><dt>Time-weighted return</dt><dd>{percent(data.twr_pct)}</dd></div>
-            <div><dt>Flow-neutral maximum drawdown</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>
-          </dl>
-          {data.schema_version === 2 && <InvestmentGrowthHistory history={data.valuation_history} />}
-          {data.schema_version === 1 && <section className="history-group">
-            <h2>Allocation and drift</h2>
+          </details>
+          <section className="history-group">
+            <h2>Performance summary</h2>
+            <dl className="health-facts">
+              <div><dt>Time-weighted return</dt><dd>{percent(data.twr_pct)}</dd></div>
+              <div><dt>Flow-neutral maximum drawdown</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>
+            </dl>
+          </section>
+          {data.schema_version === 2 && <div id="investment-performance"><InvestmentGrowthHistory history={data.valuation_history} /></div>}
+          {data.schema_version === 1 && <details className="investment-detail">
+            <summary>Legacy v1 asset-class target view</summary>
+            <section className="history-group">
+            <h2>Legacy v1 allocation and drift</h2>
+            <p className="position-note">These are historical v1 asset-class settings, not the current role-based mandate, approved targets, or investment recommendations.</p>
             <div className="table-scroll" tabIndex={0} aria-label="Investment allocation" aria-describedby="table-scroll-instructions"><table>
               <thead><tr><th>Sleeve</th><th>Target</th><th>Recorded</th><th>Drift (percentage points)</th></tr></thead>
               <tbody>{data.allocation.map(row => <tr key={row.sleeve}><td>{label(row.sleeve)}</td><td>{percent(row.target_pct)}</td><td>{percent(row.actual_pct)}</td><td>{row.drift_pp === null ? "Unavailable" : new Decimal(row.drift_pp).toFixed(2)}</td></tr>)}</tbody>
             </table></div>
-          </section>}
+            </section>
+          </details>}
+          <details className="investment-detail" id="investment-accounts">
+            <summary>Cash accounts, holdings and reconciliation evidence</summary>
           <section className="history-group"><h2>Cash accounts</h2><dl className="health-facts">
             {data.accounts.map(account => <div key={account.id}><dt>{account.name} ({label(account.kind)})</dt><dd>{pounds(account.cash_gbp)}</dd></div>)}
           </dl><p className="position-note">External savings are not broker buying power. Deposit protection and product eligibility require separate evidence.</p></section>
@@ -835,6 +877,9 @@ export function InvestmentView({ now }: { now: number }) {
               <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}><td>{holding.name}</td><td>{holding.account_id}</td><td>{label(holding.sleeve)}</td><td>{holding.quantity}</td><td>{pounds(holding.value_gbp)}</td>{"mark_at" in holding && <><td>{timestamp(holding.mark_at)}</td><td>{evidenceAge(holding.mark_at, now)}</td><td>{timestamp(holding.mark_available_at)}</td></>}</tr>)}</tbody>
             </table></div>
           </section>
+          </details>
+          <details className="investment-detail" id="investment-policy">
+            <summary>Proposal status and capability limits</summary>
           <section className="history-group"><h2>Allocation proposal: {label(data.proposal.status)}</h2>
             <p>{data.proposal.reason}</p><p className="position-note">No order approval or execution is available here. Proposal expiry: {timestamp(data.proposal.expires_at, "Not issued")}.</p>
             {data.proposal.orders.length > 0 && <div className="table-scroll" tabIndex={0} aria-label="Proposed investment changes" aria-describedby="table-scroll-instructions"><table>
@@ -843,11 +888,24 @@ export function InvestmentView({ now }: { now: number }) {
             </table></div>}
             {data.proposal.manual_transfers.map(message => <p key={message}>{message}</p>)}
           </section>
-          {data.warnings.length > 0 && <section className="history-group" role="status"><h2>Evidence and valuation warnings</h2><ul>{data.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul></section>}
           <section className="history-group"><h2>Capability limits</h2><ul>{data.limitations.map(item => <li key={item}>{item}</li>)}</ul>
             <p>No market investment guarantees profit or a maximum loss. This is a measurement and discipline tool, not evidence of future outperformance.</p>
           </section>
+          </details>
         </>}
+  </article>;
+}
+
+export function InvestmentRecordingPage() {
+  return <article className="investment-view">
+    <div className="record-toolbar">
+      <NavLink className="text-link" to="/investment">Back to investment overview</NavLink>
+    </div>
+    <section className="investment-boundary" aria-label="Manual recording boundary">
+      <ShieldAlert size={18} />
+      <p>Only operator-entered evidence is recorded. Each change requires a fresh revision-bound preview and explicit confirmation. No bank or broker is contacted, and no order or transfer can be made.</p>
+    </section>
+    <InvestmentRecording />
   </article>;
 }
 

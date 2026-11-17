@@ -67,6 +67,10 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       <ShieldAlert size={20}/>
       <div><h2>Advisory only — never controls trading</h2><p>Calendar and AI information may be incomplete or unverified. It does not change orders, stops, risk limits, or trading decisions.</p></div>
     </section>
+    <section className="intelligence-coverage" aria-label="Current source coverage">
+      <h2>Current source coverage</h2>
+      <p>U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS. UK/global calendars and issuer coverage are not established; coverage remains incomplete and unverified.</p>
+    </section>
     <section className="position-section">
       <div className="section-heading"><h2><CalendarDays size={18}/> Economic calendar</h2><span className="status caution">Coverage unverified</span></div>
       <div className="table-scroll" tabIndex={0} aria-label="Economic calendar" aria-describedby="table-scroll-instructions"><table><thead><tr><th>Event</th><th>Scheduled (UTC)</th><th>Instruments</th></tr></thead><tbody>{snapshot.calendar.map(event=><tr key={event.event_id}><td>{event.title}</td><td>{timestamp(event.scheduled_at,"Unknown")}</td><td>{event.symbols.join(', ')}</td></tr>)}</tbody></table>{snapshot.calendar.length===0&&<div className="intelligence-empty"><h3>No calendar events recorded</h3><p>{calendarCollectionActive?"No events are recorded in this snapshot. Calendar coverage remains unverified; this does not establish that no events are scheduled.":"Calendar collection is off in the applied settings. This empty view does not establish that no events are scheduled."}</p></div>}</div>

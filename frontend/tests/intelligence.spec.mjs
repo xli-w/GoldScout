@@ -11,6 +11,8 @@ test("synthetic intelligence controls and briefs work without account data",asyn
   await page.reload();
   await expect(page.getByRole("heading",{name:"Market intelligence",exact:true})).toBeVisible();
   await expect(page.getByText("Synthetic intelligence",{exact:true})).toBeVisible();
+  await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS.");
+  await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("UK/global calendars and issuer coverage are not established");
   await expect(page.getByText("Last request: applied / Settings applied",{exact:true})).toBeVisible();
   const appliedChange=async action=>{
     const revisions=page.getByLabel("Analysis settings status");
@@ -60,7 +62,7 @@ async function mockIntelligence(page,profiles,serviceProfiles=null,authenticated
 }
 
 test("intelligence header uses its own source instead of cached account status",async({page})=>{
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page.getByRole("heading",{name:"Portfolio overview"})).toBeVisible();
   await expect(page.locator(".topbar-status")).toContainText("SYNTHETIC DEMO");
   const {snapshot}=await mockIntelligence(page,["demo"]);

@@ -22,6 +22,28 @@ test("investment workspace opens investment and does not present legacy-only pag
   expect(legacyRequests).toBe(0);
 });
 
+test("demo defaults to investment and retains a separate legacy trading route", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/investment$/);
+  await expect(page.getByRole("heading", { name: "Management roles" })).toBeVisible();
+  await expect(page.getByText(/Synthetic role attribution is shown only to demonstrate accounting/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
+  await page.getByRole("link", { name: "Trading demo", exact: true }).click();
+  await expect(page).toHaveURL(/\/legacy$/);
+  await expect(page.getByRole("heading", { name: "Portfolio overview" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Account navigation" })).toBeVisible();
+  await page.getByRole("link", { name: "Positions", exact: true }).click();
+  await expect(page.getByRole("cell", { name: /SPY/ })).toBeVisible();
+});
+
+test("recording route clearly reports when local opt-in is disabled", async ({ page }) => {
+  await page.goto("/investment/record");
+  await expect(page.getByRole("heading", { name: "Record evidence" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recording is disabled" })).toBeVisible();
+  await expect(page.getByText(/explicitly selected version-2 store and local opt-in/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Preview record" })).toHaveCount(0);
+});
+
 test("unknown workspace does not guess an account source", async ({ page }) => {
   let legacyRequests = 0;
   await page.route("**/api/v1/settings", route => route.fulfill({ json: { workspace: ["demo"] } }));
@@ -77,6 +99,7 @@ test("portfolio awareness keeps matching local, shows evidence and fails closed 
     return route.fulfill(unavailable ? { status: 503, json: { error: "unavailable" } } : { json: awareness });
   });
   await page.goto("/investment");
+  await page.getByText("Optional local portfolio awareness", { exact: true }).click();
   const section = page.getByRole("region", { name: "Portfolio awareness", exact: true });
   await expect(section.getByText("Synthetic inflation release", { exact: false })).toBeVisible();
   await expect(section.getByText(/Time unknown/)).toBeVisible();
@@ -151,12 +174,17 @@ test("portfolio awareness keeps matching local, shows evidence and fails closed 
 test("investment demo separates contributions, GBP valuation and export-only proposals", async ({ page }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto("/investment");
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/investment$/);
   await expect(page.getByRole("heading", { name: "Long-term investment", level: 1 })).toBeVisible();
   await expect(page.getByText("SYNTHETIC INVESTMENT DEMO")).toBeVisible();
   await expect(page.getByText("Deposits are not profit")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Allocation and drift" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Management roles" })).toBeVisible();
+  await expect(page.getByText(/no targets, policy, or investment recommendation/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
+  await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
   await expect(page.getByText(/External savings are not broker buying power/)).toBeVisible();
+  await page.getByText("Proposal status and capability limits", { exact: true }).click();
   await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(page.locator(".metrics")).toContainText("GBP");
@@ -177,15 +205,30 @@ test("investment guide remains usable when recorded investment data is unavailab
 });
 
 test("investment view displays a non-executable sell proposal", async ({ page }) => {
-  const response = await page.request.get("/api/investment/v1/snapshot");
-  expect(response.ok()).toBeTruthy();
-  const report = await response.json();
-  report.proposal.status = "review";
-  report.proposal.reason = "Proposed sale proceeds do not fund purchases.";
-  report.proposal.orders = [{ account_id: "broker", product_id: "equity", side: "sell",
-    quantity: "20", estimated_notional_gbp: "200" }];
+  const report = {
+    schema_version: 1, source_mode: "demo", portfolio_id: "synthetic-v1", revision: 1,
+    generated_at: "2026-01-01T12:00:00Z", as_of: "2026-01-01T12:00:00Z",
+    currency: "GBP", complete: true, equity_gbp: "1000", net_contributions_gbp: "900",
+    gain_gbp: "100", twr_pct: "11.11", max_drawdown_pct: "0",
+    accounts: [{ id: "broker", name: "Synthetic broker", kind: "broker", cash_gbp: "0" }],
+    holdings: [], allocation: [
+      { sleeve: "equity", target_pct: "80", actual_pct: "100", drift_pp: "20" },
+      { sleeve: "bond", target_pct: "0", actual_pct: "0", drift_pp: "0" },
+      { sleeve: "cash", target_pct: "20", actual_pct: "0", drift_pp: "-20" },
+    ],
+    proposal: { status: "review", reason: "Proposed sale proceeds do not fund purchases.",
+      expires_at: "2026-01-01T13:00:00Z", orders: [{ account_id: "broker",
+        product_id: "equity", side: "sell", quantity: "20", estimated_notional_gbp: "200" }],
+      manual_transfers: [], execution_enabled: false },
+    warnings: [], limitations: ["Synthetic v1 test evidence."],
+  };
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
+  await expect(page.getByText("Legacy v1 asset-class target view", { exact: true })).toBeVisible();
+  await page.getByText("Legacy v1 asset-class target view", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Legacy v1 allocation and drift" })).toBeVisible();
+  await expect(page.getByText(/not the current role-based mandate, approved targets/)).toBeVisible();
+  await page.getByText("Proposal status and capability limits", { exact: true }).click();
   const row = page.getByLabel("Proposed investment changes").getByRole("row").nth(1);
   await expect(row).toContainText("Sell");
   await expect(row).toContainText("20");
@@ -340,7 +383,6 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.goto("/investment");
   const totals = page.getByRole("region", { name: "Investment totals" });
   await expect(totals.getByText("Gain since baseline")).toBeVisible();
-  await expect(page.getByText(/Lifetime gain and prior cost basis are unavailable/)).toBeVisible();
   await expect(totals.getByText("£2,000.00")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recorded growth history" })).toBeVisible();
   await expect(page.getByText("Gap: Incomplete synthetic valuation.")).toBeVisible();
@@ -455,6 +497,8 @@ test("opening records show since-baseline value without inventing lifetime gain"
   report.valuation_history = history;
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(returnChart).toBeVisible();
+  await page.getByText("Journal records", { exact: true }).click();
+  await expect(page.getByText(/Lifetime gain and prior cost basis are unavailable/)).toBeVisible();
   const attribution = page.getByRole("region", { name: "Recorded fees and income" });
   await expect(attribution.getByText("Recorded transaction fees")).toBeVisible();
   await expect(attribution.getByText("Recorded interest")).toBeVisible();
@@ -477,6 +521,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(flowHistory.getByRole("row").nth(3)).toContainText("synthetic withdrawal evidence");
   await expect(flowHistory.getByRole("row").nth(3)).toContainText("External destination");
   await expect(page.getByText(/Transfers between included accounts do not change net external contributions/)).toBeVisible();
+  await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Reported savings-account terms" })).toBeVisible();
   await expect(page.getByText(/4.25% AER/)).toBeVisible();
   await expect(page.getByText(/not current provider verification or an interest-accrual input/)).toBeVisible();
@@ -540,9 +585,13 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.clock.setFixedTime(new Date("2025-01-01T12:00:00Z"));
   await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Age unavailable (future or invalid clock)");
   await page.clock.setFixedTime(new Date("2026-01-05T12:00:00Z"));
+  await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
   await expect(page.getByRole("columnheader", { name: "Mark as of" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
+  await page.getByText("Proposal status and capability limits", { exact: true }).click();
   await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
+  await page.getByRole("link", { name: "Record evidence", exact: true }).click();
+  await expect(page).toHaveURL(/\/investment\/record$/);
   await page.getByLabel("Local recording password").fill("synthetic-local-passphrase");
   await page.getByRole("button", { name: "Unlock recording" }).click();
   await expect(page.getByLabel("Record type")).toBeVisible();
@@ -601,6 +650,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByRole("heading", { name: "Review before recording" })).toBeVisible();
   expect(previewEvent.holdings[0].price_gbp).toBeNull();
   await page.getByRole("button", { name: "Cancel preview" }).click();
+  await page.goto("/investment");
   report.lifetime_gain_gbp = "0";
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(page.getByText("Investment response failed validation.")).toBeVisible();
@@ -608,7 +658,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
 
 test("trading guide works from the footer and without account data", async ({ page }) => {
   await page.route("**/api/v1/**", route => route.abort());
-  await page.goto("/");
+  await page.goto("/legacy");
   await page.locator("footer").getByRole("link", { name: "Trading guide" }).click();
   await expect(page).toHaveURL(/\/guide$/);
   await expect(page.getByRole("heading", { name: "Trading guide", level: 1 })).toBeVisible();
@@ -621,9 +671,9 @@ test("trading guide works from the footer and without account data", async ({ pa
 });
 
 test("overview loads and position search preserves URL", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page).toHaveTitle("GoldScout | Portfolio Monitor");
-  await expect(page.getByRole("link", { name: "GoldScout Portfolio monitor" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "GoldScout Legacy trading" })).toBeVisible();
   await expect(page.locator("footer")).toContainText("GoldScout");
   await expect(page.getByRole("heading", { name: "Portfolio overview" })).toBeVisible();
   await expect(page.getByText("SYNTHETIC DEMO")).toBeVisible();
@@ -650,7 +700,7 @@ test("position protection shows its observation time and stop definitions", asyn
     api_version: "1", resource: "health", meta: fixtures.meta, data: healthy.responses.health,
   } }));
 
-  await page.goto("/");
+  await page.goto("/legacy");
   const positionRow = page.getByRole("row").filter({ hasText: "SPY" });
   await expect(positionRow).toContainText("Last verified");
   await expect(positionRow).toContainText("Observed Nov 13, 2026");
@@ -676,7 +726,7 @@ test("position protection shows its observation time and stop definitions", asyn
 test("small screens retain runtime and expose scrollable navigation and tables", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "Small-screen layout");
   await page.setViewportSize({ width: 320, height: 800 });
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page.locator(".connection")).toContainText("Runtime");
   await expect(page.locator(".connection")).toBeVisible();
   await expect(page.getByText("Scroll for more sections")).toBeVisible();
@@ -703,7 +753,7 @@ test("unknown entry status explains its meaning and leads with fresh observation
     api_version: "1", resource: "health", meta: fixtures.meta, data: healthy.responses.health,
   } }));
 
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page.locator(".gate-band")).toContainText("Unknown");
   await expect(page.locator(".gate-band")).toContainText("Unknown is not approval to trade.");
   await expect(page.locator(".gate-band").getByRole("link", { name: "Review system health" })).toHaveAttribute("href", "/health");
@@ -731,7 +781,7 @@ test("blocked position issues link directly to positions", async ({ page }) => {
     api_version: "1", resource: "health", meta: fixtures.meta, data: healthy.responses.health,
   } }));
 
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page.locator(".gate-band")).toContainText("Blocked in snapshot");
   await expect(page.locator(".gate-band").getByRole("link", { name: "Review affected positions" })).toHaveAttribute("href", "/positions");
 });
@@ -741,14 +791,14 @@ test("unavailable storage does not render an empty account", async ({ page }) =>
     api_version: "1", resource: "error", meta: fixtures.meta,
     data: { code: "ledger_missing", message: "Recorded account data is unavailable.", retryable: true },
   }) }));
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page.getByRole("alert")).toContainText("No account snapshot");
   await expect(page.getByText("No recorded holdings")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
 });
 
 test("refresh failure hides previously loaded totals", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page.getByRole("cell", { name: /SPY/ })).toBeVisible();
   await page.route("**/api/v1/overview", route => route.abort());
   await page.getByRole("button", { name: "Refresh data" }).click();
@@ -770,7 +820,7 @@ test("monitoring observation ages without another response", async ({ page }) =>
   await page.route("**/api/v1/positions?*", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({
     api_version: "1", resource: "positions", meta, data: healthy.responses.positions,
   }) }));
-  await page.goto("/");
+  await page.goto("/legacy");
   const monitoring = page.locator(".observation-band > div").nth(1);
   await expect(monitoring.getByText("Fresh", { exact: true })).toBeVisible();
   await page.clock.fastForward(2000);
@@ -798,7 +848,7 @@ test("monitor-only entry block becomes unknown when telemetry ages out", async (
     api_version: "1", resource: "health", meta, data: healthy.responses.health,
   }) }));
 
-  await page.goto("/");
+  await page.goto("/legacy");
   await expect(page.locator(".gate-band h2")).toContainText("Blocked in snapshot");
   await page.clock.runFor(91000);
   await expect(page.locator(".gate-band h2")).toContainText("Unknown");
@@ -817,7 +867,7 @@ test("health view renders monitor, blocks and activity coverage", async ({ page 
 });
 
 test("fault observation is visible on health page", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/legacy");
   const health = await page.evaluate(async () => await (await fetch("/api/v1/health")).json());
   await page.route("**/api/v1/health?*", async route => {
     const body = structuredClone(health);

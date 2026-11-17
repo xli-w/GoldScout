@@ -7,7 +7,7 @@ import { DashboardError, label, loadDashboard, money, price, quantity, runtimeSt
 import { ActivityView, HistoryView } from "./HistoryViews";
 import { IntelligenceView, useIntelligence } from "./IntelligenceView";
 import { TradingGuide } from "./TradingGuide";
-import { InvestmentGuide, InvestmentView } from "./InvestmentView";
+import { InvestmentGuide, InvestmentRecordingPage, InvestmentView } from "./InvestmentView";
 
 const REASONS: Record<string, string> = {
   accounting_unresolved: "Accounting unresolved", daily_halted: "Daily-loss halt",
@@ -115,10 +115,12 @@ export function App() {
       return workspace;
     },
   });
-  const investmentWorkspace = workspaceQuery.data === "investment";
   const collectionFetching = useIsFetching({ queryKey: ["collection"] });
   const intelligenceFetching = useIsFetching({ queryKey: ["intelligence"] });
   const location = useLocation();
+  const legacyDemoRoute = ["/legacy", "/positions", "/health", "/activity", "/history"].includes(location.pathname);
+  const investmentWorkspace = workspaceQuery.data === "investment"
+    || workspaceQuery.data === "demo" && !legacyDemoRoute;
   const full = location.pathname === "/positions";
   const healthPage = location.pathname === "/health";
   const activityPage = location.pathname === "/activity";
@@ -126,14 +128,17 @@ export function App() {
   const intelligencePage = location.pathname === "/intelligence";
   const guidePage = location.pathname === "/guide";
   const investmentPage = location.pathname === "/investment";
+  const investmentRecordPage = location.pathname === "/investment/record";
   const investmentGuidePage = location.pathname === "/investment-guide";
-  const overviewPage = location.pathname === "/";
+  const legacyOverviewPage = location.pathname === "/legacy";
+  const overviewPage = location.pathname === "/" || legacyOverviewPage;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const legacyPage = !intelligencePage && !guidePage && !investmentPage && !investmentGuidePage;
+  const legacyPage = !intelligencePage && !guidePage && !investmentPage
+    && !investmentRecordPage && !investmentGuidePage;
   const query = useQuery({ queryKey: ["dashboard"], queryFn: ({ signal }) => loadDashboard(signal), refetchInterval: 5000, enabled: legacyPage && workspaceQuery.isSuccess && !investmentWorkspace });
   const intelligence = useIntelligence(intelligencePage);
   const refreshing = intelligencePage ? intelligenceFetching > 0 : query.isFetching || collectionFetching > 0;
@@ -163,20 +168,24 @@ export function App() {
   const blocked = overview?.entries === "blocked" && !staleMonitorOnlyBlock;
   const positionsAffected = blockReasons.some(reason => ["exit_pending", "protection_unverified", "unmanaged_positions"].includes(reason));
   const runtime = current ? runtimeStatus(current.health.data, current.health.meta, now) : "unknown";
-  const pageName = investmentPage ? "Long-term investment" : investmentGuidePage ? "Investment guide" : guidePage ? "Trading guide" : intelligencePage ? "Market intelligence" : historyPage ? "History" : activityPage ? "Activity" : healthPage ? "Health" : full ? "Positions" : "Overview";
+  const pageName = investmentPage ? "Long-term investment" : investmentRecordPage ? "Record evidence" : investmentGuidePage ? "Investment guide" : guidePage ? "Trading guide" : intelligencePage ? "Market intelligence" : historyPage ? "History" : activityPage ? "Activity" : healthPage ? "Health" : full ? "Positions" : "Overview";
+  const workspaceCaption = investmentWorkspace ? "INVESTMENT WORKSPACE"
+    : workspaceQuery.data === "demo" ? "DEMO WORKSPACE" : "ACCOUNT WORKSPACE";
   const pageDescription = activityPage ? "Recorded journal events and observed orders; not live order control."
     : historyPage ? "Portfolio totals, original exit records, and separate evidence-linked corrections."
     : intelligencePage ? "Optional calendar, news, and analysis. Advisory only and separate from account records."
+    : investmentRecordPage ? "Manual v2 evidence entry requires local opt-in, authentication, a revision-bound preview, and explicit confirmation."
     : null;
   const ledgerFreshness = meta ? sourceFreshness(meta.ledger, now) : "missing";
   const ledgerStale = ledgerFreshness !== "fresh";
-  if (overviewPage && investmentWorkspace) return <Navigate to="/investment" replace />;
+  if (location.pathname === "/" && investmentWorkspace) return <Navigate to="/investment" replace />;
   return <div className="shell">
     <aside className="sidebar">
-      <NavLink to={investmentWorkspace ? "/investment" : "/"} className="brand"><span className="brand-mark"><Activity size={24} /></span><span>GoldScout<small>Portfolio monitor</small></span></NavLink>
+      <NavLink to={investmentWorkspace ? "/investment" : workspaceQuery.data === "demo" ? "/legacy" : "/"} className="brand"><span className="brand-mark"><Activity size={24} /></span><span>GoldScout<small>{investmentWorkspace ? "Investment journal" : "Legacy trading"}</small></span></NavLink>
       <div className="nav-groups">
         <div className="nav-section"><span className="nav-section-label">INVESTMENT</span><nav aria-label="Investment navigation"><NavLink to="/investment"><Wallet size={18} />Investment</NavLink><NavLink to="/investment-guide"><CircleHelp size={18} />Investment guide</NavLink></nav></div>
-        {workspaceQuery.isSuccess && !investmentWorkspace && <><div className="nav-section"><span className="nav-section-label">ACCOUNT</span><nav aria-label="Account navigation"><NavLink to="/" end><LayoutDashboard size={18} />Overview</NavLink><NavLink to="/positions"><Wallet size={18} />Positions</NavLink><NavLink to="/health"><Activity size={18} />Health</NavLink></nav></div>
+        {workspaceQuery.data === "demo" && investmentWorkspace && <div className="nav-section"><span className="nav-section-label">LEGACY</span><nav aria-label="Legacy navigation"><NavLink to="/legacy"><Activity size={18} />Trading demo</NavLink></nav></div>}
+        {workspaceQuery.isSuccess && !investmentWorkspace && <><div className="nav-section"><span className="nav-section-label">ACCOUNT</span><nav aria-label="Account navigation"><NavLink to={workspaceQuery.data === "demo" ? "/legacy" : "/"} end><LayoutDashboard size={18} />Overview</NavLink><NavLink to="/positions"><Wallet size={18} />Positions</NavLink><NavLink to="/health"><Activity size={18} />Health</NavLink></nav></div>
         <div className="nav-section"><span className="nav-section-label">RECORDS</span><nav aria-label="Records navigation"><NavLink to="/activity"><ListOrdered size={18} />Activity</NavLink><NavLink to="/history"><Database size={18} />History</NavLink></nav></div></>}
         <div className="nav-section advisory-nav-section"><span className="nav-section-label">ADVISORY</span><nav aria-label="Advisory navigation"><NavLink to="/intelligence"><Activity size={18}/>Intelligence</NavLink></nav></div>
       </div>
@@ -185,17 +194,17 @@ export function App() {
     </aside>
     <div className="workspace">
       <header className="topbar"><div className="breadcrumb">Portfolio <span>/</span> <strong>{pageName}</strong></div>
-        {!guidePage && !investmentPage && !investmentGuidePage && (!legacyPage || !investmentWorkspace) && <div className="topbar-status">{intelligencePage
+        {!guidePage && !investmentPage && !investmentRecordPage && !investmentGuidePage && (!legacyPage || !investmentWorkspace) && <div className="topbar-status">{intelligencePage
           ? <><span className={`mode ${intelligenceMode === "demo" ? "demo" : ""}`}>{intelligenceMode === "demo" ? "SYNTHETIC DEMO" : intelligenceMode === "recorded" ? "RECORDED INTELLIGENCE" : intelligence.isFetching ? "Checking source" : "Source unknown"}</span><span className="connection" aria-live="polite">{intelligenceStatus}</span></>
           : <><span className={`mode ${mode === "demo" ? "demo" : meta?.environment === "live" ? "live" : ""}`}>{mode === "demo" ? "SYNTHETIC DEMO" : meta?.environment ? label(meta.environment) : "Source unknown"}</span><span className="connection"><span className={`dot ${runtime}`} />Runtime {runtime}</span></>}</div>}
       </header>
       <main>
         <span className="sr-only" id="table-scroll-instructions">Scroll horizontally to see all columns.</span>
-        <div className="page-heading"><div><p className="eyebrow">{guidePage ? "GUIDE" : intelligencePage ? "INTELLIGENCE WORKSPACE" : mode === "demo" ? "DEMO WORKSPACE" : "ACCOUNT WORKSPACE"}</p><h1>{pageName === "Overview" ? "Portfolio overview" : pageName}</h1>{pageDescription && <p className="page-description">{pageDescription}</p>}</div>
-          {!guidePage && !investmentPage && !investmentGuidePage && (!legacyPage || (!investmentWorkspace && workspaceQuery.isSuccess)) && <button className="icon-button refresh" aria-label="Refresh data" title="Refresh data" disabled={refreshing} onClick={() => void refresh()}><RefreshCw size={19} className={refreshing ? "spin" : ""} /></button>}
+        <div className="page-heading"><div><p className="eyebrow">{guidePage ? "GUIDE" : intelligencePage ? "INTELLIGENCE WORKSPACE" : workspaceCaption}</p><h1>{pageName === "Overview" ? "Portfolio overview" : pageName}</h1>{pageDescription && <p className="page-description">{pageDescription}</p>}</div>
+          {!guidePage && !investmentPage && !investmentRecordPage && !investmentGuidePage && (!legacyPage || (!investmentWorkspace && workspaceQuery.isSuccess)) && <button className="icon-button refresh" aria-label="Refresh data" title="Refresh data" disabled={refreshing} onClick={() => void refresh()}><RefreshCw size={19} className={refreshing ? "spin" : ""} /></button>}
         </div>
         {!guidePage && !investmentPage && !investmentGuidePage && !intelligencePage && mode === "demo" && <div className="demo-band"><Activity size={16} /><span>Synthetic data</span></div>}
-        {investmentPage ? <InvestmentView now={now} /> : investmentGuidePage ? <InvestmentGuide /> : guidePage ? <TradingGuide /> : intelligencePage ? <IntelligenceView data={intelligence}/> : investmentWorkspace ? <div className="error-state" role="status"><p>Legacy trading records are not selected in this workspace.</p><NavLink to="/investment">Open investment records</NavLink></div>
+        {investmentPage ? <InvestmentView now={now} /> : investmentRecordPage ? <InvestmentRecordingPage /> : investmentGuidePage ? <InvestmentGuide /> : guidePage ? <TradingGuide /> : intelligencePage ? <IntelligenceView data={intelligence}/> : investmentWorkspace ? <div className="error-state" role="status"><p>Legacy trading records are not selected in this workspace.</p><NavLink to="/investment">Open investment records</NavLink></div>
           : workspaceQuery.isError ? <div className="error-state" role="alert"><p>Workspace settings are unavailable; account source is unknown.</p><button onClick={() => void workspaceQuery.refetch()}>Retry</button></div>
           : workspaceQuery.isPending || query.isPending ? <div className="loading" role="status"><RefreshCw size={24} className="spin" /><span>Loading recorded account data</span></div>
           : !current ? <div className="error-state" role="alert"><ShieldAlert size={36} /><p className="eyebrow">ACCOUNT DATA UNAVAILABLE</p><h2>{failure?.code === "ledger_invalid" ? "Snapshot validation failed" : failure?.code === "schema_unsupported" ? "Unsupported ledger schema" : "No account snapshot"}</h2><p>{failure?.message || "The dashboard source could not be reached."}</p><button onClick={() => void query.refetch()}><RefreshCw size={16} />Retry</button></div>
@@ -223,7 +232,7 @@ export function App() {
             {historyPage ? <HistoryView databaseId={current.overview.meta.database_id} /> : activityPage ? <ActivityView databaseId={current.overview.meta.database_id} /> : healthPage ? <HealthView health={current.health.data} meta={current.health.meta} now={now} /> : <PositionTable positions={current.positions.data.map(position => runtime === "running" || position.protection !== "last_verified" ? position : { ...position, protection: "unknown" })} full={full} now={now} />}
             {!overviewPage && <div className="observation-band"><div><Activity size={17} /><span>Broker prices</span><strong>{!meta?.broker.observed_at ? "No price observation" : label(sourceFreshness(meta.broker, now))}</strong></div><div><Activity size={17} /><span>Monitoring</span><strong>{!meta?.telemetry.observed_at ? "No runtime observation" : label(sourceFreshness(meta.telemetry, now))}</strong></div></div>}
           </>}
-        <footer><span>GoldScout <span className="footer-separator">/</span> Portfolio monitor <span className="footer-separator">/</span> <NavLink to={investmentWorkspace ? "/investment-guide" : "/guide"}>{investmentWorkspace ? "Investment guide" : "Trading guide"}</NavLink></span><span><LockKeyhole size={12} />Trading records read-only</span></footer>
+        <footer><span>GoldScout <span className="footer-separator">/</span> {investmentWorkspace ? "Investment journal" : "Legacy trading"} <span className="footer-separator">/</span> <NavLink to={investmentWorkspace ? "/investment-guide" : "/guide"}>{investmentWorkspace ? "Investment guide" : "Trading guide"}</NavLink></span><span><LockKeyhole size={12} />{investmentWorkspace ? "Investment records read-only" : "Trading records read-only"}</span></footer>
       </main>
     </div>
   </div>;

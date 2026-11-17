@@ -177,6 +177,27 @@ class DashboardAPITests(DashboardTestCase):
                           base_url="http://127.0.0.1", raise_server_exceptions=False,
                           backend_options={"loop_factory": MemoryEventLoop})
 
+    def test_investment_demo_uses_synthetic_v2_opening_evidence_without_targets(self):
+        with self.client() as client:
+            response = client.get("/api/investment/v1/snapshot")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        report = response.json()
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["source_mode"], "demo")
+        self.assertEqual(report["currency"], "GBP")
+        self.assertEqual(report["portfolio_id"], "synthetic-demo")
+        self.assertEqual(report["proposal"]["status"], "blocked")
+        self.assertFalse(report["proposal"]["execution_enabled"])
+        self.assertIsNone(report["lifetime_gain_gbp"])
+        self.assertEqual(
+            {item["role"] for item in report["role_accounting"]},
+            {"core", "dynamic", "unassigned"},
+        )
+        self.assertTrue(report["valuation_history"])
+        self.assertEqual(report["cash_observations"][0]["difference_gbp"], "-10")
+        self.assertTrue(all("target_pct" not in item for item in report["role_accounting"]))
+
     def test_api_reads_and_revision_pairing(self):
         self.create_database()
         with self.client(self.database) as client:

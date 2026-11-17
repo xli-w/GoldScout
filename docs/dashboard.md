@@ -19,6 +19,11 @@ role-aware policy, weights, products and loss/transfer rules are approved and
 implemented.
 
 Use `python -m dashboard --demo` for synthetic investment and legacy previews.
+The root opens the GBP investment view using synthetic v2 opening evidence;
+`/legacy` opens the separate trading demo. The investment demo's role labels
+are illustrative accounting evidence, not targets or recommendations, and it
+does not imply investment performance. The root choice does not change the
+legacy account routes or the configured source.
 Use `python -m dashboard --investment-database .\investment.sqlite3` only for an
 explicitly initialised, operator-selected investment store. It is mutually
 exclusive with the legacy `--database` and `--demo` sources; recorded investment
@@ -43,9 +48,13 @@ not an active broker/bank connection.
 
 Recorded investment mode opens the investment page at the root and hides legacy
 account/record navigation; a direct legacy URL explains that those records are
-not selected. Trading and synthetic demo modes retain their existing legacy
-navigation. Workspace selection identifies the configured source, not its
-availability or verification; an unknown workspace is not replaced by a demo.
+not selected. In demo mode, `/legacy` preserves the legacy trading overview and
+account pages. The investment page presents valuation, roles, and performance
+before progressively disclosed account evidence and capability limits. The
+separate `/investment/record` page explains its opt-in gate and retains
+authentication, revision-bound previews, and explicit confirmation. Workspace
+selection identifies the configured source, not its availability or
+verification; an unknown workspace is not replaced by a demo.
 
 The investment page shows the age of the portfolio valuation and, for v2, each
 holding mark using the browser clock. These are elapsed times, not a freshness

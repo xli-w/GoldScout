@@ -760,6 +760,58 @@ following remain unsupported/unverified:
   calendar coverage and prospectively admitted intelligence-derived trading
   features. Local matching, reminders and editable thesis notes confer no approval.
 
+### Trading 212 pilot: offline recovery engineering only
+
+On 2026-11-17 the operator selected Trading 212 for an **offline-only** pilot:
+one separately approved, cash-funded GBP long buy. No account, product, order
+type, amount, budget or execution policy has been selected. This selection is
+not permission to access an account, submit even a paper order, or enable
+standing authority. Both investment proposal routes remain blocked.
+
+The pure `investment.pilot.simulate_pilot_trace` replays caller-supplied
+synthetic intent, approval, submission-attempt, acknowledgement, restart and
+cumulative-fill observations. It tests that a lost response or restart before
+an acknowledgement is quarantined rather than retried or matched to an
+unowned order. Repeated cumulative observations count only new quantity;
+conflicting declared order scope, decreasing fills and changed terminal
+outcomes fail. Without an observation, filled and unfilled quantities are
+unknown. Observed unfilled quantity is not an executable or active-order
+quantity. It models neither Trading 212's wire schema nor actual venue responses
+or source availability. It cannot
+verify that input is synthetic and must not be used with private account data.
+
+This is **not a broker mock adapter or runnable pilot**: there is no venue
+client, durable intent, authenticated approval, locking, cash reservation,
+settlement, fill-price/fee accounting, or connection to the investment journal.
+A synthetic restart is trace replay, not process/crash recovery. The supplied
+policy and approval IDs are declarations, not checked approvals. Ownership,
+funding and spend-limit checks are explicitly unavailable; the limit in the
+fixture cannot constrain a real fill. Outputs do
+not establish broker semantics, readiness or permission to submit.
+
+For venue evidence, prior public screening identified a non-idempotency warning
+in Trading 212's [market-order documentation](https://docs.trading212.com/api/orders/placemarketorder)
+and a paginated [historical orders endpoint](https://docs.trading212.com/api/historical-events/orders_1).
+On 2026-11-17 direct retrieval of these pages failed; indexed search results
+support the warning but do not independently verify the full current contract.
+Do not infer a client-assigned idempotency key, unique post-timeout recovery,
+complete visibility, execution-price cap, finality or settlement from a matching
+order or from this fixture. Obtain current official venue evidence and, if
+separately approved, carefully scoped broker trials before treating any such
+property as verified.
+
+Before any real or paper pilot, separately establish and approve the actual
+account/wrapper and product eligibility, order type and executable price/cost
+bound, available settled GBP and fees, role-aware policy and per-order approval,
+expiry/revocation, fresh independent reconciliation, and loss/position limits.
+Implement durable account-bound intent, single-owner concurrency, unknown-outcome
+quarantine, uniquely evidenced ownership/recovery, exactly-once partial-fill and
+fee accounting, settlement handling and restart procedures. Prove cancellation
+and protection semantics where applicable. Independent review, explicit
+task-specific broker authorization and venue-specific recovery evidence are
+required; otherwise execution stays manual outside GoldScout. No research or AI
+output supplies any of these approvals.
+
 ### Continuation order
 
 1. **Manual investment-capital management — implemented:** V1 supports
@@ -794,8 +846,9 @@ following remain unsupported/unverified:
 5. **Execution progression:** first a separately approved per-proposal execution
    pilot, then revocable standing authority for approved core maintenance and
    admitted dynamic strategies, after broker trials/recovery tests and independent
-   review. No broker is selected and no standing authority is implemented.
-   Reuse legacy safety concepts, not unverified Alpaca-specific retry semantics.
+   review. Trading 212 is selected for offline pilot investigation only; no
+   adapter or standing authority is implemented. Reuse legacy safety concepts,
+   not unverified Alpaca-specific retry semantics.
 6. **Experimental admission and retirement:** require selection/locked
    confirmation and prospective shadow evidence before separately approved
    deployment. Track incremental net benefit and risk; retire or suspend failed
