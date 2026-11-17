@@ -6,6 +6,7 @@ import { _ } from "ajv/dist/compile/codegen/index.js";
 
 for (const [path, output] of [
   ["../../dashboard/response.schema.json", "../src/response-validator.js"],
+  ["../../dashboard/setup.schema.json", "../src/setup-validator.js"],
   ["../../investment/response.schema.json", "../src/investment-validator.js"],
   ["../../investment/response-v2.schema.json", "../src/investment-validator-v2.js"],
   ["../../investment/awareness.schema.json", "../src/awareness-validator.js"],

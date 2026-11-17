@@ -32,12 +32,19 @@ MESSAGES = {
 
 
 def create_app(database=None, scenario="healthy_recorded", clock=None, static_directory=None, telemetry_path=None, process_check=None, serve_frontend=True,
-               intelligence_database=None, intelligence_demo=False, analysis_password=None, analysis_profiles=(), investment_database=None,
-               investment_recording_password=None, awareness_profile=None,
+               intelligence_database=None, intelligence_demo=False, analysis_controls_enabled=False, analysis_profiles=(), investment_database=None,
+               investment_recording_enabled=False, awareness_profile=None,
                monitoring_profile=None, monitoring_cache=None, monitoring_reviews=None,
-               monitoring_workflow_password=None):
+               monitoring_workflow_enabled=False, setup_workspace=None, setup_enabled=False):
     if database is not None and investment_database is not None:
         raise ValueError("Select legacy trading or investment storage, not both")
+    if setup_enabled and setup_workspace is None:
+        raise ValueError("Setup requires a selected workspace")
+    if setup_workspace is not None and (
+            investment_database is None or database is not None or intelligence_demo
+            or Path(investment_database).absolute() !=
+            Path(setup_workspace).absolute() / "investment.sqlite3"):
+        raise ValueError("Setup requires the workspace's fixed investment journal path")
     if awareness_profile is not None and (investment_database is None or intelligence_database is None or intelligence_demo):
         raise ValueError("Portfolio awareness requires explicit investment and intelligence stores")
     if monitoring_profile is not None and investment_database is None:
@@ -47,7 +54,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     if monitoring_reviews is not None and (
             investment_database is None or monitoring_profile is None):
         raise ValueError("Monitoring reviews require explicit investment and monitoring stores")
-    if monitoring_workflow_password is not None and monitoring_reviews is None:
+    if monitoring_workflow_enabled and monitoring_reviews is None:
         raise ValueError("Monitoring workflow actions require an explicitly selected review store")
     if monitoring_reviews is not None and (
             Path(monitoring_reviews).resolve() == Path(investment_database).resolve()
@@ -66,33 +73,43 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     validator = Draft202012Validator(
         json.loads((ROOT / "response.schema.json").read_text(encoding="utf-8")), format_checker=FormatChecker())
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    setup = None
+    setup_validator = None
+    if setup_workspace is not None:
+        from dashboard.investment_setup import InvestmentSetup
+        setup = InvestmentSetup(Path(setup_workspace).absolute(), setup_enabled, clock())
+        setup_validator = Draft202012Validator(
+            json.loads((ROOT / "setup.schema.json").read_text(encoding="utf-8")),
+            format_checker=FormatChecker())
     intelligence = None
     investment_recording = None
     monitoring_workflow = None
-    if investment_recording_password is not None:
+    if investment_recording_enabled:
         if investment_database is None or reader is not None or intelligence_demo:
             raise ValueError("Investment recording requires a selected recorded investment store")
         from dashboard.investment_recording import RecordingSessions
         investment_recording = RecordingSessions(
-            investment_database, investment_recording_password, clock)
-    if monitoring_workflow_password is not None:
+            investment_database, clock)
+    if monitoring_workflow_enabled:
         from dashboard.monitoring_workflow import MonitoringWorkflowSessions
-        monitoring_workflow = MonitoringWorkflowSessions(monitoring_workflow_password)
+        monitoring_workflow = MonitoringWorkflowSessions()
     if intelligence_database is not None or intelligence_demo:
         if intelligence_demo and (database is not None or investment_database is not None or intelligence_database is not None):
             raise ValueError("Synthetic intelligence must not bind operational storage")
         from dashboard.intelligence import IntelligenceWorkspace
-        intelligence = IntelligenceWorkspace(intelligence_database, analysis_profiles, analysis_password, intelligence_demo)
+        intelligence = IntelligenceWorkspace(
+            intelligence_database, analysis_profiles, analysis_controls_enabled, intelligence_demo)
     mutation_paths = {
-        "/api/v1/intelligence/login", "/api/v1/intelligence/controls",
-        "/api/investment/v1/recording/login",
+        "/api/v1/intelligence/controls",
         "/api/investment/v1/recording/preview",
         "/api/investment/v1/recording/confirm",
-        "/api/investment/v1/monitoring-workflow/login",
         "/api/investment/v1/monitoring-workflow/sync",
         "/api/investment/v1/monitoring-workflow/action",
         "/api/investment/v1/monitoring-workflow/observation/preview",
         "/api/investment/v1/monitoring-workflow/observation/confirm",
+        "/api/investment/v1/setup/preview",
+        "/api/investment/v1/setup/recovery-preview",
+        "/api/investment/v1/setup/confirm",
     }
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
@@ -126,7 +143,9 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
                     (investment_recording and
                      request.url.path.startswith("/api/investment/v1/recording/")) or
                     (monitoring_workflow and
-                     request.url.path.startswith("/api/investment/v1/monitoring-workflow/")))):
+                     request.url.path.startswith("/api/investment/v1/monitoring-workflow/")) or
+                    (setup and setup.security is not None and
+                     request.url.path.startswith("/api/investment/v1/setup/")))):
             response = error("invalid_request", 405)
         elif request.method == "POST" and (origin != f"{request.url.scheme}://{host}" or request.headers.get("sec-fetch-site") not in (None,"same-origin")):
             response = error("invalid_request", 403)
@@ -154,6 +173,11 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
 
     @app.get("/api/v1/settings")
     def settings():
+        if setup is not None:
+            status = setup.status(clock())
+            if status["state"] != "ready":
+                return {"mode": "recorded", "scenario": None, "workspace": "setup",
+                        "setup_state": status["state"]}
         return {"mode": "recorded" if reader or investment_database is not None else "demo",
                 "scenario": None if reader or investment_database is not None else scenario,
                 "workspace": "investment" if investment_database is not None else "trading" if reader else "demo"}
@@ -222,7 +246,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     @app.get("/api/investment/v1/recording/session")
     def investment_recording_session(request: Request):
         if investment_recording is None:
-            return {"enabled": False, "authenticated": False, "csrf": None,
+            return {"enabled": False, "csrf": None,
                     "accounts": [], "products": [], "latest_correctable_event": None}
         from dashboard.investment_recording import RecordingError
 
@@ -252,13 +276,13 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     @app.get("/api/v1/intelligence/session")
     def intelligence_session(request:Request):
         if intelligence is None or not intelligence.controls_enabled:
-            return {"enabled":False,"authenticated":False,"csrf":None}
+            return {"enabled":False,"csrf":None}
         token,record=intelligence.security.session(request.cookies.get("analysis_session"),clock(),create=True)
-        response=JSONResponse({"enabled":True,"authenticated":record["authenticated"],"csrf":record["csrf"]})
+        response=JSONResponse({"enabled":True,"csrf":record["csrf"]})
         response.set_cookie("analysis_session",token,httponly=True,samesite="strict",secure=request.url.scheme=="https",path="/api/v1/intelligence",max_age=900)
         return response
 
-    async def bounded_json(request, maximum=4096):
+    async def bounded_json(request, maximum=4096, strict=False):
         if request.headers.get("content-type","").split(";",1)[0]!="application/json":
             raise ValueError("JSON only")
         body = bytearray()
@@ -266,7 +290,91 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
             body.extend(chunk)
             if len(body) > maximum:
                 raise ValueError("Command too large")
+        if strict:
+            from investment.store import parse_json
+            return parse_json(bytes(body).decode("utf-8"))
         return json.loads(bytes(body))
+
+    def setup_response(payload):
+        try:
+            setup_validator.validate(payload)
+        except SchemaValidationError:
+            return JSONResponse(status_code=409, content={"error": "setup_response_invalid"})
+        return JSONResponse(payload)
+
+    @app.get("/api/investment/v1/setup/session")
+    def investment_setup_session(request: Request):
+        if setup is None:
+            return {"enabled": False, "csrf": None,
+                    "state": "blocked", "workspace": "",
+                    "message": "Setup is not selected. Restart with the default workspace or --workspace."}
+        from dashboard.monitoring_workflow import WorkflowError
+        from investment import InvestmentError
+        try:
+            payload = setup.session_payload(request.cookies.get("investment_setup_session"), clock())
+            token = payload.pop("_token", None)
+            response = setup_response(payload)
+            if token is not None:
+                response.set_cookie(
+                    "investment_setup_session", token, httponly=True, samesite="strict",
+                    secure=request.url.scheme == "https",
+                    path="/api/investment/v1/setup", max_age=900)
+            return response
+        except (WorkflowError, InvestmentError, OSError):
+            return JSONResponse(status_code=503, content={"error": "setup_unavailable"})
+
+    def setup_authorized(request):
+        return bool(setup and setup.authorize(
+            request.cookies.get("investment_setup_session"),
+            request.headers.get("x-csrf-token"), clock()))
+
+    @app.post("/api/investment/v1/setup/preview")
+    @app.post("/api/investment/v1/setup/recovery-preview")
+    async def investment_setup_preview(request: Request):
+        from dashboard.monitoring_workflow import WorkflowError
+        from investment import InvestmentError
+        if not setup_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "setup_authorization_required"})
+        try:
+            payload = await bounded_json(request, maximum=1048576, strict=True)
+            token = request.cookies.get("investment_setup_session")
+            if request.url.path.endswith("/recovery-preview"):
+                if payload != {}:
+                    return JSONResponse(status_code=400, content={"error": "invalid_request"})
+                result = setup.recover(token, clock())
+            else:
+                if type(payload) is not dict or set(payload) != {"request_id", "profile", "opening"}:
+                    return JSONResponse(status_code=400, content={"error": "invalid_request"})
+                result = setup.preview(
+                    token, payload["request_id"], payload["profile"], payload["opening"], clock())
+            return setup_response(result)
+        except WorkflowError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        except InvestmentError as exc:
+            return JSONResponse(status_code=409, content={"error": "setup_rejected", "message": str(exc)})
+        except (ValueError, RecursionError):
+            return JSONResponse(status_code=400, content={"error": "invalid_request"})
+
+    @app.post("/api/investment/v1/setup/confirm")
+    async def investment_setup_confirm(request: Request):
+        from dashboard.monitoring_workflow import WorkflowError
+        from investment import InvestmentError
+        if not setup_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "setup_authorization_required"})
+        try:
+            payload = await bounded_json(request, strict=True)
+            if (type(payload) is not dict or set(payload) != {"preview_id"}
+                    or not isinstance(payload["preview_id"], str)
+                    or not 1 <= len(payload["preview_id"]) <= 256):
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            return setup_response(setup.confirm(
+                request.cookies.get("investment_setup_session"), payload["preview_id"], clock()))
+        except WorkflowError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        except InvestmentError as exc:
+            return JSONResponse(status_code=409, content={"error": "setup_rejected", "message": str(exc)})
+        except (ValueError, RecursionError):
+            return JSONResponse(status_code=400, content={"error": "invalid_request"})
 
     def workflow_sources():
         from investment.monitoring import project, validate_profile
@@ -320,7 +428,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     @app.get("/api/investment/v1/monitoring-workflow/session")
     def monitoring_workflow_session(request: Request):
         if monitoring_workflow is None:
-            return {"enabled": False, "authenticated": False, "csrf": None,
+            return {"enabled": False, "csrf": None,
                     "accounts": [], "cache_enabled": False}
         from dashboard.monitoring_workflow import WorkflowError
         from investment import InvestmentError
@@ -329,10 +437,9 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
                 request.cookies.get("investment_monitoring_session"), clock())
             token = result.pop("_token")
             accounts, cache_enabled = [], monitoring_cache is not None
-            if result["authenticated"]:
-                sources = workflow_sources()
-                accounts = [{"account_id": item["account_id"], "provider": item["provider"]}
-                            for item in sources["profile"]["accounts"]]
+            sources = workflow_sources()
+            accounts = [{"account_id": item["account_id"], "provider": item["provider"]}
+                        for item in sources["profile"]["accounts"]]
             result.update({"accounts": accounts, "cache_enabled": cache_enabled,
                            "review_enabled": monitoring_reviews is not None})
             response = JSONResponse(result)
@@ -349,23 +456,6 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         return bool(monitoring_workflow and monitoring_workflow.authorize(
             request.cookies.get("investment_monitoring_session"),
             request.headers.get("x-csrf-token"), clock()))
-
-    @app.post("/api/investment/v1/monitoring-workflow/login")
-    async def monitoring_workflow_login(request: Request):
-        if monitoring_workflow is None:
-            return JSONResponse(status_code=503, content={"error": "monitoring_workflow_disabled"})
-        from dashboard.monitoring_workflow import WorkflowError
-        try:
-            payload = await bounded_json(request)
-            if type(payload) is not dict or set(payload) != {"password"}:
-                return JSONResponse(status_code=400, content={"error": "invalid_request"})
-            if not monitoring_workflow.login(
-                    request.cookies.get("investment_monitoring_session"),
-                    request.headers.get("x-csrf-token"), payload["password"], clock()):
-                return JSONResponse(status_code=403, content={"error": "authentication_failed"})
-            return {"authenticated": True}
-        except (ValueError, WorkflowError):
-            return JSONResponse(status_code=400, content={"error": "invalid_request"})
 
     @app.post("/api/investment/v1/monitoring-workflow/sync")
     async def monitoring_workflow_sync(request: Request):
@@ -595,24 +685,6 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         except (ValueError, InvestmentError, OSError):
             return JSONResponse(status_code=409, content={"error": "observation_confirmation_rejected"})
 
-    @app.post("/api/investment/v1/recording/login")
-    async def investment_recording_login(request: Request):
-        if investment_recording is None:
-            return JSONResponse(status_code=503, content={"error": "recording_disabled"})
-        from dashboard.investment_recording import RecordingError
-
-        try:
-            payload = await bounded_json(request)
-            if type(payload) is not dict or set(payload) != {"password"}:
-                return JSONResponse(status_code=400, content={"error": "invalid_request"})
-            if not investment_recording.login(
-                    request.cookies.get("investment_recording_session"),
-                    request.headers.get("x-csrf-token"), payload["password"], clock()):
-                return JSONResponse(status_code=403, content={"error": "authentication_failed"})
-            return {"authenticated": True}
-        except (ValueError, RecordingError):
-            return JSONResponse(status_code=400, content={"error": "invalid_request"})
-
     @app.post("/api/investment/v1/recording/preview")
     async def investment_recording_preview(request: Request):
         if investment_recording is None:
@@ -664,16 +736,6 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
                 "error": exc.code, "retryable": exc.status >= 500})
         except ValueError:
             return JSONResponse(status_code=409, content={"error": "confirmation_rejected"})
-
-    @app.post("/api/v1/intelligence/login")
-    async def intelligence_login(request:Request):
-        try:
-            payload=await bounded_json(request)
-            if type(payload) is not dict or set(payload)!={"password"} or not intelligence.security.login(request.cookies.get("analysis_session"),request.headers.get("x-csrf-token"),payload["password"],clock()):
-                return error("invalid_request",403)
-            return {"authenticated":True}
-        except Exception:
-            return error("invalid_request",400)
 
     @app.post("/api/v1/intelligence/controls")
     async def intelligence_controls(request:Request):
@@ -805,6 +867,7 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         @app.get("/investment/record")
         @app.get("/investment/reviews")
         @app.get("/investment-guide")
+        @app.get("/setup")
         @app.get("/legacy")
         def index():
             return FileResponse(static_directory / "index.html")

@@ -35,8 +35,8 @@ execution explicitly. Preserve the existing trading ledger, state model, stops,
 settings, commands and recovery tests.
 
 Dashboard investment responses use a distinct schema. Reporting is read-only by
-default; explicitly enabled, authenticated v2 manual recording uses previews and
-revision-bound confirmation. No browser path approves or executes trades.
+default; explicitly enabled v2 manual recording uses previews and revision-bound
+confirmation without user authentication. No browser path approves or executes trades.
 Eventual execution requires a separate implementation, task-specific operator
 approval and verified venue recovery semantics.
 

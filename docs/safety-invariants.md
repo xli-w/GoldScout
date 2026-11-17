@@ -87,7 +87,7 @@ These are development contracts, not a certification of live readiness. Current 
   journal cannot submit orders, reserve cash or update investment accounting.
   An ambiguous submission cannot be retried or adopted in the trace. Do not
   connect it to a broker or use it as an execution gate.
-- The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; dashboard/read-only commands never create, migrate, repair, or mutate it. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
+- The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; readers never create, migrate, repair, or mutate it. The default dashboard's narrow setup capability requires terminal-issued authorization, a bound preview and explicit confirmation before creating a new v2 journal; ordinary startup/status/preview creates no files. Existing or invalid stores are never overwritten or repaired, and setup never grants ongoing recording authority. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
 - The [investment backup and restore commands](investment-journal.md) copy a
   pinned, validated journal using SQLite in an operator-controlled directory,
   validate copied evidence, commit boundaries and replay, and publish to a new
@@ -130,16 +130,16 @@ These are development contracts, not a certification of live readiness. Current 
   complete baseline precedes same-clock interest or dividends. Never infer
   this ordering from equal timestamps.
 - The investment dashboard is read-only by default. Manual writes require an
-  explicit server opt-in, an operator-entered password and a selected existing
-  v2 store; they are same-origin, CSRF-protected, previewed and revision-bound.
+  explicit server opt-in and a selected existing v2 store; there is no user
+  authentication. Writes are same-origin, CSRF-protected, previewed and revision-bound.
   Stale revisions fail closed. Browser sessions/previews are temporary and no
   browser path contacts a bank/broker, moves funds, approves orders or executes
   trades. Corrections are append-only and limited to the amount of the
   immediately latest contribution, withdrawal or interest event; statement
   observations remain evidence and are never automatic balance corrections.
 - Dashboard monitoring inbox reads never initialize or sync the explicitly
-  selected review store. Authenticated review actions require the separate
-  monitoring-workflow opt-in/password, a current report sync, exact portfolio,
+  selected review store. Review actions require the separate
+  monitoring-workflow opt-in, a current report sync, exact portfolio,
   profile and cache-instance binding, and revision/idempotency checks. Guided
   manual observations require preview plus explicit confirmation and append
   only to the distinct monitoring cache; journal, accounting and provider
@@ -197,7 +197,8 @@ These are development contracts, not a certification of live readiness. Current 
 - [Market intelligence](decisions/0002-market-intelligence.md) is a separate advisory/shadow development stream. Master enablement and AI default off; hypothetical decisions never change trading (`affects_trading=False`). Unknown/stale coverage is uncertainty, not an order permission, halt, or evidence of protection.
 - Preserve source revisions, contemporaneous availability, provenance and explicit coverage. News receipt and validated AI completion determine availability; publication time alone does not. Today's model on historical headlines is not causal out-of-sample evidence.
 - Dedicated intelligence storage/control history is separate from the trading ledger and lock. Preserve identity, append-only evidence, bounded reads, exact revision/expiry checks and atomic application. No implicit initialization/repair by readers or development access to operational stores.
-- Requested settings, service-applied receipts, and bot-observed revisions are distinct. Local application or a schema does not establish active collection or bot acknowledgement. Trading/account APIs remain read-only; recorded-mode intelligence controls require explicit enablement and authentication. Controls are limited to CSRF-protected analysis settings; synthetic demo sessions use isolated temporary storage.
+- Requested settings, service-applied receipts, and bot-observed revisions are distinct. Local application or a schema does not establish active collection or bot acknowledgement. Trading/account APIs remain read-only; recorded-mode intelligence controls require explicit enablement but no user authentication. Controls are limited to same-origin, CSRF-protected analysis settings; synthetic demo sessions use isolated temporary storage.
+- The local dashboard has no user login. It binds to loopback and retains host/origin and CSRF checks; these are not authentication and do not protect against other local users. Do not expose or tunnel the dashboard.
 - Implemented opt-in feeds, providers, controls and the best-effort observer do not authorize operational service startup, external calls or changes to trading. Preserve broker-call parity, exits, stops, risk gates, quantities and causal candle consumption. News/LLM trading signals remain excluded from the GBP campaign.
 
 ## AI Development Boundary

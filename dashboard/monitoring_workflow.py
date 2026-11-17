@@ -1,7 +1,6 @@
 """Opt-in local sessions and ephemeral previews for monitoring workflow actions."""
 
 from datetime import timedelta
-import hashlib
 import secrets
 import threading
 
@@ -19,15 +18,9 @@ class MonitoringWorkflowSessions:
     SESSION_TTL = timedelta(minutes=15)
     PREVIEW_TTL = timedelta(minutes=5)
 
-    def __init__(self, password):
-        if not isinstance(password, str) or not 12 <= len(password) <= 256:
-            raise ValueError("Monitoring-workflow password must be 12-256 characters")
-        self.password_salt = secrets.token_bytes(16)
-        self.password_hash = hashlib.scrypt(
-            password.encode("utf-8"), salt=self.password_salt, n=2**14, r=8, p=1)
+    def __init__(self):
         self.lock = threading.Lock()
         self.sessions = {}
-        self.failures = []
 
     def session(self, token, now, create=False):
         now = clock(now)
@@ -42,7 +35,7 @@ class MonitoringWorkflowSessions:
                     raise WorkflowError("workflow_sessions_full", 503)
                 token = secrets.token_urlsafe(32)
                 record = {
-                    "csrf": secrets.token_urlsafe(32), "authenticated": False,
+                    "csrf": secrets.token_urlsafe(32),
                     "expires": now + self.SESSION_TTL, "commands": [],
                     "previews": {}, "requests": {},
                 }
@@ -51,35 +44,12 @@ class MonitoringWorkflowSessions:
 
     def session_payload(self, token, now):
         token, record = self.session(token, now, create=True)
-        return {"enabled": True, "authenticated": record["authenticated"],
-                "csrf": record["csrf"], "_token": token}
-
-    def login(self, token, csrf, password, now):
-        now = clock(now)
-        _, record = self.session(token, now)
-        if (record is None or not isinstance(csrf, str)
-                or not secrets.compare_digest(record["csrf"], csrf)):
-            return False
-        with self.lock:
-            self.failures = [value for value in self.failures
-                             if now - value < timedelta(minutes=1)]
-            if len(self.failures) >= 10:
-                return False
-            supplied = password if isinstance(password, str) and len(password) <= 256 else ""
-            valid = secrets.compare_digest(
-                self.password_hash, hashlib.scrypt(
-                    supplied.encode("utf-8"), salt=self.password_salt,
-                    n=2**14, r=8, p=1))
-            record["authenticated"] = valid
-            if not valid:
-                self.failures.append(now)
-            return valid
+        return {"enabled": True, "csrf": record["csrf"], "_token": token}
 
     def authorize(self, token, csrf, now):
         now = clock(now)
         _, record = self.session(token, now)
-        if (record is None or not record["authenticated"]
-                or not isinstance(csrf, str)
+        if (record is None or not isinstance(csrf, str)
                 or not secrets.compare_digest(record["csrf"], csrf)):
             return False
         with self.lock:

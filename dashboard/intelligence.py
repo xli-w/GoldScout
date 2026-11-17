@@ -1,7 +1,6 @@
 """Independent intelligence workspace; never opens the trading ledger."""
 
 from datetime import datetime, timedelta, timezone
-import hashlib
 import json
 import secrets
 import tempfile
@@ -16,11 +15,8 @@ from market_intelligence.store import IntelligenceStore, StoreError, connection,
 
 
 class ControlSessions:
-    def __init__(self, password, demo=False):
-        self.password = hashlib.sha256(password.encode()).digest() if password else None
-        self.demo = demo
+    def __init__(self):
         self.sessions = {}
-        self.failures = []
         self.lock = threading.Lock()
 
     def session(self, token, now, create=False):
@@ -31,13 +27,13 @@ class ControlSessions:
                 if len(self.sessions) >= 128:
                     raise StoreError("session_unavailable")
                 token = secrets.token_urlsafe(32)
-                record = {"csrf": secrets.token_urlsafe(32), "authenticated": self.demo, "expires": now + timedelta(minutes=15)}
+                record = {"csrf": secrets.token_urlsafe(32), "expires": now + timedelta(minutes=15)}
                 self.sessions[token] = record
             return token, record
 
     def authorize(self, token, csrf, now):
         _, record = self.session(token, now)
-        good=bool(record and record["authenticated"] and isinstance(csrf, str) and secrets.compare_digest(record["csrf"], csrf))
+        good=bool(record and isinstance(csrf, str) and secrets.compare_digest(record["csrf"], csrf))
         if good:
             with self.lock:
                 commands=[stamp for stamp in record.get("commands",[]) if now-stamp<timedelta(minutes=1)]
@@ -47,29 +43,14 @@ class ControlSessions:
                 record["commands"]=commands
         return good
 
-    def login(self, token, csrf, password, now):
-        _, record = self.session(token, now)
-        if not record or not isinstance(csrf, str) or not secrets.compare_digest(record["csrf"], csrf):
-            return False
-        with self.lock:
-            self.failures = [value for value in self.failures if now-value < timedelta(minutes=1)]
-            if len(self.failures) >= 10 or not isinstance(password, str) or len(password) > 256:
-                return False
-            good = self.password is not None and secrets.compare_digest(self.password, hashlib.sha256(password.encode()).digest())
-            if not good:
-                self.failures.append(now)
-            record["authenticated"] = good
-            return good
-
-
 class IntelligenceWorkspace:
-    def __init__(self, path=None, profiles=(), password=None, demo=False):
+    def __init__(self, path=None, profiles=(), controls_enabled=False, demo=False):
         self.demo = demo
         self.temporary = tempfile.TemporaryDirectory(prefix="trader-intelligence-demo-") if demo else None
         self.store = initialize(Path(self.temporary.name)/"demo.sqlite3", datetime.now(timezone.utc)) if demo else IntelligenceStore(path)
         self.profiles = tuple(profiles) if not demo else ("demo",)
-        self.security = ControlSessions(password, demo)
-        self.controls_enabled = demo or bool(password)
+        self.security = ControlSessions()
+        self.controls_enabled = demo or controls_enabled
         self.demo_analyzer = None
         self.demo_raw = None
         self.lock = threading.Lock()

@@ -44,11 +44,11 @@ test("synthetic intelligence controls and briefs work without account data",asyn
   await appliedChange(()=>master.uncheck());await expect(master).not.toBeChecked();
 });
 
-async function mockIntelligence(page,profiles,serviceProfiles=null,authenticated=true){
+async function mockIntelligence(page,profiles,serviceProfiles=null,controlSessionEnabled=true){
   const snapshot={source_mode:"demo",database_id:"test",generated_at:"2026-03-08T09:30:00Z",settings:{enabled:false,calendar_enabled:true,news_enabled:true,ai_enabled:false,mode:"advisory",ai_profile:null,revision:0},profiles,controls_enabled:true,source_status:null,calendar:[],news:[],briefs:[],controls:[],budget:null,bot_observed_revision:null};
   const requests=[];
   await page.route("**/api/**",route=>route.abort());
-  await page.route("**/api/v1/intelligence/session",route=>route.fulfill({json:{enabled:true,authenticated,csrf:"test"}}));
+  await page.route("**/api/v1/intelligence/session",route=>route.fulfill({json:{enabled:controlSessionEnabled,csrf:controlSessionEnabled?"test":null}}));
   await page.route("**/api/v1/intelligence",route=>route.fulfill({json:snapshot}));
   await page.route("**/api/v1/intelligence/controls",route=>{
     const request=route.request().postDataJSON();requests.push(request);
@@ -117,7 +117,7 @@ test("intelligence dates include the year and are explicitly UTC",async({page})=
 });
 
 test("intelligence briefs link only loaded evidence and show their validity window",async({page})=>{
-  const {snapshot}=await mockIntelligence(page,["demo"],null,false);
+  const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.source_status={status:"available",available_at:"2026-03-08T09:30:00Z",error_code:null};
   snapshot.news=[{evidence_id:"evidence-1",title:"Synthetic cited source",snippet:"Synthetic evidence",source_url:"https://example.test/source",published_at:"2026-03-08T09:00:00Z"}];
   snapshot.briefs=[{brief_id:"brief-1",available_at:"2026-03-08T09:31:00Z",expires_at:"2026-03-08T10:00:00Z",claims:[{text:"A cited synthetic claim.",evidence_ids:["evidence-1","missing-evidence"]}],interpretation:"Synthetic interpretation.",uncertainties:["Synthetic uncertainty."],recommendation:"review",verification:"unverified",provider:"synthetic",model:"test"}];
@@ -160,7 +160,7 @@ test("intelligence retains its last source during refresh and shows unknown afte
 });
 
 test("intelligence leads with evidence and separates request, application, and observation",async({page})=>{
-  const {snapshot}=await mockIntelligence(page,["demo"],null,false);
+  const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.settings.revision=7;
   snapshot.bot_observed_revision=5;
   snapshot.controls=[{request_id:"request-7",status:"applied",reason:"Settings applied",effective_revision:7}];
@@ -174,8 +174,8 @@ test("intelligence leads with evidence and separates request, application, and o
   await expect(revisions).toContainText("Applied / Settings applied");
   await expect(revisions).toContainText("Revision 7");
   await expect(revisions).toContainText("Revision 5");
-  await expect(page.getByText("Sign in to change analysis settings.",{exact:true})).toBeVisible();
-  await expect(page.getByRole("textbox",{name:"Analysis-control password"})).toBeVisible();
+  await expect(page.getByText("Enabled for this local session",{exact:true})).toBeVisible();
+  await expect(page.getByRole("textbox",{name:"Analysis-control password"})).toHaveCount(0);
 });
 
 test("disabled analysis controls explain the configuration lock",async({page})=>{

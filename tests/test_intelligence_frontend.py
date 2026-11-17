@@ -18,23 +18,36 @@ class IntelligenceAPITests(unittest.TestCase):
         self.path=Path(self.directory.name)/"intelligence.sqlite3"
         initialize(self.path,datetime.now(timezone.utc))
 
-    def client(self,demo=False):
+    def client(self,demo=False,controls=True):
         return TestClient(create_app(serve_frontend=False,intelligence_demo=demo,
                            intelligence_database=None if demo else self.path,
-                           analysis_password=None if demo else "test-password",analysis_profiles=("local",)),
+                           analysis_controls_enabled=controls,analysis_profiles=("local",)),
                           base_url="http://127.0.0.1",backend_options={"loop_factory":MemoryEventLoop})
 
-    def test_auth_origin_csrf_and_trading_routes_are_isolated(self):
+    def test_analysis_controls_remain_disabled_without_explicit_opt_in(self):
+        with self.client(controls=False) as client:
+            session = client.get("/api/v1/intelligence/session").json()
+            self.assertFalse(session["enabled"])
+            self.assertIsNone(session["csrf"])
+            response = client.post(
+                "/api/v1/intelligence/controls", json={},
+                headers={"Origin": "http://127.0.0.1"})
+            self.assertEqual(response.status_code, 405)
+
+    def test_opt_in_origin_csrf_and_trading_routes_are_isolated(self):
         with self.client() as client:
             session=client.get("/api/v1/intelligence/session").json()
             snapshot=client.get("/api/v1/intelligence").json()
             settings={key:value for key,value in snapshot["settings"].items() if key!="revision"}
             payload={"request_id":"request-1","database_id":snapshot["database_id"],"base_revision":0,"settings":settings}
             headers={"Origin":"http://127.0.0.1","X-CSRF-Token":session["csrf"]}
-            self.assertEqual(client.post("/api/v1/intelligence/controls",json=payload,headers=headers).status_code,403)
-            self.assertEqual(client.post("/api/v1/intelligence/login",json={"password":"test-password"},headers=headers).status_code,200)
             self.assertEqual(client.post("/api/v1/intelligence/controls",json=payload).status_code,403)
             self.assertEqual(client.post("/api/v1/intelligence/controls",json=payload,headers={**headers,"Origin":"https://attacker.invalid"}).status_code,403)
+            self.assertEqual(client.post("/api/v1/intelligence/controls",json=payload,
+                                         headers={key:value for key,value in headers.items()
+                                                  if key!="X-CSRF-Token"}).status_code,403)
+            self.assertEqual(client.post("/api/v1/intelligence/login",json={"password":"unused"},
+                                         headers=headers).status_code,405)
             response=client.post("/api/v1/intelligence/controls",json=payload,headers=headers)
             self.assertEqual(response.status_code,202)
             self.assertEqual(response.json()["status"],"pending")
@@ -60,7 +73,8 @@ class IntelligenceAPITests(unittest.TestCase):
         from market_intelligence.store import initialize
         older=Path(self.directory.name)/"version-three.sqlite3"
         initialize(older,datetime.now(timezone.utc),schema_version=3)
-        client=TestClient(create_app(serve_frontend=False,intelligence_database=older,analysis_password="test-password"),
+        client=TestClient(create_app(serve_frontend=False,intelligence_database=older,
+                                    analysis_controls_enabled=True),
                           base_url="http://127.0.0.1",backend_options={"loop_factory":MemoryEventLoop})
         with client:
             snapshot=client.get("/api/v1/intelligence").json()

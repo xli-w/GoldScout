@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate, NavLink, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Activity, ArrowDown, ArrowUp, ArrowUpRight, CircleHelp, Database, LayoutDashboard, ListOrdered, LockKeyhole, RefreshCw, Search, ShieldAlert, ShieldCheck, Wallet, X } from "lucide-react";
 import Decimal from "decimal.js";
 import { DashboardError, label, loadDashboard, money, price, quantity, runtimeStatus, sourceFreshness, timestamp, type Health, type Meta, type Position } from "./api";
@@ -9,6 +9,7 @@ import { IntelligenceView, useIntelligence } from "./IntelligenceView";
 import { TradingGuide } from "./TradingGuide";
 import { InvestmentGuide, InvestmentRecordingPage, InvestmentView } from "./InvestmentView";
 import { MonitoringWorkflowPage } from "./MonitoringWorkflow";
+import { InvestmentSetup } from "./InvestmentSetup";
 
 const REASONS: Record<string, string> = {
   accounting_unresolved: "Accounting unresolved", daily_halted: "Daily-loss halt",
@@ -98,6 +99,7 @@ function HealthView({ health, meta, now }: { health: Health; meta: Meta; now: nu
 
 export function App() {
   const client = useQueryClient();
+  const navigate = useNavigate();
   const workspaceQuery = useQuery({
     queryKey: ["workspace"],
     queryFn: async ({ signal }) => {
@@ -110,7 +112,7 @@ export function App() {
         throw new Error("Workspace settings failed validation.");
       }
       const workspace = settings.workspace;
-      if (workspace !== "demo" && workspace !== "trading" && workspace !== "investment") {
+      if (workspace !== "demo" && workspace !== "trading" && workspace !== "investment" && workspace !== "setup") {
         throw new Error("Workspace settings failed validation.");
       }
       return workspace;
@@ -119,6 +121,7 @@ export function App() {
   const collectionFetching = useIsFetching({ queryKey: ["collection"] });
   const intelligenceFetching = useIsFetching({ queryKey: ["intelligence"] });
   const location = useLocation();
+  const setupWorkspace = workspaceQuery.data === "setup";
   const legacyDemoRoute = ["/legacy", "/positions", "/health", "/activity", "/history"].includes(location.pathname);
   const investmentWorkspace = workspaceQuery.data === "investment"
     || workspaceQuery.data === "demo" && !legacyDemoRoute;
@@ -141,8 +144,8 @@ export function App() {
   }, []);
   const legacyPage = !intelligencePage && !guidePage && !investmentPage
     && !investmentRecordPage && !investmentWorkflowPage && !investmentGuidePage;
-  const query = useQuery({ queryKey: ["dashboard"], queryFn: ({ signal }) => loadDashboard(signal), refetchInterval: 5000, enabled: legacyPage && workspaceQuery.isSuccess && !investmentWorkspace });
-  const intelligence = useIntelligence(intelligencePage);
+  const query = useQuery({ queryKey: ["dashboard"], queryFn: ({ signal }) => loadDashboard(signal), refetchInterval: 5000, enabled: legacyPage && workspaceQuery.isSuccess && !investmentWorkspace && !setupWorkspace && location.pathname !== "/setup" });
+  const intelligence = useIntelligence(intelligencePage && !setupWorkspace);
   const refreshing = intelligencePage ? intelligenceFetching > 0 : query.isFetching || collectionFetching > 0;
   const refresh = async () => {
     if (intelligencePage) {
@@ -176,11 +179,19 @@ export function App() {
   const pageDescription = activityPage ? "Recorded journal events and observed orders; not live order control."
     : historyPage ? "Portfolio totals, original exit records, and separate evidence-linked corrections."
     : intelligencePage ? "Optional calendar, news, and analysis. Advisory only and separate from account records."
-    : investmentRecordPage ? "Manual v2 evidence entry requires local opt-in, authentication, a revision-bound preview, and explicit confirmation."
-    : investmentWorkflowPage ? "Local monitoring review actions and observation staging require separate opt-in and authentication."
+    : investmentRecordPage ? "Manual v2 evidence entry requires local opt-in, a revision-bound preview, and explicit confirmation."
+    : investmentWorkflowPage ? "Local monitoring review actions and observation staging require separate opt-in."
     : null;
   const ledgerFreshness = meta ? sourceFreshness(meta.ledger, now) : "missing";
   const ledgerStale = ledgerFreshness !== "fresh";
+  if (setupWorkspace || location.pathname === "/setup") return <div className="setup-shell">
+    <main><InvestmentSetup onComplete={() => {
+      void Promise.all([
+        client.invalidateQueries({ queryKey: ["workspace"] }),
+        client.invalidateQueries({ queryKey: ["investment"] }),
+      ]).then(() => navigate("/investment", { replace: true }));
+    }} /></main>
+  </div>;
   if (location.pathname === "/" && investmentWorkspace) return <Navigate to="/investment" replace />;
   return <div className="shell">
     <aside className="sidebar">

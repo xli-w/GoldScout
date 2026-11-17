@@ -326,7 +326,7 @@ type RecordingProduct = { id: string; name: string; sleeve: "equity" | "bond"; q
 type CorrectableEvent = { id: string; type: "contribution" | "withdrawal" | "interest";
   account_id: string; currency: "GBP"; amount_gbp: string; timestamp: string; available_at: string; evidence: string;
   role?: "core" | "dynamic" | "unassigned"; role_evidence?: string };
-type RecordingSession = { enabled: boolean; authenticated: boolean; csrf: string | null;
+type RecordingSession = { enabled: boolean; csrf: string | null;
   opened: boolean; accounts: RecordingAccount[]; products: RecordingProduct[];
   latest_correctable_event: CorrectableEvent | null };
 type RecordingPreview = { preview_id: string; revision: number; event: Record<string, unknown>;
@@ -368,7 +368,6 @@ async function recordingRequest<T>(path: string, csrf?: string, payload?: unknow
 function InvestmentRecording() {
   const [session, setSession] = useState<RecordingSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [password, setPassword] = useState("");
   const [kind, setKind] = useState("opening");
   const [role, setRole] = useState<"core" | "dynamic" | "unassigned">("unassigned");
   const [assignmentAsset, setAssignmentAsset] = useState<"cash" | "holding">("cash");
@@ -409,23 +408,6 @@ function InvestmentRecording() {
   }
 
   useEffect(() => { void refreshSession(); }, []);
-
-  async function login(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!session?.csrf) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      await recordingRequest("/api/investment/v1/recording/login", session.csrf, { password });
-      setPassword("");
-      await refreshSession();
-      setMessage("Recording access enabled for this local session.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "login_failed");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function makePreview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -517,18 +499,6 @@ function InvestmentRecording() {
     <h2>Recording is disabled</h2>
     <p>Recording requires an explicitly selected version-2 store and local opt-in. This page cannot connect to a bank or broker, place orders, or move money.</p>
   </section>;
-  if (!session.authenticated) return <section className="history-group investment-recording" aria-label="Manual recording">
-    <h2>Manual portfolio recording</h2>
-    <p>Local-only, opt-in record editing. No bank or broker is contacted, and no order or transfer can be made.</p>
-    <form className="recording-form" onSubmit={login}>
-      <label>Local recording password<input type="password" autoComplete="current-password"
-        minLength={12} maxLength={256} required value={password}
-        onChange={event => setPassword(event.target.value)} /></label>
-      <button type="submit" disabled={busy}>Unlock recording</button>
-    </form>
-    {message && <p role="status">{message}</p>}
-  </section>;
-
   const opened = session.opened;
   const correction = session.latest_correctable_event;
   const availableKinds = opened
@@ -918,7 +888,7 @@ export function InvestmentGuide() {
     <section><h2>Ownership, not short-term prediction</h2><p>Broad diversified funds spread company exposure, but still face market declines and concentration. GBP dealing does not remove underlying currency exposure. Bonds can fall when interest rates or credit conditions change; they are not protected savings.</p></section>
     <section><h2>Contributions and rebalancing</h2><p>Proposals are blocked until role-aware policy, products, weights and loss/transfer rules are approved and implemented. Review acknowledgements are recorded through the offline CLI, not the dashboard; five-point drift remains a trigger. They do not approve trades. Future fees and settlement require human verification. No trade is a valid outcome.</p></section>
     <section><h2>Accurate GBP measurement</h2><p>Deposits are not profit. Internal transfers do not change total contributed capital. Recorded fills, costs and price observations determine the supported valuation; missing or stale evidence never grants permission to trade. External savings cannot be spent as broker cash.</p></section>
-    <section><h2>Separate safety boundaries</h2><p>The dashboard is read-only by default; v2 recording requires explicit local opt-in and authentication. Broker execution, licensed portfolio research, money-weighted return, inflation and full multi-currency accounting require further validated capabilities. Existing legacy trading stops and recovery are not removed or changed by the investment path. News and AI remain advisory only.</p></section>
+    <section><h2>Separate safety boundaries</h2><p>The dashboard is read-only by default; v2 recording requires explicit local opt-in. There is no user login, so keep the service on its loopback address. Broker execution, licensed portfolio research, money-weighted return, inflation and full multi-currency accounting require further validated capabilities. Existing legacy trading stops and recovery are not removed or changed by the investment path. News and AI remain advisory only.</p></section>
     <div className="guide-warning"><strong>Losses can be large, prolonged or permanent.</strong> Diversification, lower costs and a long horizon do not guarantee returns. Exact products, savings protection, tax wrappers and provider access require current verification.</div>
   </article>;
 }

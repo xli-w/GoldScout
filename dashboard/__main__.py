@@ -1,5 +1,4 @@
 import argparse
-import getpass
 from pathlib import Path
 
 from dashboard.assets import FrontendBuildError, build_guidance, verify_frontend
@@ -7,20 +6,22 @@ from dashboard.assets import FrontendBuildError, build_guidance, verify_frontend
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="GoldScout local dashboard for read-only accounts and investment records")
-    source = parser.add_mutually_exclusive_group(required=True)
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--demo", action="store_true", help="Use synthetic data only")
     source.add_argument("--database", type=Path, help="Read an operator-selected existing ledger")
     source.add_argument("--investment-database", type=Path, help="Read an explicitly initialised investment store")
+    source.add_argument("--workspace", type=Path,
+                        help="Local investment workspace; defaults to local-investment in a source checkout")
     parser.add_argument("--scenario", default="healthy_recorded", help="Synthetic fixture scenario")
     parser.add_argument("--telemetry", type=Path, help="Optional operator-selected health snapshot")
     parser.add_argument("--api-only", action="store_true", help="Development API without production frontend assets")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--intelligence-database",type=Path,help="Existing separate intelligence database")
     parser.add_argument("--intelligence-demo",action="store_true",help="Synthetic temporary intelligence with demo-only controls")
-    parser.add_argument("--analysis-controls",action="store_true",help="Enable authenticated local analysis settings only")
+    parser.add_argument("--analysis-controls",action="store_true",help="Enable local analysis settings only")
     parser.add_argument("--analysis-profiles",nargs="*",default=[],help="Registered nonsecret AI profile names")
     parser.add_argument("--investment-recording", action="store_true",
-                        help="Enable authenticated manual edits to the selected v2 investment store")
+                        help="Enable manual edits to the selected v2 investment store")
     parser.add_argument("--awareness-profile", type=Path,
                         help="Operator-owned local exposure/reminder JSON; requires both investment and intelligence stores")
     parser.add_argument("--monitoring-profile", type=Path, help="Local nonsecret monitoring JSON for the selected investment store")
@@ -28,8 +29,28 @@ def main(argv=None):
     parser.add_argument("--monitoring-reviews", type=Path,
                         help="Existing explicitly initialized local monitoring review store")
     parser.add_argument("--monitoring-workflow", action="store_true",
-                        help="Enable separately authenticated local review actions and observation staging")
+                        help="Enable local review actions and observation staging")
     args = parser.parse_args(argv)
+    setup_options = {}
+    setup_state = None
+    if not args.demo and args.database is None and args.investment_database is None:
+        from dashboard.workspace import resolve_workspace
+        from investment.bootstrap import workspace_status
+        try:
+            args.workspace = resolve_workspace(args.workspace)
+            status = workspace_status(args.workspace)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+        setup_state = status["state"]
+        args.investment_database = args.workspace / "investment.sqlite3"
+        if setup_state != "ready" and (
+                args.investment_recording or args.monitoring_profile or args.awareness_profile
+                or args.monitoring_cache or args.monitoring_reviews or args.monitoring_workflow):
+            parser.error("Complete workspace setup first; recording, monitoring and awareness are separate opt-ins.")
+        setup_options = {
+            "setup_workspace": args.workspace,
+            "setup_enabled": setup_state in ("empty", "recoverable"),
+        }
     if args.intelligence_demo and (not args.demo or args.intelligence_database):
         parser.error("--intelligence-demo requires --demo without an intelligence database")
     if args.analysis_controls and args.intelligence_database is None:
@@ -68,27 +89,25 @@ def main(argv=None):
         app = create_app(database=args.database, scenario=args.scenario, telemetry_path=args.telemetry,
                          static_directory=static_directory, serve_frontend=not args.api_only,
                          intelligence_database=args.intelligence_database,intelligence_demo=args.intelligence_demo,
-                         analysis_password=getpass.getpass("Local analysis-control password: ") if args.analysis_controls else None,
+                         analysis_controls_enabled=args.analysis_controls,
                          analysis_profiles=tuple(args.analysis_profiles), investment_database=args.investment_database,
-                         investment_recording_password=getpass.getpass(
-                             "Local investment-recording password (12+ characters): ")
-                         if args.investment_recording else None,
+                         investment_recording_enabled=args.investment_recording,
                          awareness_profile=args.awareness_profile,
                          monitoring_profile=args.monitoring_profile, monitoring_cache=args.monitoring_cache,
                          monitoring_reviews=args.monitoring_reviews,
-                         monitoring_workflow_password=getpass.getpass(
-                             "Local monitoring-workflow password (12+ characters): ")
-                         if args.monitoring_workflow else None)
+                         monitoring_workflow_enabled=args.monitoring_workflow, **setup_options)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
     except ValueError as exc:
         parser.error(str(exc))
-    landing = "investment" if args.investment_database is not None else ""
-    mode = "synthetic demo" if args.demo else "recorded data"
+    landing = ("setup" if setup_state is not None and setup_state != "ready"
+               else "investment" if args.investment_database is not None else "")
+    mode = ("investment setup" if landing == "setup"
+            else "synthetic demo" if args.demo else "recorded data")
     if args.investment_recording:
-        mode += " with opt-in authenticated investment recording"
+        mode += " with opt-in investment recording"
     if args.monitoring_workflow:
-        mode += " with separate authenticated monitoring workflow actions"
+        mode += " with opt-in monitoring workflow actions"
     print(f"GoldScout local dashboard ({mode}): http://127.0.0.1:{args.port}/{landing}")
     uvicorn.run(app, host="127.0.0.1", port=args.port, proxy_headers=False, access_log=False)
 

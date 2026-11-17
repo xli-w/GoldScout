@@ -202,14 +202,11 @@ class InvestmentRolesTests(unittest.TestCase):
     def test_dashboard_role_assignment_preview_and_tagged_correction(self):
         app = create_app(serve_frontend=False, clock=lambda: NOW,
                          investment_database=self.path,
-                         investment_recording_password="local-recording-passphrase")
+                         investment_recording_enabled=True)
         with TestClient(app, base_url="http://127.0.0.1",
                         backend_options={"loop_factory": MemoryEventLoop}) as client:
             session = client.get("/api/investment/v1/recording/session").json()
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
-            self.assertEqual(client.post(
-                "/api/investment/v1/recording/login",
-                json={"password": "local-recording-passphrase"}, headers=headers).status_code, 200)
             attribution = assignment("dashboard-role", "dynamic", "bank", "100")
             preview = client.post(
                 "/api/investment/v1/recording/preview",

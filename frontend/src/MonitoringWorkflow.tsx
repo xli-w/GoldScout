@@ -18,7 +18,7 @@ type Inbox = { enabled: false } | {
   limitations: string[];
 };
 type Session = {
-  enabled: boolean; authenticated: boolean; csrf: string | null; cache_enabled: boolean;
+  enabled: boolean; csrf: string | null; cache_enabled: boolean;
   review_enabled?: boolean; accounts: { account_id: string; provider: string }[];
 };
 type Reconciliation = {
@@ -101,7 +101,6 @@ export function MonitoringWorkflowPage() {
     queryFn: () => getJson<Inbox>("/api/investment/v1/monitoring/reviews"), retry: false });
   const session = useQuery({ queryKey: ["monitoring-workflow-session"],
     queryFn: () => getJson<Session>("/api/investment/v1/monitoring-workflow/session"), retry: false });
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<StagePreview | null>(null);
@@ -127,15 +126,6 @@ export function MonitoringWorkflowPage() {
       client.invalidateQueries({ queryKey: ["investment"] }),
       client.invalidateQueries({ queryKey: ["monitoring"] }),
     ]);
-  }
-  async function login(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError("");
-    try {
-      await postJson("/api/investment/v1/monitoring-workflow/login", csrf, { password });
-      setPassword("");
-      await client.invalidateQueries({ queryKey: ["monitoring-workflow-session"] });
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Sign-in rejected."); }
-    finally { setBusy(false); }
   }
   async function sync() {
     setBusy(true); setError("");
@@ -197,12 +187,12 @@ export function MonitoringWorkflowPage() {
         <p>Portfolio {data.portfolio_id}; profile {data.profile_hash}; inbox revision {data.revision}.
           {data.source_available ? data.sync_current
             ? " Latest sync matches the current monitoring evidence."
-            : " Inbox sync is stale; actions are disabled until an authenticated explicit sync."
+            : " Inbox sync is stale; actions are disabled until an explicit sync."
             : " Current monitoring sources are unavailable; actions are disabled."}</p>
         {data.cases.length === 0 ? <p>No synchronized review cases.</p>
           : data.cases.map(item => <ActionRow key={item.case_id} item={item}
             inboxRevision={data.revision} csrf={csrf}
-            enabled={Boolean(auth?.authenticated && current)} changed={() => void invalidate()} />)}
+            enabled={Boolean(auth?.enabled && current)} changed={() => void invalidate()} />)}
         <h3>Historical cases</h3>
         {data.cases.filter(item => item.lifecycle !== "active").map(item =>
           <p key={item.case_id}>{item.finding.subject}: {item.lifecycle}; workflow {item.review_status}.</p>)}
@@ -215,14 +205,9 @@ export function MonitoringWorkflowPage() {
       <p>Local manual entry only; no provider/network access. Preview compares available GBP evidence first.
         Confirmation appends only to the separate monitoring cache—never the investment journal.</p>
       {session.isError && <p role="alert">Monitoring workflow configuration is unavailable.</p>}
-      {auth?.enabled && !auth.authenticated && <form className="recording-form" onSubmit={event => void login(event)}>
-        <label>Separate monitoring-workflow password<input type="password" autoComplete="current-password"
-          value={password} onChange={event => setPassword(event.target.value)} /></label>
-        <button type="submit" disabled={busy || !csrf}>Sign in to workflow actions</button>
-      </form>}
-      {auth?.enabled && auth.authenticated && !auth.cache_enabled &&
+      {auth?.enabled && !auth.cache_enabled &&
         <p>An explicitly initialized monitoring cache is required for observation staging.</p>}
-      {auth?.enabled && auth.authenticated && auth.cache_enabled && <>
+      {auth?.enabled && auth.cache_enabled && <>
         <form className="recording-form" onSubmit={event => void previewObservation(event)}>
           <label>Configured local account<select required value={accountId || auth.accounts[0]?.account_id || ""}
             onChange={event => setAccountId(event.target.value)}>
@@ -268,7 +253,7 @@ export function MonitoringWorkflowPage() {
           <button type="button" disabled={busy} onClick={() => setPreview(null)}>Discard preview</button>
         </div>}
       </>}
-      {auth?.enabled && auth.authenticated && data?.enabled === true && !data.sync_current && (
+      {auth?.enabled && data?.enabled === true && !data.sync_current && (
         <button type="button" disabled={busy || !csrf} onClick={() => void sync()}>
           Sync current findings before actions
         </button>

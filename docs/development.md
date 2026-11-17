@@ -21,6 +21,12 @@ In VS Code, check the chat customization UI/diagnostics for the two agents, four
   proposals are blocked and it has no execution path. Use the
   [`investment-system-development` skill](../.github/skills/investment-system-development/SKILL.md)
   for `investment/` changes.
+- Default dashboard startup selects the source checkout's ignored
+  `local-investment` workspace; installed use needs explicit workspace selection.
+  Its local [setup wizard](investment.md#guided-first-run-setup) creates
+  a profile/opened journal only after reviewed confirmation. Startup and reads
+  remain nonmutating. Development tests must override workspace resolution to
+  temporary paths and never discover or read the real local workspace.
 - The [investor mandate](investment-research-context.md) and
   [backtesting protocol](backtesting-protocol.md) govern portfolio research and
   suitability claims. Existing campaign tools and synthetic simulations do not

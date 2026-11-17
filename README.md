@@ -22,6 +22,28 @@ The illustrative core/dynamic range is not an approved allocation. See the
 and the [investor mandate](docs/investment-research-context.md) for the agreed
 product direction.
 
+## Start the local investment workspace
+
+With the documented dependencies and frontend build available, run:
+
+```powershell
+python -m dashboard
+```
+
+In a source checkout this selects the Git-ignored `local-investment/` workspace.
+If it is absent or empty, the dashboard displays a guided setup screen; enter
+accounts, products and dated opening evidence, review the preview and explicitly
+confirm creation. No login, profile JSON editing or separate initialization
+command is needed. No files are created by startup, viewing setup or previewing
+a draft.
+
+An existing valid journal opens read-only. Damaged, unexpected or conflicting
+files show recovery guidance, never an automatic reset. Subsequent manual
+recording requires a separate launch with `--investment-recording`. Account/product
+scope is fixed at creation in this release.
+An installed package outside a source checkout requires `--workspace <directory>`;
+it never writes into the installed package. See the [onboarding guide](docs/investment.md#guided-first-run-setup).
+
 ## Try the offline demos
 
 From the repository root, with the documented dependencies installed:
@@ -38,10 +60,12 @@ investment view with synthetic v2 opening evidence; its separate legacy trading
 demo remains at `/legacy`. Neither command starts the trading bot or accesses a
 broker.
 
-Recorded investment reporting requires an explicitly initialized and selected
-investment store. Dashboard investment recording is off unless separately
-enabled, authenticated, and bound to that store. See the [investment guide](docs/investment.md)
-and [dashboard guide](docs/dashboard.md) before using recorded data.
+An explicit `--investment-database` still selects only an existing journal and
+never falls back to setup. Dashboard investment recording is off unless separately
+enabled and bound to that store. The local dashboard has no user login; keep it
+on its default loopback address and do not expose or tunnel it. See the
+[investment guide](docs/investment.md) and [dashboard guide](docs/dashboard.md)
+before using recorded data.
 
 ## Project map
 

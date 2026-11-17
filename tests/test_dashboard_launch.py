@@ -46,6 +46,8 @@ class DashboardLaunchTests(unittest.TestCase):
         production_schema = self.root / "dashboard" / "response.schema.json"
         production_schema.parent.mkdir()
         production_schema.write_text("{}")
+        setup_schema = production_schema.with_name("setup.schema.json")
+        setup_schema.write_text("{}")
         investment_schema = self.root / "investment" / "response.schema.json"
         investment_schema.parent.mkdir()
         investment_schema.write_text("{}")
@@ -56,6 +58,7 @@ class DashboardLaunchTests(unittest.TestCase):
         monitoring_schema = investment_schema.with_name("monitoring.schema.json")
         monitoring_schema.write_text("{}")
         self.manifest["investment_schema_sha256"] = self.digest(investment_schema)
+        self.manifest["setup_schema_sha256"] = self.digest(setup_schema)
         self.manifest["investment_v2_schema_sha256"] = self.digest(opening_schema)
         self.manifest["awareness_schema_sha256"] = self.digest(awareness_schema)
         self.manifest["monitoring_schema_sha256"] = self.digest(monitoring_schema)
@@ -130,14 +133,36 @@ class DashboardLaunchTests(unittest.TestCase):
         with self.assertRaises(FrontendBuildError):
             verify_frontend(self.static, self.schema)
 
-    def test_launch_requires_explicit_source_and_production_bundle(self):
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as result:
-            main([])
-        self.assertEqual(result.exception.code, 2)
+    def test_launch_requires_production_bundle(self):
         with patch("dashboard.__main__.verify_frontend", side_effect=FrontendBuildError("Missing build")):
             with redirect_stderr(io.StringIO()) as output, self.assertRaises(SystemExit):
                 main(["--demo"])
         self.assertIn("npm --prefix frontend run build", output.getvalue())
+
+    def test_default_startup_selects_checkout_workspace_without_creating_files(self):
+        server = Mock()
+        factory = Mock(return_value="setup-app")
+        workspace = self.root / "private"
+        with patch.dict(sys.modules, {"uvicorn": SimpleNamespace(run=server),
+                                     "dashboard.app": SimpleNamespace(create_app=factory)}):
+            with patch("dashboard.workspace.resolve_workspace", return_value=workspace), \
+                    patch("dashboard.__main__.verify_frontend", return_value=self.static), \
+                    redirect_stdout(io.StringIO()) as output:
+                main([])
+        self.assertFalse(workspace.exists())
+        self.assertEqual(factory.call_args.kwargs["investment_database"], workspace / "investment.sqlite3")
+        self.assertEqual(factory.call_args.kwargs["setup_workspace"], workspace)
+        self.assertTrue(factory.call_args.kwargs["setup_enabled"])
+        self.assertIn("/setup", output.getvalue())
+        self.assertFalse(factory.call_args.kwargs["investment_recording_enabled"])
+
+    def test_explicit_workspace_is_mutually_exclusive_with_other_sources(self):
+        for flag in ("--demo", "--database", "--investment-database"):
+            arguments = ["--workspace", str(self.root / "private"), flag]
+            if flag != "--demo":
+                arguments.append(str(self.root / "unused"))
+            with self.subTest(flag=flag), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(arguments)
 
     def test_api_only_never_starts_bot_or_opens_database(self):
         server = Mock()
@@ -149,10 +174,10 @@ class DashboardLaunchTests(unittest.TestCase):
         factory.assert_called_once_with(database=None, scenario="healthy_recorded", telemetry_path=None,
                                         static_directory=None, serve_frontend=False,
                                         intelligence_database=None, intelligence_demo=False,
-                                        analysis_password=None, analysis_profiles=(), investment_database=None,
-                                        investment_recording_password=None, awareness_profile=None,
+                                        analysis_controls_enabled=False, analysis_profiles=(), investment_database=None,
+                                        investment_recording_enabled=False, awareness_profile=None,
                                         monitoring_profile=None, monitoring_cache=None,
-                                        monitoring_reviews=None, monitoring_workflow_password=None)
+                                        monitoring_reviews=None, monitoring_workflow_enabled=False)
         server.assert_called_once_with("synthetic-app", host="127.0.0.1", port=8766, proxy_headers=False, access_log=False)
 
     def test_invalid_modes_and_ports_fail_before_runtime_imports(self):
@@ -174,7 +199,7 @@ class DashboardLaunchTests(unittest.TestCase):
         self.assertIn("/investment", output.getvalue())
         self.assertFalse((self.root / "investment.sqlite3").exists())
 
-    def test_monitoring_workflow_cli_requires_separate_review_store_and_password(self):
+    def test_monitoring_workflow_cli_requires_separate_review_store_and_enables_without_password(self):
         server = Mock()
         factory = Mock(return_value="workflow-app")
         args = ["--investment-database", str(self.root / "investment.sqlite3"),
@@ -183,13 +208,11 @@ class DashboardLaunchTests(unittest.TestCase):
                 "--monitoring-workflow", "--api-only"]
         with patch.dict(sys.modules, {"uvicorn": SimpleNamespace(run=server),
                                      "dashboard.app": SimpleNamespace(create_app=factory)}):
-            with patch("dashboard.__main__.getpass.getpass",
-                       return_value="separate-monitoring-passphrase"), redirect_stdout(io.StringIO()):
+            with redirect_stdout(io.StringIO()):
                 main(args)
         self.assertEqual(factory.call_args.kwargs["monitoring_reviews"], self.root / "reviews.sqlite3")
-        self.assertEqual(factory.call_args.kwargs["monitoring_workflow_password"],
-                         "separate-monitoring-passphrase")
-        self.assertIsNone(factory.call_args.kwargs["investment_recording_password"])
+        self.assertTrue(factory.call_args.kwargs["monitoring_workflow_enabled"])
+        self.assertFalse(factory.call_args.kwargs["investment_recording_enabled"])
         self.assertFalse((self.root / "investment.sqlite3").exists())
 
 

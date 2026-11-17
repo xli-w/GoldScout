@@ -181,6 +181,191 @@ valuations; incomplete history is unavailable, not a zero return. Decimal
 quantities and GBP prices are explicit. Foreign currency and unsupported events
 are refused rather than converted by assumption.
 
+### Guided first-run setup
+
+The normal source-checkout launch is now:
+
+```powershell
+.\venv\Scripts\python.exe -m dashboard
+```
+
+It selects `local-investment` beneath the source checkout, independent of the
+terminal's current directory. Open the displayed local URL. If the directory is
+absent or empty, the wizard is available without a login. An installed package outside a checkout requires an
+explicit `--workspace <directory>`; no installation directory is used as storage.
+
+The wizard guides accounts, products and opening evidence, then shows a
+server-validated preview and requires a separate final confirmation. Use local
+account aliases rather than account numbers. Verify product currency, equity/bond
+classification, quantity increment and minimum-notional metadata; nothing is
+looked up or guessed. Include every selected account's cash and its supported
+holdings at one defensible effective time. Unknown prices remain unknown, and
+late evidence may leave the baseline unavailable. Time inputs use the computer's
+local timezone and are stored as UTC.
+
+**Accounts and products cannot currently be added to an existing journal.**
+Review the initial scope carefully. The policy stays null and roles start
+unassigned. There is no provider connection, allocation approval or trading.
+Monitoring and its separate stores can be configured later.
+
+Unsubmitted drafts exist only in browser memory and disappear on reload or
+navigation away. Preview state is held only by the local server and expires after
+five minutes; temporary local sessions last fifteen minutes and provide CSRF
+protection, not user authentication. No workspace files or
+directories are created until the operator confirms. After confirmation,
+operation-owned recovery artifacts may contain private evidence and must be
+protected with the journal.
+
+Creation publishes a validated journal containing the reviewed opening event,
+without overwriting an existing file. Interrupted confirmed operations have a
+guarded recovery path; existing unrelated files or manually initialized empty
+journals are not adopted or reset. A missing or invalid journal explicitly
+selected with `--investment-database` remains an error, not a new setup.
+
+After completion the investment view is read-only. To record later events, stop
+the server with Ctrl+C and restart:
+
+```powershell
+.\venv\Scripts\python.exe -m dashboard --investment-recording
+```
+
+Open `http://127.0.0.1:8765/investment/record`. Setup does not enable recording;
+the separate launch flag is still required. See the [journal lifecycle guide](investment-journal.md) for private
+storage, partial-completion behavior, backups and recovery.
+
+### Starting a local v2 journal manually
+
+The following remains an advanced CLI alternative to the default wizard.
+
+These are operator steps; they do not contact a bank or broker. The repository
+ignores the entire root `local-investment/` directory, including profiles,
+journals and SQLite sidecars. Git ignore is not encryption or access control:
+check the directory's Windows permissions and any backup or cloud-sync settings.
+Git can still force-add ignored files, and `git clean -fdx` can delete them. Do
+not place credentials or passwords there or share private records in chat.
+
+1. From the repository root in PowerShell, create the private working directory
+   if it does not already exist. Do not overwrite any existing files.
+
+   ```powershell
+   New-Item -ItemType Directory -Force .\local-investment | Out-Null
+   ```
+
+   Choose a folder that only authorized users can access; on Windows inspect
+   inherited ACLs. The repository may itself be in a shared or synchronized
+   location: ignoring a file does not prevent other software from copying it.
+   Keep protected backups elsewhere as described in the
+   [journal lifecycle guide](investment-journal.md).
+
+2. Before creating the journal, identify all accounts to include and their
+   supported products. The v2 profile is stored in the journal at initialization;
+   editing the JSON file afterwards does not change it. There is currently no
+   supported way to add accounts or products to an existing journal. A smaller
+   scope is possible, but it does not represent excluded accounts or holdings.
+   Do not omit an unsupported holding from an account and treat the result as a
+   complete account snapshot. Foreign currency and unsupported holdings require
+   separate handling; no FX conversion is inferred.
+
+3. Create `local-investment\profile.json` in a local text editor, saved as
+   UTF-8 without a BOM. The following is a **fictional schema example**, not real evidence or
+   a ready-to-use profile. Replace its accounts, products and timestamp with
+   your own supported scope before running the initialization command:
+
+   ```json
+   {
+     "schema_version": 2,
+     "portfolio_id": "my-portfolio",
+     "currency": "GBP",
+     "created_at": "2026-01-01T00:00:00Z",
+     "accounts": [
+       {
+         "id": "savings",
+         "name": "Selected savings",
+         "kind": "deposit",
+         "binding": "local-savings",
+         "currency": "GBP"
+       },
+       {
+         "id": "broker",
+         "name": "Selected investment account",
+         "kind": "broker",
+         "binding": "local-broker",
+         "currency": "GBP"
+       }
+     ],
+     "products": [
+       {
+         "id": "fund",
+         "name": "Selected fund",
+         "sleeve": "equity",
+         "currency": "GBP",
+         "quantity_increment": "1",
+         "minimum_notional_gbp": "0"
+       }
+     ],
+     "policy": null
+   }
+   ```
+
+   Use unique local aliases for account IDs and bindings, not account numbers.
+   A savings account is `deposit`; a holdings account is `broker`. Set
+   `created_at` to an explicit UTC time no later than the intended opening
+   evidence clock and not in the future. Enter every intended supported product
+   with its correct `equity` or `bond` classification and explicitly verified
+   quantity increment and minimum notional; the sample values are not defaults.
+   A deposit-only profile can use an empty `products` array. The policy must be
+   `null`; no targets or roles are approved by this profile.
+
+4. With the verified profile saved, initialize **once** at a new path:
+
+   ```powershell
+   .\venv\Scripts\python.exe -m investment init --profile .\local-investment\profile.json --database .\local-investment\investment.sqlite3
+   ```
+
+   Use the selected Python environment if its path differs. This creates an
+   empty v2 journal, not an opening balance. It refuses to overwrite an existing
+   store. The command prints a local report; treat terminal output as private.
+   If it fails, read the error and do not delete or overwrite a pre-existing
+   journal to retry.
+
+5. Start the dashboard and opt in to recording:
+
+   ```powershell
+   .\venv\Scripts\python.exe -m dashboard --investment-database .\local-investment\investment.sqlite3 --investment-recording
+   ```
+
+   Open `http://127.0.0.1:8765/investment/record`. No login is required; the
+   explicit flag enables local write actions. The server is loopback-only; do
+   not expose or tunnel it. If the frontend bundle is missing, follow the
+   [dashboard setup instructions](dashboard.md#setup-and-demo).
+
+6. Prepare one evidenced opening snapshot at a **common effective clock**:
+   exact GBP cash for every selected account and all supported existing long
+   holdings, with quantities and, where evidenced at that clock, GBP prices
+   per unit. If records from different dates cannot support a common snapshot,
+   obtain suitable evidence before opening; do not invent a common clock or
+   balances. The dashboard's effective and availability fields use your
+   computer's local timezone. Enter when the evidence actually became available;
+   it cannot precede the effective time. A later availability time or an
+   unknown price may leave valuation and the performance baseline unavailable.
+
+7. Enter every account's cash, including an evidenced zero, and add each
+   holding under its account and product. Leave a holding's price blank if it
+   is unknown; do not invent one. Add a brief source description without
+   account numbers or secrets. Select **Preview record**, review the full
+   event, times, amounts and before/after values against the evidence, then
+   confirm only if correct. The opening event cannot be corrected through the
+   browser. Roles initially remain unassigned; leave them so unless you have
+   explicitly decided their attribution.
+
+8. Review the investment page, then record later actual transactions and marks
+   chronologically using the same preview/confirm flow. A cash observation
+   displays a difference but does not correct a balance. Stop the dashboard with
+   Ctrl+C; restart without `--investment-recording` for read-only access.
+   Back up the journal and supporting profile using the approved procedure in
+   the [journal lifecycle guide](investment-journal.md). Monitoring and its
+   separate cache are optional and do not populate accounting.
+
 ### Version 2 opening evidence
 
 The explicit `init`, `import` and `report` CLI commands also accept a new
@@ -195,10 +380,9 @@ implemented; policy-dependent commands explicitly refuse them.
 
 Manual browser recording is an explicit opt-in for an existing v2 store. Start
 the recorded dashboard with `--investment-recording` in addition to
-`--investment-database`; the operator enters a 12-256 character password
-directly into the terminal. The browser does not select or initialize a store.
-Without that flag the dashboard remains read-only. Enabled sessions are local,
-authenticated and temporary. Each entry is previewed against the current
+`--investment-database`. The recording page does not select or initialize a
+store. Without that flag the dashboard remains read-only. Enabled sessions are
+local and temporary; there is no user login. Each entry is previewed against the current
 revision, then separately confirmed; the preview expires after five minutes,
 and changed or stale journal state is refused. Repeating a committed request
 within the session is safe, but a fresh preview is required after expiry or
@@ -630,8 +814,8 @@ synthetic. A selected legacy ledger does not implicitly become an investment sto
 The investment responses have separate strict v1/v2 schemas and compiled
 browser validators. Production assets are bound to both investment schemas and
 the legacy schema checksums. Missing, incomplete or invalid values stay unavailable in the UI.
-Refreshes only read reports unless the operator explicitly enabled authenticated
-manual recording as described in [Version 2 opening evidence](investment.md#version-2-opening-evidence).
+Refreshes only read reports unless the operator explicitly enabled manual
+recording as described in [Version 2 opening evidence](investment.md#version-2-opening-evidence).
 There is no browser trade-approval or execution route.
 
 ## Research and provider screen

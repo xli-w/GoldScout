@@ -378,7 +378,6 @@ test("opening records show since-baseline value without inventing lifetime gain"
       orders: [], manual_transfers: [], execution_enabled: false },
     warnings: [], limitations: ["Synthetic test evidence."],
   };
-  let authenticated = false;
   let opened = true;
   let latestCorrectable = {
     id: "synthetic-interest", type: "interest", account_id: "bank",
@@ -387,16 +386,12 @@ test("opening records show since-baseline value without inventing lifetime gain"
   };
   let previewEvent;
   await page.route("**/api/investment/v1/recording/session", route => route.fulfill({ json: {
-    enabled: true, authenticated, csrf: "synthetic-csrf", opened,
+    enabled: true, csrf: "synthetic-csrf", opened,
     accounts: [{ id: "bank", name: "Savings", kind: "deposit" },
       { id: "broker", name: "Broker", kind: "broker" }],
     products: [{ id: "fund", name: "Fund", sleeve: "equity", quantity_increment: "1" }],
     latest_correctable_event: latestCorrectable,
   } }));
-  await page.route("**/api/investment/v1/recording/login", async route => {
-    authenticated = true;
-    await route.fulfill({ json: { authenticated: true } });
-  });
   await page.route("**/api/investment/v1/recording/preview", async route => {
     const request = route.request().postDataJSON();
     previewEvent = request.event;
@@ -628,8 +623,6 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
   await page.getByRole("link", { name: "Record evidence", exact: true }).click();
   await expect(page).toHaveURL(/\/investment\/record$/);
-  await page.getByLabel("Local recording password").fill("synthetic-local-passphrase");
-  await page.getByRole("button", { name: "Unlock recording" }).click();
   await expect(page.getByLabel("Record type")).toBeVisible();
   await page.getByLabel("Record type").selectOption("contribution");
   await page.getByLabel("GBP amount").fill("25");

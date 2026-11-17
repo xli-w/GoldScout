@@ -1,4 +1,18 @@
 :root { font-family: "IBM Plex Sans", sans-serif; color: #253236; background: #f5f7f8; font-synthesis: none; --ink: #253236; --muted: #69777c; --line: #dce3e5; --green: #21745f; --red: #a63747; --amber: #84620f; }
+.investment-setup { max-width: 1000px; min-width: 0; overflow-wrap: anywhere; }
+.investment-setup p, .investment-setup li { line-height: 1.6; }
+.setup-workspace { overflow-wrap: anywhere; }
+.setup-steps { display: flex; flex-wrap: wrap; gap: 12px; padding: 0; list-style: none; }
+.setup-steps [aria-current="step"] { font-weight: 600; color: var(--green); }
+.setup-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--line); }
+.setup-row label { display: grid; gap: 6px; min-width: 0; font-size: 12px; }
+.setup-form fieldset > label { grid-template-columns: 1fr; }
+.investment-setup .setup-check { display: flex; align-items: start; gap: 10px; line-height: 1.6; }
+.investment-setup .setup-check input { width: auto; margin-top: 5px; flex: 0 0 auto; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 12px; grid-column: 1 / -1; margin-block: 16px; }
+.investment-setup button:disabled { opacity: .6; cursor: not-allowed; }
+.investment-setup :focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+@media (max-width: 640px) { .setup-row { grid-template-columns: 1fr; } }
 .record-toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 22px; }
 .history-filters { min-width: 0; margin: 0 0 10px; padding: 0; border: 0; }
 .history-filters legend { margin-bottom: 10px; font-size: 13px; font-weight: 500; }
@@ -308,8 +322,9 @@ input, select, textarea { accent-color: #40d899; }
 .dot.faulted { background: var(--red); }
 .refresh, .clear-filters, .history-sections a, .investment-sections a,
 .date-filter input, .recording-form input, .recording-form select, .recording-form textarea,
-.recording-form button, .recording-preview button, .recording-event, .search-box,
-.analysis-login input { background: var(--surface-raised); color: var(--ink); border-color: var(--line); }
+.recording-form button, .recording-preview button, .recording-event, .search-box {
+  background: var(--surface-raised); color: var(--ink); border-color: var(--line);
+}
 .clear-filters, .history-sections a, .investment-sections a, .text-link, .gate-actions a, footer a { color: #78e1b0; }
 .clear-filters:hover, .history-sections a:hover, .investment-sections a:hover, .icon-button:hover { background: #20372a; }
 .metrics { gap: 12px; padding: 0; border: 0; }

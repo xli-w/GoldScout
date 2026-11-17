@@ -21,6 +21,7 @@ collect(join(output, "assets"));
 files["index.html"] = hash(readFileSync(join(output, "index.html")));
 writeFileSync(join(output, "dashboard-build.json"), JSON.stringify({
   version: 1, schema_sha256: hash(readFileSync(join(frontend, "..", "dashboard", "response.schema.json"))), files,
+  setup_schema_sha256: hash(readFileSync(join(frontend, "..", "dashboard", "setup.schema.json"))),
   investment_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "response.schema.json"))),
   investment_v2_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "response-v2.schema.json"))),
   awareness_schema_sha256: hash(readFileSync(join(frontend, "..", "investment", "awareness.schema.json"))),

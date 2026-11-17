@@ -198,35 +198,27 @@ class InvestmentDashboardTests(unittest.TestCase):
                 "/api/investment/v1/recording/confirm", json={},
                 headers={"Origin": "http://127.0.0.1"}).status_code, 405)
 
-    def test_authenticated_recording_preview_commit_and_lost_response_retry(self):
+    def test_opt_in_recording_preview_commit_and_lost_response_retry(self):
         self.now = OPENING_NOW
         initialize(self.path, profile(), self.now)
         original = self.path.read_bytes()
         with self.client(
                 investment_database=self.path,
-                investment_recording_password="local-recording-passphrase") as client:
+                investment_recording_enabled=True) as client:
             session = client.get("/api/investment/v1/recording/session").json()
             self.assertTrue(session["enabled"])
-            self.assertFalse(session["authenticated"])
-            self.assertEqual(session["accounts"], [])
+            self.assertNotIn("authenticated", session)
+            self.assertEqual([item["id"] for item in session["accounts"]],
+                             ["bank", "broker"])
             headers = {"Origin": "http://127.0.0.1",
                        "X-CSRF-Token": session["csrf"]}
             self.assertEqual(client.post(
                 "/api/investment/v1/recording/preview",
                 json={"request_id": "unauthorized", "event": opening()},
-                headers=headers).status_code, 403)
-            self.assertEqual(client.post(
-                "/api/investment/v1/recording/login", json={"password": "wrong"},
-                headers=headers).status_code, 403)
+                headers={"Origin": "http://127.0.0.1"}).status_code, 403)
             self.assertEqual(client.post(
                 "/api/investment/v1/recording/login",
-                json={"password": "local-recording-passphrase"},
-                headers=headers).status_code, 200)
-            authenticated = client.get("/api/investment/v1/recording/session").json()
-            self.assertTrue(authenticated["authenticated"])
-            self.assertEqual([item["id"] for item in authenticated["accounts"]],
-                             ["bank", "broker"])
-            headers["X-CSRF-Token"] = authenticated["csrf"]
+                json={"password": "unused"}, headers=headers).status_code, 405)
             preview = client.post(
                 "/api/investment/v1/recording/preview",
                 json={"request_id": "open-portfolio", "event": opening()},
@@ -256,12 +248,10 @@ class InvestmentDashboardTests(unittest.TestCase):
         import_events(self.path, [opening()], self.now)
         with self.client(
                 investment_database=self.path,
-                investment_recording_password="local-recording-passphrase") as client:
+                investment_recording_enabled=True) as client:
             session = client.get("/api/investment/v1/recording/session").json()
             headers = {"Origin": "http://127.0.0.1",
                        "X-CSRF-Token": session["csrf"]}
-            client.post("/api/investment/v1/recording/login",
-                        json={"password": "local-recording-passphrase"}, headers=headers)
             value = event("retryable-interest", "interest", OPENING_NOW, "bank",
                           amount_gbp="5")
             preview = client.post(
@@ -300,12 +290,10 @@ class InvestmentDashboardTests(unittest.TestCase):
         import_events(self.path, [opening()], self.now)
         with self.client(
                 investment_database=self.path,
-                investment_recording_password="local-recording-passphrase") as client:
+                investment_recording_enabled=True) as client:
             session = client.get("/api/investment/v1/recording/session").json()
             headers = {"Origin": "http://127.0.0.1",
                        "X-CSRF-Token": session["csrf"]}
-            client.post("/api/investment/v1/recording/login",
-                        json={"password": "local-recording-passphrase"}, headers=headers)
             value = event("retryable-after-disappear", "interest", OPENING_NOW, "bank",
                           amount_gbp="5")
             preview = client.post(
@@ -342,12 +330,10 @@ class InvestmentDashboardTests(unittest.TestCase):
         import_events(self.path, [opening()], self.now)
         with self.client(
                 investment_database=self.path,
-                investment_recording_password="local-recording-passphrase") as client:
+                investment_recording_enabled=True) as client:
             session = client.get("/api/investment/v1/recording/session").json()
             csrf = session["csrf"]
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": csrf}
-            client.post("/api/investment/v1/recording/login",
-                        json={"password": "local-recording-passphrase"}, headers=headers)
             first = event("first-interest", "interest", OPENING_NOW, "bank", amount_gbp="5")
             second = event("second-interest", "interest", OPENING_NOW, "bank", amount_gbp="7")
             previews = []
@@ -378,7 +364,7 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(no_csrf.status_code, 403)
         self.assertEqual(snapshot(self.path, OPENING_NOW)["recorded_interest_gbp"], "5")
 
-    def test_authenticated_correction_preview_keeps_original_event_and_reports_replacement(self):
+    def test_opt_in_correction_preview_keeps_original_event_and_reports_replacement(self):
         self.now = OPENING_NOW
         initialize(self.path, profile(), self.now)
         contribution = event("recorded-contribution", "contribution", OPENING_NOW,
@@ -397,12 +383,10 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.now = corrected_at
         with self.client(
                 investment_database=self.path,
-                investment_recording_password="local-recording-passphrase") as client:
+                investment_recording_enabled=True) as client:
             session = client.get("/api/investment/v1/recording/session").json()
             headers = {"Origin": "http://127.0.0.1",
                        "X-CSRF-Token": session["csrf"]}
-            client.post("/api/investment/v1/recording/login",
-                        json={"password": "local-recording-passphrase"}, headers=headers)
             preview = client.post(
                 "/api/investment/v1/recording/preview",
                 json={"request_id": "correct-contribution", "event": correction_event},
@@ -428,7 +412,7 @@ class InvestmentDashboardTests(unittest.TestCase):
         initialize(self.path, demo_profile(self.now), self.now)
         with self.assertRaisesRegex(ValueError, "version 2"):
             self.client(investment_database=self.path,
-                        investment_recording_password="local-recording-passphrase")
+                        investment_recording_enabled=True)
 
     def test_v2_savings_terms_are_read_only_and_do_not_change_portfolio_value(self):
         self.now = OPENING_NOW
@@ -569,7 +553,7 @@ class InvestmentDashboardTests(unittest.TestCase):
                                          headers={"Origin": "http://127.0.0.1"}).status_code, 405)
         self.assertEqual(self.path.read_bytes(), original)
 
-    def test_dashboard_review_inbox_is_read_only_until_explicit_authenticated_sync(self):
+    def test_dashboard_review_inbox_is_read_only_until_explicit_opt_in_sync(self):
         from investment.monitoring_reviews import review_inbox
 
         profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores()
@@ -589,7 +573,7 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(reviews_path.read_bytes(), review_before)
         self.assertEqual(review_inbox(reviews_path)["revision"], 0)
 
-    def test_authenticated_review_actions_require_current_sync_and_are_idempotent(self):
+    def test_opt_in_review_actions_require_current_sync_and_are_idempotent(self):
         from investment.monitoring_reviews import review_inbox
         from investment.store import read as read_journal
         from test_investment_opening import cash_observation
@@ -597,19 +581,17 @@ class InvestmentDashboardTests(unittest.TestCase):
         profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores()
         with self.client(investment_database=self.path, monitoring_profile=profile_path,
                          monitoring_cache=cache_path, monitoring_reviews=reviews_path,
-                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+                         monitoring_workflow_enabled=True) as client:
             session = client.get("/api/investment/v1/monitoring-workflow/session").json()
             self.assertTrue(session["enabled"])
+            self.assertNotIn("authenticated", session)
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
             self.assertEqual(client.post(
                 "/api/investment/v1/monitoring-workflow/action", json={},
-                headers=headers).status_code, 403)
-            login = client.post(
+                headers={"Origin": "http://127.0.0.1"}).status_code, 403)
+            self.assertEqual(client.post(
                 "/api/investment/v1/monitoring-workflow/login",
-                json={"password": "monitoring-workflow-secret"}, headers=headers)
-            self.assertEqual(login.status_code, 200, login.text)
-            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
-            headers["X-CSRF-Token"] = session["csrf"]
+                json={"password": "unused"}, headers=headers).status_code, 405)
             no_csrf = client.post(
                 "/api/investment/v1/monitoring-workflow/sync", json={},
                 headers={"Origin": "http://127.0.0.1"})
@@ -675,14 +657,9 @@ class InvestmentDashboardTests(unittest.TestCase):
         }
         with self.client(investment_database=self.path, monitoring_profile=profile_path,
                          monitoring_cache=cache_path, monitoring_reviews=reviews_path,
-                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+                         monitoring_workflow_enabled=True) as client:
             session = client.get("/api/investment/v1/monitoring-workflow/session").json()
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
-            self.assertEqual(client.post(
-                "/api/investment/v1/monitoring-workflow/login",
-                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
-            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
-            headers["X-CSRF-Token"] = session["csrf"]
             preview = client.post(
                 "/api/investment/v1/monitoring-workflow/observation/preview",
                 json=request_payload, headers=headers)
@@ -707,14 +684,9 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(retried.json(), confirmed.json())
         with self.client(investment_database=self.path, monitoring_profile=profile_path,
                          monitoring_cache=cache_path, monitoring_reviews=reviews_path,
-                         monitoring_workflow_password="monitoring-workflow-secret") as restarted:
+                         monitoring_workflow_enabled=True) as restarted:
             session = restarted.get("/api/investment/v1/monitoring-workflow/session").json()
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
-            self.assertEqual(restarted.post(
-                "/api/investment/v1/monitoring-workflow/login",
-                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
-            session = restarted.get("/api/investment/v1/monitoring-workflow/session").json()
-            headers["X-CSRF-Token"] = session["csrf"]
             retry_preview = restarted.post(
                 "/api/investment/v1/monitoring-workflow/observation/preview",
                 json=request_payload, headers=headers)
@@ -733,14 +705,9 @@ class InvestmentDashboardTests(unittest.TestCase):
             OPENING_NOW + timedelta(minutes=10))
         with self.client(investment_database=self.path, monitoring_profile=profile_path,
                          monitoring_cache=cache_path, monitoring_reviews=reviews_path,
-                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+                         monitoring_workflow_enabled=True) as client:
             session = client.get("/api/investment/v1/monitoring-workflow/session").json()
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
-            self.assertEqual(client.post(
-                "/api/investment/v1/monitoring-workflow/login",
-                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
-            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
-            headers["X-CSRF-Token"] = session["csrf"]
             observation = {
                 "id": "mapping-time-observation", "account_id": "broker",
                 "provider": "etoro",
@@ -767,14 +734,9 @@ class InvestmentDashboardTests(unittest.TestCase):
         profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
         with self.client(investment_database=self.path, monitoring_profile=profile_path,
                          monitoring_cache=cache_path, monitoring_reviews=reviews_path,
-                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+                         monitoring_workflow_enabled=True) as client:
             session = client.get("/api/investment/v1/monitoring-workflow/session").json()
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
-            self.assertEqual(client.post(
-                "/api/investment/v1/monitoring-workflow/login",
-                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
-            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
-            headers["X-CSRF-Token"] = session["csrf"]
             observation = {
                 "id": "stale-preview-observation", "account_id": "broker",
                 "provider": "etoro",

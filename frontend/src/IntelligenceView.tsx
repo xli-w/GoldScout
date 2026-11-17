@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { label, timestamp } from "./api";
-import { CalendarDays, Newspaper, ShieldAlert, LogIn, RefreshCw } from "lucide-react";
+import { CalendarDays, Newspaper, ShieldAlert, RefreshCw } from "lucide-react";
 import "./intelligence.css";
 
 type Settings={enabled:boolean;calendar_enabled:boolean;news_enabled:boolean;ai_enabled:boolean;mode:string;ai_profile:string|null;revision:number};
 type Data={source_mode:string;database_id:string;generated_at:string;settings:Settings;profiles:string[];controls_enabled:boolean;source_status:{status:string;available_at:string;error_code:string|null}|null;calendar:{event_id:string;title:string;scheduled_at:string|null;symbols:string[]}[];news:{evidence_id:string;title:string;snippet:string;source_url:string;published_at:string|null}[];briefs:{brief_id:string;available_at:string;interpretation:string;uncertainties:string[];claims:{text:string;evidence_ids:string[]}[];recommendation:string;verification:string;expires_at:string;provider:string;model:string}[];controls:{request_id:string;status:string;reason:string;effective_revision:number|null}[];budget:{calls:number;input_bytes:number;output_allowance:number}|null;bot_observed_revision:number|null};
-type Session={enabled:boolean;authenticated:boolean;csrf:string|null};
-async function read<T>(path:string):Promise<T>{const response=await fetch(path,{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw new Error("Intelligence unavailable");const value=await response.json();if(!value||typeof value!=='object')throw new Error('Invalid response');if(path.endsWith('/session')){if(typeof value.enabled!=='boolean'||typeof value.authenticated!=='boolean')throw new Error('Invalid session');}else{if(typeof value.database_id!=='string'||!value.settings||!Number.isInteger(value.settings.revision)||!['calendar','news','briefs','controls','profiles'].every(key=>Array.isArray(value[key])))throw new Error('Invalid intelligence');for(const flag of ['enabled','calendar_enabled','news_enabled','ai_enabled'])if(typeof value.settings[flag]!=='boolean')throw new Error('Invalid settings');}return value;}
+type Session={enabled:boolean;csrf:string|null};
+async function read<T>(path:string):Promise<T>{const response=await fetch(path,{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw new Error("Intelligence unavailable");const value=await response.json();if(!value||typeof value!=='object')throw new Error('Invalid response');if(path.endsWith('/session')){if(typeof value.enabled!=='boolean'||(value.csrf!==null&&typeof value.csrf!=='string'))throw new Error('Invalid session');}else{if(typeof value.database_id!=='string'||!value.settings||!Number.isInteger(value.settings.revision)||!['calendar','news','briefs','controls','profiles'].every(key=>Array.isArray(value[key])))throw new Error('Invalid intelligence');for(const flag of ['enabled','calendar_enabled','news_enabled','ai_enabled'])if(typeof value.settings[flag]!=='boolean')throw new Error('Invalid settings');}return value;}
 export function useIntelligence(enabled:boolean){
   return useQuery({queryKey:["intelligence"],queryFn:()=>read<Data>("/api/v1/intelligence"),refetchInterval:5000,enabled});
 }
@@ -15,7 +15,7 @@ export function useIntelligence(enabled:boolean){
 export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>}){
   const client=useQueryClient();
   const session=useQuery({queryKey:["analysis-session"],queryFn:()=>read<Session>("/api/v1/intelligence/session"),refetchInterval:60000});
-  const [password,setPassword]=useState("");const [error,setError]=useState("");const [pending,setPending]=useState(false);
+  const [error,setError]=useState("");const [pending,setPending]=useState(false);
   const [requested,setRequested]=useState<{id:string;settings:Settings}|null>(null);
   const snapshot=data.data;
   const profileForEnable=snapshot
@@ -57,7 +57,7 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
     :!snapshot.controls_enabled?"Analysis controls are disabled by the dashboard configuration."
     :session.isPending?"Checking analysis-control access."
     :session.isError?"Analysis-control access could not be verified. Refresh and retry."
-    :!session.data?.authenticated?"Sign in to change analysis settings."
+    :!session.data?.csrf?"Local control session is unavailable."
     :null;
   const locked=controlLockReason!==null;
   const displayed=requested?.settings||snapshot.settings;
@@ -117,8 +117,7 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       {locked&&<p className="control-lock-reason" role="status">{controlLockReason}</p>}
       {!snapshot.controls_enabled?<span className="status caution">Controls disabled</span>
         :session.isPending||session.isError?null
-        :!session.data?.authenticated?<div className="analysis-login"><input aria-label="Analysis-control password" type="password" autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)}/><button disabled={pending||!password} onClick={()=>{void send('/api/v1/intelligence/login',{password});setPassword('');}}><LogIn size={16}/>Sign in</button></div>
-        :<span className="status observed">Analysis session authenticated</span>}
+        :<span className="status observed">Enabled for this local session</span>}
       {error&&<p role="alert">{error}</p>}
       {latestControl&&<div className="subtle" role="status">Last request: {latestControl.status} / {latestControl.reason}</div>}
     </section>

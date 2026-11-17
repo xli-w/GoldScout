@@ -1,7 +1,6 @@
 """Opt-in local investment-recording sessions and revision-bound previews."""
 
 from datetime import timedelta
-import hashlib
 import secrets
 import sqlite3
 import threading
@@ -22,17 +21,11 @@ class RecordingSessions:
     SESSION_TTL = timedelta(minutes=15)
     PREVIEW_TTL = timedelta(minutes=5)
 
-    def __init__(self, database, password, clock):
-        if not isinstance(password, str) or not 12 <= len(password) <= 256:
-            raise ValueError("Investment-recording password must be 12-256 characters")
+    def __init__(self, database, clock):
         self.database = database
         self.clock = clock
-        self.password_salt = secrets.token_bytes(16)
-        self.password_hash = hashlib.scrypt(
-            password.encode("utf-8"), salt=self.password_salt, n=2**14, r=8, p=1)
         self.lock = threading.Lock()
         self.sessions = {}
-        self.failures = []
         self.path_identity = self._path_identity()
         ledger = read(database, clock())
         if ledger.spec["schema_version"] != 2:
@@ -72,7 +65,6 @@ class RecordingSessions:
                 token = secrets.token_urlsafe(32)
                 record = {
                     "csrf": secrets.token_urlsafe(32),
-                    "authenticated": False,
                     "expires": now + self.SESSION_TTL,
                     "commands": [],
                     "previews": {},
@@ -81,32 +73,11 @@ class RecordingSessions:
                 self.sessions[token] = record
             return token, record
 
-    def login(self, token, csrf, password, now):
-        now = clock(now)
-        _, record = self.session(token, now)
-        if (not record or not isinstance(csrf, str) or
-                not secrets.compare_digest(record["csrf"], csrf)):
-            return False
-        with self.lock:
-            self.failures = [value for value in self.failures
-                             if now - value < timedelta(minutes=1)]
-            if len(self.failures) >= 10:
-                return False
-            supplied = (password if isinstance(password, str) and len(password) <= 256
-                        else "")
-            valid = secrets.compare_digest(
-                self.password_hash, hashlib.scrypt(
-                    supplied.encode("utf-8"), salt=self.password_salt, n=2**14, r=8, p=1))
-            record["authenticated"] = valid
-            if not valid:
-                self.failures.append(now)
-            return valid
-
     def authorize(self, token, csrf, now):
         now = clock(now)
         _, record = self.session(token, now)
         valid = bool(
-            record and record["authenticated"] and isinstance(csrf, str) and
+            record and isinstance(csrf, str) and
             secrets.compare_digest(record["csrf"], csrf)
         )
         if not valid:
@@ -123,34 +94,33 @@ class RecordingSessions:
     def session_payload(self, token, now):
         token, record = self.session(token, now, create=True)
         result = {
-            "enabled": True, "authenticated": record["authenticated"],
+            "enabled": True,
             "csrf": record["csrf"], "accounts": [], "products": [],
             "latest_correctable_event": None, "opened": False,
         }
-        if record["authenticated"]:
-            ledger = self._verify_store()
-            result["opened"] = ledger.opened
-            result["accounts"] = [
-                {"id": account["id"], "name": account["name"], "kind": account["kind"]}
-                for account in ledger.spec["accounts"]
-            ]
-            result["products"] = [
-                {"id": product["id"], "name": product["name"],
-                 "sleeve": product["sleeve"],
-                 "quantity_increment": product["quantity_increment"]}
-                for product in ledger.spec["products"]
-            ]
-            latest = next(reversed(ledger.ids.values()), None)
-            if latest and latest.get("type") in CORRECTABLE_CASH_EVENTS:
-                result["latest_correctable_event"] = {
-                    key: latest[key] for key in (
-                        "id", "type", "account_id", "currency", "amount_gbp", "timestamp",
-                        "available_at", "evidence")
-                }
-                if "role" in latest:
-                    result["latest_correctable_event"]["role"] = latest["role"]
-                if "role_evidence" in latest:
-                    result["latest_correctable_event"]["role_evidence"] = latest["role_evidence"]
+        ledger = self._verify_store()
+        result["opened"] = ledger.opened
+        result["accounts"] = [
+            {"id": account["id"], "name": account["name"], "kind": account["kind"]}
+            for account in ledger.spec["accounts"]
+        ]
+        result["products"] = [
+            {"id": product["id"], "name": product["name"],
+             "sleeve": product["sleeve"],
+             "quantity_increment": product["quantity_increment"]}
+            for product in ledger.spec["products"]
+        ]
+        latest = next(reversed(ledger.ids.values()), None)
+        if latest and latest.get("type") in CORRECTABLE_CASH_EVENTS:
+            result["latest_correctable_event"] = {
+                key: latest[key] for key in (
+                    "id", "type", "account_id", "currency", "amount_gbp", "timestamp",
+                    "available_at", "evidence")
+            }
+            if "role" in latest:
+                result["latest_correctable_event"]["role"] = latest["role"]
+            if "role_evidence" in latest:
+                result["latest_correctable_event"]["role_evidence"] = latest["role_evidence"]
         response = dict(result)
         response["_token"] = token
         return response

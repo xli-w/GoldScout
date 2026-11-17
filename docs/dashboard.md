@@ -1,5 +1,28 @@
 # GoldScout Local Dashboard
 
+## Default first-run setup
+
+Run `python -m dashboard` from a source checkout after the frontend is built.
+The source checkout's Git-ignored `local-investment` directory is selected
+without requiring a JSON profile or initialization command. An absent/empty
+workspace opens `/setup`. The wizard collects accounts, products and dated
+opening evidence, validates a preview and creates files only after explicit
+confirmation.
+
+An existing valid journal opens its investment view read-only. Unexpected,
+invalid or conflicting files show recovery guidance rather than being replaced.
+Setup is available without a login, but is not an ordinary reader side effect
+or a repair tool. Use `python -m dashboard --investment-recording` against the
+completed default workspace to explicitly enable later manual recording.
+
+`--workspace <directory>` explicitly selects a different workspace and is
+required by an installed package outside a source checkout. It is mutually
+exclusive with `--demo`, `--database` and `--investment-database`. Those existing
+explicit source flags preserve their behavior, including refusal to create a
+missing selected journal. Browser requests cannot choose filesystem paths.
+Do not expose or tunnel the loopback server. See the
+[guided onboarding instructions](investment.md#guided-first-run-setup).
+
 The [monitoring panel](monitoring.md) adds evidence-bound findings, provider
 readiness and an optional separate observation cache. In recorded mode select
 `--monitoring-profile` and optionally `--monitoring-cache` alongside the existing
@@ -9,15 +32,15 @@ engineering-tested only; account-level activation remains gated.
 
 ## Long-term investment view
 
-The default dashboard and its account views are read-only. The separate
+Existing account views are read-only by default. The separate
 [investment path](investment.md) adds `/investment` and
 `/investment-guide`, showing GBP contributions and recorded valuations. V1 adds
 sleeve drift; v2 shows since-baseline growth, management roles, dated
 marks and unavailable lifetime gain, with no allocation policy or freshness
 threshold. It can show evidence-dated savings terms and statement cash
 observations; neither accrues interest nor adjusts recorded balances. An
-explicitly enabled, password-authenticated v2 recording mode can append
-operator-entered events after a revision-bound preview and confirmation. It
+explicitly enabled v2 recording mode can append operator-entered events after
+a revision-bound preview and confirmation. It
 does not contact banks or brokers, verify entered evidence, approve trades or
 move money. The legacy USD trading screens below remain available and unchanged
 in authority. Review status and acknowledgement remain available only in the
@@ -37,9 +60,9 @@ exclusive with the legacy `--database` and `--demo` sources; recorded investment
 mode never substitutes synthetic legacy accounts. No store is created or repaired
 by reporting. The frontend build binds the legacy, investment v1/v2 and awareness response schemas.
 To enable manual recording for an existing v2 store, add
-`--investment-recording`; the operator enters a 12-character-minimum password
-at the terminal, not in command-line arguments. The server remains bound to
-loopback. Sessions and pending previews are process-local and expire; each
+`--investment-recording`. No password or login is required. The server remains
+bound to loopback. Browser sessions and pending previews are process-local and
+expire; each
 change must be reviewed and confirmed, and stale journal revisions are refused.
 See the [investment guide](investment.md#version-2-opening-evidence) for
 supported records and correction limits. Without this flag, all dashboard
@@ -48,8 +71,8 @@ investment routes remain read-only.
 The local monitoring inbox can be exposed read-only by selecting the existing
 explicitly initialized review store with `--monitoring-reviews`. Dashboard review
 actions and manual observation staging are a distinct opt-in:
-`--monitoring-workflow` prompts for a separate password and requires that review
-store. It is not coupled to investment recording. Actions require a current
+`--monitoring-workflow` requires that review store; no password is required.
+It is not coupled to investment recording. Actions require a current
 inbox sync. Observation staging additionally requires an identified initialized
 `--monitoring-cache`, an explicit GBP reconciliation preview and a second
 confirmation; only the cache is appended, never the investment journal.
@@ -68,8 +91,8 @@ account/record navigation; a direct legacy URL explains that those records are
 not selected. In demo mode, `/legacy` preserves the legacy trading overview and
 account pages. The investment page presents valuation, roles, and performance
 before progressively disclosed account evidence and capability limits. The
-separate `/investment/record` page explains its opt-in gate and retains
-authentication, revision-bound previews, and explicit confirmation. Workspace
+separate `/investment/record` page explains its opt-in gate and uses
+revision-bound previews and explicit confirmation. Workspace
 selection identifies the configured source, not its availability or
 verification; an unknown workspace is not replaced by a demo.
 
@@ -128,10 +151,12 @@ The GoldScout name does not change the existing `trader-dashboard` command,
 
 If the port is occupied, use `--port 8766` and the corresponding browser URL. The
 dashboard binds only to `127.0.0.1`, disables proxy-header trust, and rejects
-foreign hosts/origins. Account and trading routes reject mutations. Recorded-mode
-intelligence controls require explicit enablement and local authentication; the
-synthetic demo uses a temporary workspace and no real credential. It is not a
-remotely hosted service; do not tunnel or expose it.
+foreign hosts/origins. Account and trading routes reject mutations. No dashboard
+feature has a user login. Manual recording, monitoring actions and analysis
+controls still require explicit enablement flags; state-changing browser
+requests retain same-origin/CSRF checks and applicable previews/confirmations.
+These checks do not authenticate local users. The synthetic demo uses a
+temporary workspace. Do not tunnel or expose the service.
 
 For separate development, start `trader-dashboard --demo --api-only`, then run
 `npm --prefix frontend run dev` in another terminal. Vite uses port 5173 and
@@ -148,8 +173,8 @@ python -m dashboard --database .\bot_ledger.sqlite3
 
 The installed equivalent is `trader-dashboard --database <existing-ledger-path>`.
 Relative paths resolve against the operator's working directory. The command
-does not start trading. `--demo` and `--database` are mutually exclusive and one
-is mandatory; `--telemetry` is recorded-mode only, and nondefault `--scenario`
+does not start trading. `--demo` and `--database` are mutually exclusive; with no source flag the local
+investment workspace is selected. `--telemetry` is legacy-recorded-mode only, and nondefault `--scenario`
 is demo-only. No implicit account selection, bot startup, ledger creation,
 account adoption, or repair is performed.
 

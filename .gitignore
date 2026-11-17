@@ -11,6 +11,7 @@ bot_state.json
 bot_telemetry.json*
 bot_ledger.sqlite3*
 investment.sqlite3*
+/local-investment/
 bot.lock
 backtest_metrics.json
 backtest_research_trials.json

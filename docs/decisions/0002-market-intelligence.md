@@ -35,10 +35,11 @@ versions 1--3 through explicit upgrades. Local/OpenAI adapters are registered th
 nonsecret operator profiles; keys remain server-side. Network/news/AI launch capabilities
 are independent of persisted front-end preferences and default off.
 
-The Intelligence page and narrowly scoped authenticated session/control routes are
-implemented. Trading/account routes remain read-only. The synthetic demo owns temporary
-storage and never reaches a broker/feed/model. Production controls require explicit
-launch enablement, same-origin JSON, HttpOnly/SameSite sessions, CSRF and bounded requests.
+The Intelligence page and narrowly scoped session/control routes are implemented.
+There is no user login; production controls require explicit launch enablement,
+same-origin JSON, HttpOnly/SameSite sessions, CSRF and bounded requests.
+Trading/account routes remain read-only. The synthetic demo owns temporary
+storage and never reaches a broker/feed/model.
 Queued, applied and bot-observed state are distinct; unsupported or stale observations
 remain unknown. The optional asynchronous bot observer never suppresses orders or
 changes stops/sizing. Initial coverage is BLS, BEA and Fed monetary-policy RSS, not

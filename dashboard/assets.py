@@ -23,6 +23,9 @@ def verify_frontend(directory=None, schema=None):
         if manifest.get("version") != 1 or manifest.get("schema_sha256") != hashlib.sha256(schema.read_bytes()).hexdigest():
             raise FrontendBuildError("Frontend contract does not match this dashboard")
         if schema == Path(__file__).with_name("response.schema.json"):
+            setup_schema = Path(__file__).with_name("setup.schema.json")
+            if manifest.get("setup_schema_sha256") != hashlib.sha256(setup_schema.read_bytes()).hexdigest():
+                raise FrontendBuildError("Frontend setup contract does not match this dashboard")
             investment_schema = Path(__file__).resolve().parent.parent / "investment" / "response.schema.json"
             if manifest.get("investment_schema_sha256") != hashlib.sha256(investment_schema.read_bytes()).hexdigest():
                 raise FrontendBuildError("Frontend investment contract does not match this dashboard")

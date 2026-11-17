@@ -7,6 +7,36 @@ hash-linked events and replay-verified committed states. Readers never migrate,
 repair or create it. These checks detect inconsistency, not forgery or an
 omitted later backup.
 
+## Confirmed first-run creation
+
+The [default wizard](investment.md#guided-first-run-setup) is an explicitly
+confirmed local bootstrap path with no login. Workspace discovery, status and
+preview are read-only and never initialize storage. The operator confirms the exact v2
+profile and opening event before any workspace directory, staging file or
+receipt is written. Drafts are not persisted before that confirmation.
+
+Confirmed creation stages a new journal, appends the reviewed opening through
+the existing accounting code, closes handles and validates replay before
+no-overwrite publication. The journal's embedded profile is authoritative;
+the separate profile JSON is a supporting copy. Journal publication, profile
+export and setup receipts are separate filesystem operations, not one atomic
+transaction. A failure after journal publication must be reported as committed
+or partially completed, never rolled back, and must not delete that journal.
+
+Recovery requires exact setup provenance and validated artifact identities.
+Arbitrary empty databases are not proof of interrupted setup. A matching
+completed creation is recognized without a second opening; a verifiably
+wizard-created empty staging journal requires fresh evidence review before a
+resumed opening. Unavailable, conflicting or invalid artifacts are preserved
+with guidance rather than automatically removed or repaired.
+
+The repository ignores `local-investment/`, including setup artifacts and SQLite
+sidecars. This is not encryption, an access-control policy or a backup. Inspect
+Windows inherited ACLs and cloud-sync settings; do not force-add private data.
+Ignored data can be removed by Git cleanup commands. Keep separately protected
+backups and evidence. Internal hashes do not establish origin against a party
+able to rewrite local files, and publication is not a power-loss certification.
+
 ## Synthetic onboarding rehearsal
 
 Before entering account evidence, rehearse the v2 command flow with isolated,
