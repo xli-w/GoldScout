@@ -105,3 +105,22 @@ class MonitoringStoreTests(unittest.TestCase):
                 append_attempt(self.path, self.profile, attempt(), NOW)
             blocker.rollback()
         self.assertEqual(read_cache(self.path, self.profile, NOW)["revision"], 0)
+
+    def test_database_byte_limit_rolls_back_oversized_append(self):
+        value = attempt()
+        value["observation"]["mapping_available_at"] = iso(NOW)
+        value["observation"]["product_mappings"] = [
+            {"source_product": f"{index:03d}" + "s" * 197,
+             "product_id": f"{index:03d}" + "t" * 197,
+             "evidence": "e" * 200}
+            for index in range(100)
+        ]
+        with closing(sqlite3.connect(self.path)) as connection:
+            page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        byte_limit = max(self.path.stat().st_size, page_count * page_size)
+        with patch("investment.monitoring_store.MAX_CACHE_BYTES", byte_limit):
+            with self.assertRaisesRegex(InvestmentError, "cache size limit"):
+                append_attempt(self.path, self.profile, value, NOW)
+        self.assertEqual(read_cache(self.path, self.profile, NOW)["revision"], 0)
+        self.assertLessEqual(self.path.stat().st_size, byte_limit)

@@ -16,6 +16,8 @@ TABLES = {
     "monitor_attempts": "CREATE TABLE monitor_attempts (revision INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, payload TEXT NOT NULL)",
 }
 MAX_ATTEMPTS = 500
+MAX_CACHE_BYTES = 32 * 1024 * 1024
+MAX_ATTEMPT_BYTES = 256 * 1024
 ERROR_CODES = ("provider_unavailable", "permission_denied", "invalid_response", "collection_interrupted")
 
 
@@ -26,7 +28,7 @@ def _binding(profile):
 @contextmanager
 def _connection(path, write=False):
     path = Path(path).absolute()
-    if not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
+    if not path.is_file() or path.stat().st_size > MAX_CACHE_BYTES:
         raise InvestmentError("Monitoring cache missing or exceeds size bound; explicit init required")
     try:
         with closing(sqlite3.connect(path.as_uri() + ("?mode=rw" if write else "?mode=ro"),
@@ -105,7 +107,7 @@ def _validate_attempt(value, profile, now):
             raise InvestmentError("Failure requires a bounded diagnostic and no published batch")
     else:
         raise InvestmentError("Unknown attempt status")
-    if len(canonical(value).encode("utf-8")) > 256 * 1024:
+    if len(canonical(value).encode("utf-8")) > MAX_ATTEMPT_BYTES:
         raise InvestmentError("Monitoring attempt exceeds size bound")
 
 
@@ -134,8 +136,13 @@ def append_attempt(path, profile, value, now):
                     and earlier["account_id"] == value["account_id"] and old["id"] == new["id"]
                     and canonical(old) != canonical(new)):
                 raise InvestmentError("Conflicting source observation ID; preserve revisions explicitly")
-        return connection.execute("INSERT INTO monitor_attempts(id,payload) VALUES (?,?)",
-                                  (value["id"], payload)).lastrowid
+        revision = connection.execute("INSERT INTO monitor_attempts(id,payload) VALUES (?,?)",
+                                      (value["id"], payload)).lastrowid
+        page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+        page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        if page_count * page_size > MAX_CACHE_BYTES:
+            raise InvestmentError("Monitoring cache size limit reached; explicitly purge expired evidence")
+        return revision
 
 
 def read_cache(path, profile, now):
