@@ -68,6 +68,28 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     acknowledge.add_argument("--reviewed-revision", type=int, required=True)
     acknowledge.add_argument("--id", required=True, help="unique, reusable acknowledgement ID")
     acknowledge.add_argument("--evidence", required=True, help="brief manual review evidence")
+    review_init = commands.add_parser(
+        "review-init", help="explicitly initialize a separate local monitoring review store")
+    review_init.add_argument("--database", required=True)
+    review_init.add_argument("--monitoring-profile", required=True)
+    review_init.add_argument("--reviews", required=True)
+    review_init.add_argument("--cache")
+    review_sync = commands.add_parser(
+        "review-sync", help="sync current recorded monitoring findings into the local review inbox")
+    review_sync.add_argument("--database", required=True)
+    review_sync.add_argument("--monitoring-profile", required=True)
+    review_sync.add_argument("--reviews", required=True)
+    review_sync.add_argument("--cache")
+    review_list = commands.add_parser("review-inbox", help="read the separate local monitoring review inbox")
+    review_list.add_argument("--reviews", required=True)
+    review_update = commands.add_parser(
+        "review-update", help="append an acknowledgement/defer/review workflow action; never resolves a finding")
+    review_update.add_argument("--reviews", required=True)
+    review_update.add_argument("--case-id", required=True)
+    review_update.add_argument("--request-id", required=True, help="unique idempotency key for this action")
+    review_update.add_argument("--expected-revision", type=int, required=True)
+    review_update.add_argument("--action", choices=("acknowledged", "deferred", "reviewed"), required=True)
+    review_update.add_argument("--note", default="")
     args = parser.parse_args(argv)
     requested_now = now
     try:
@@ -155,6 +177,57 @@ def main(argv=None, stdout=None, stderr=None, now=None):
                       file=stderr)
                 return 2
             value = {"acknowledgement": acknowledgement, "review_status": status}
+        elif args.command in ("review-init", "review-sync"):
+            from pathlib import Path
+            from .monitoring import monitoring_snapshot, validate_profile
+            from .monitoring_reviews import (
+                initialize_review_store, monitoring_cache_binding, sync_review_findings,
+            )
+            from .store import canonical, digest, read_with_clock
+
+            database_path = Path(args.database).resolve()
+            review_path = Path(args.reviews).resolve()
+            cache_path = Path(args.cache).resolve() if args.cache else None
+            if review_path == database_path or cache_path is not None and review_path == cache_path:
+                raise InvestmentError("Review store must be separate from journal and observation cache")
+            monitoring_profile = load_json(args.monitoring_profile)
+            if args.command == "review-init":
+                ledger, observed = read_with_clock(args.database, requested_now)
+                validate_profile(monitoring_profile, ledger, observed)
+                profile_hash = digest(canonical(monitoring_profile))
+                cache_binding = None
+                if args.cache:
+                    from .monitoring_store import read_cache
+                    cache = read_cache(args.cache, monitoring_profile, observed)
+                    cache_binding = monitoring_cache_binding(args.cache, cache["instance_id"])
+                initialize_review_store(
+                    args.reviews, ledger.spec["portfolio_id"], profile_hash, cache_binding)
+                value = {"initialized": True, "portfolio_id": ledger.spec["portfolio_id"],
+                         "profile_hash": profile_hash, "cache_bound": args.cache is not None,
+                         "accounting_writes": False}
+            else:
+                report_value = monitoring_snapshot(
+                    args.database, args.monitoring_profile, args.cache, requested_now)
+                cache_binding = None
+                if args.cache:
+                    from .monitoring_store import read_cache
+                    cache = read_cache(args.cache, monitoring_profile,
+                                       report_value["generated_at"])
+                    cache_binding = monitoring_cache_binding(args.cache, cache["instance_id"])
+                    if cache["revision"] != report_value["cache_revision"]:
+                        raise InvestmentError("Monitoring cache changed during review sync; refresh and retry")
+                value = sync_review_findings(
+                    args.reviews, report_value, report_value["portfolio_id"],
+                    report_value["profile_hash"], report_value["generated_at"],
+                    cache_binding)
+                value["accounting_writes"] = False
+        elif args.command == "review-inbox":
+            from .monitoring_reviews import review_inbox
+            value = review_inbox(args.reviews)
+        elif args.command == "review-update":
+            from .monitoring_reviews import update_review
+            value = update_review(args.reviews, args.case_id, args.request_id,
+                                  args.expected_revision, args.action, args.note, requested_now)
         else:
             value = proposal_export(args.database, now)
         print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout)

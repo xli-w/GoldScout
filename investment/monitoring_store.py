@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sqlite3
 from datetime import timedelta
+from uuid import uuid4
 
 from . import InvestmentError
 from .core import explicit_clock, fields, iso, text
@@ -55,7 +56,8 @@ def _connection(path, write=False):
 def initialize_cache(path, profile, retention_seconds):
     if type(retention_seconds) is not int or not 1 <= retention_seconds <= 366 * 86400:
         raise InvestmentError("Explicit permitted retention must be 1 to 31622400 seconds")
-    identity = {**_binding(profile), "retention_seconds": retention_seconds}
+    identity = {**_binding(profile), "retention_seconds": retention_seconds,
+                "instance_id": uuid4().hex, "cache_revision": 0}
     path = Path(path)
     try:
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -78,11 +80,28 @@ def _identity(connection, profile):
     if len(rows) != 1:
         raise InvestmentError("Monitoring identity missing")
     identity = parse_json(rows[0][0])
-    fields(identity, ("portfolio_id", "profile_hash", "retention_seconds"))
+    allowed_identity_fields = (
+        {"portfolio_id", "profile_hash", "retention_seconds"},
+        {"portfolio_id", "profile_hash", "retention_seconds", "instance_id"},
+        {"portfolio_id", "profile_hash", "retention_seconds", "instance_id", "cache_revision"},
+    )
+    if type(identity) is not dict or set(identity) not in allowed_identity_fields:
+        raise InvestmentError("Monitoring cache identity is invalid")
+    fields(identity, ("portfolio_id", "profile_hash", "retention_seconds")
+           + (("instance_id",) if "instance_id" in identity else ())
+           + (("cache_revision",) if "cache_revision" in identity else ()))
     if ({key: identity[key] for key in ("portfolio_id", "profile_hash")} != _binding(profile)
             or type(identity["retention_seconds"]) is not int
             or not 1 <= identity["retention_seconds"] <= 366 * 86400):
         raise InvestmentError("Monitoring cache profile binding or retention is invalid")
+    if "instance_id" in identity and (
+            not isinstance(identity["instance_id"], str) or len(identity["instance_id"]) != 32
+            or any(char not in "0123456789abcdef" for char in identity["instance_id"])):
+        raise InvestmentError("Monitoring cache instance identity is invalid")
+    if "cache_revision" in identity and (
+            "instance_id" not in identity
+            or type(identity["cache_revision"]) is not int or identity["cache_revision"] < 0):
+        raise InvestmentError("Monitoring cache revision identity is invalid")
     return identity
 
 
@@ -115,7 +134,7 @@ def append_attempt(path, profile, value, now):
     now = explicit_clock(now)
     _validate_attempt(value, profile, now)
     with _connection(path, write=True) as connection:
-        _identity(connection, profile)
+        identity = _identity(connection, profile)
         existing = connection.execute("SELECT revision,payload FROM monitor_attempts WHERE id=?",
                                       (value["id"],)).fetchone()
         payload = canonical(value)
@@ -129,6 +148,10 @@ def append_attempt(path, profile, value, now):
             raise InvestmentError("Monitoring cache full; explicitly purge expired evidence")
         if rows and explicit_clock(parse_json(rows[-1][0])["attempted_at"]) > explicit_clock(value["attempted_at"]):
             raise InvestmentError("Collection attempts must preserve clock order")
+        if ("cache_revision" in identity and rows
+                and identity["cache_revision"] < connection.execute(
+                    "SELECT MAX(revision) FROM monitor_attempts").fetchone()[0]):
+            raise InvestmentError("Monitoring cache revision precedes retained evidence")
         for row in rows:
             earlier = parse_json(row[0])
             old, new = earlier["observation"], value["observation"]
@@ -138,6 +161,12 @@ def append_attempt(path, profile, value, now):
                 raise InvestmentError("Conflicting source observation ID; preserve revisions explicitly")
         revision = connection.execute("INSERT INTO monitor_attempts(id,payload) VALUES (?,?)",
                                       (value["id"], payload)).lastrowid
+        if "cache_revision" in identity:
+            if revision <= identity["cache_revision"]:
+                raise InvestmentError("Monitoring cache sequence did not advance")
+            identity["cache_revision"] = revision
+            connection.execute("UPDATE monitor_identity SET payload=? WHERE id=1",
+                               (canonical(identity),))
         page_count = connection.execute("PRAGMA page_count").fetchone()[0]
         page_size = connection.execute("PRAGMA page_size").fetchone()[0]
         if page_count * page_size > MAX_CACHE_BYTES:
@@ -160,8 +189,13 @@ def read_cache(path, profile, now):
             _validate_attempt(attempt, profile, now)
             if explicit_clock(attempt["attempted_at"]) > cutoff:
                 attempts.append(attempt)
-        return {"revision": rows[-1][0] if rows else 0, "attempts": attempts,
-                "retention_seconds": identity["retention_seconds"]}
+        revision = identity.get("cache_revision", rows[-1][0] if rows else 0)
+        if rows and revision < rows[-1][0]:
+            raise InvestmentError("Monitoring cache revision precedes retained evidence")
+        return {"revision": revision, "attempts": attempts,
+                "retention_seconds": identity["retention_seconds"],
+                "instance_id": (identity.get("instance_id")
+                                if "cache_revision" in identity else None)}
 
 
 def purge_expired(path, profile, now):

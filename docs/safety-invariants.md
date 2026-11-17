@@ -50,6 +50,13 @@ These are development contracts, not a certification of live readiness. Current 
   explicit activation and account/permission/retention approval, never a browser
   refresh. Native-currency evidence cannot manufacture GBP valuation, and
   failed collection cannot refresh source clocks or repair journal differences.
+- The optional local review inbox is a separately initialized workflow store,
+  bound to the portfolio, monitoring profile and (if used) cache instance. It
+  stores finding summaries and evidence hashes, not provider payloads. Actions
+  are append-only and revision-bound; acknowledgement, deferral, review,
+  inactivity or supersession never means accounting correction, finding
+  resolution or trade approval. Cache instance IDs are distinct on
+  initialization, and cache revisions remain monotonic across purge.
 
 - Product scope is designated substantial long-term investment capital, not
   household cash/emergency budgeting; see the [current mandate](investment-research-context.md).

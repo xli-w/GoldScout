@@ -77,6 +77,11 @@ After confirming permitted retention, explicitly initialize a **new** cache:
 python -m investment monitor-init --database .\investment.sqlite3 --monitoring-profile .\monitoring.json --cache .\monitoring.sqlite3 --retention-seconds 86400
 ```
 
+New caches include a local random instance identifier and monotonic revision
+counter. Purging expired attempts does not reset that counter. Older cache files
+remain readable, but cannot be bound to the review inbox until a new cache is
+explicitly initialized.
+
 The cache is bound to the exact monitoring profile hash. Changing the profile
 requires selecting a newly initialized cache; old evidence is not silently
 rebound. The cache is separate from all accounting stores, bounded to 500
@@ -122,6 +127,52 @@ uses the source clock and is stale at equality with the configured age limit.
 Failed attempts keep the previous observation visibly dated and display a
 failure finding. Later matching observations do not resolve journal cash
 differences. Identical attempt retries are idempotent; conflicting IDs fail.
+
+## Local monitoring review inbox
+
+Monitoring findings can be tracked in a separate, local workflow store. This is
+not the investment journal or observation cache. It requires a v2 journal and
+monitoring profile, is explicitly initialized at a new path, and must not share
+the journal or cache path:
+
+```powershell
+python -m investment review-init --database .\investment.sqlite3 --monitoring-profile .\monitoring.json --reviews .\monitoring-reviews.sqlite3
+python -m investment review-sync --database .\investment.sqlite3 --monitoring-profile .\monitoring.json --reviews .\monitoring-reviews.sqlite3
+python -m investment review-inbox --reviews .\monitoring-reviews.sqlite3
+python -m investment review-update --reviews .\monitoring-reviews.sqlite3 --case-id <case-id> --request-id <unique-action-id> --expected-revision <inbox-revision> --action acknowledged --note "Checked source date"
+```
+
+`review-sync` uses the current recorded monitoring report; add `--cache` when
+that report uses the separately initialized observation cache. A review store is
+bound to the exact portfolio and monitoring-profile hash. When initialized with
+`--cache`, it is also bound to that resolved local cache path and cache-instance
+ID; use the same cache on every sync. Replacing the cache at that path or
+changing the profile requires a newly initialized review store. New monitoring
+caches have an instance ID; older cache files without one can still be read by
+monitoring but cannot be bound to a review inbox. Older journal revisions,
+cache revisions or report clocks cannot replace a newer sync. Purging does not
+reset a new cache's revision; replacing it creates a different instance and
+requires a new review store.
+Repeated syncs of unchanged evidence do not duplicate cases. Changed finding
+evidence creates a new case and supersedes the earlier one; findings absent from
+a later report become inactive, **not resolved**. A finding that returns after
+becoming inactive gets a new case.
+
+Actions are limited to `acknowledged`, `deferred` and `reviewed`. They are
+revision-bound workflow records, not evidence that a discrepancy was corrected,
+a finding was resolved, a trade was approved or a policy was satisfied. Use the
+latest inbox revision when updating; `--request-id` makes an identical retry
+idempotent. Local notes are limited to 500 characters; do not put credentials or
+secrets in them.
+
+The review store is bounded to 5,000 cases, 10,000 actions, 10,000 syncs and
+16 MiB. It stores finding summaries, revisions and a hash of the source-evidence
+text, not that source text or provider payload. Locally entered review notes are
+retained in its append-only action history. Readers never initialize or repair
+the store. An unavailable or invalid monitoring report cannot be synced; the
+inbox does not update accounting, collect from a provider or suppress active
+monitoring findings. Local file protection, backup and any note-retention needs
+remain the operator's responsibility.
 
 Provider units are not automatically journal product IDs. GBP observations
 reuse the existing conservative comparison rules: missing source clocks,

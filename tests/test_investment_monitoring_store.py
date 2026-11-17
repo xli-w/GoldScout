@@ -49,6 +49,8 @@ class MonitoringStoreTests(unittest.TestCase):
         reopened = read_cache(self.path, self.profile, NOW)
         self.assertEqual([a["status"] for a in reopened["attempts"]], ["success", "failed"])
         self.assertEqual(reopened["attempts"][0]["observation"]["coverage"], "partial")
+        self.assertEqual(len(reopened["instance_id"]), 32)
+        self.assertEqual(reopened["revision"], 2)
 
     def test_reader_does_not_create_or_repair_foreign_or_missing_stores(self):
         missing = self.path.with_name("missing.sqlite3")
@@ -68,6 +70,17 @@ class MonitoringStoreTests(unittest.TestCase):
         self.assertEqual(read_cache(self.path, self.profile, NOW + timedelta(days=1))["attempts"], [])
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(purge_expired(self.path, self.profile, NOW + timedelta(days=1)), {"deleted_attempts": 1})
+        after_purge = read_cache(self.path, self.profile, NOW + timedelta(days=1))
+        self.assertEqual(after_purge["revision"], 1)
+        self.assertEqual(after_purge["instance_id"], read_cache(self.path, self.profile, NOW)["instance_id"])
+        later_attempt = attempt()
+        later_attempt["id"] = "post-purge"
+        later_clock = NOW + timedelta(days=2)
+        later_attempt["attempted_at"] = iso(later_clock)
+        later_attempt["observation"]["observed_at"] = iso(later_clock)
+        later_attempt["observation"]["available_at"] = iso(later_clock)
+        self.assertEqual(append_attempt(self.path, self.profile, later_attempt, later_clock), 2)
+        self.assertEqual(read_cache(self.path, self.profile, later_clock)["revision"], 2)
         changed = deepcopy(self.profile)
         changed["accounts"][1]["evidence"] = "changed binding"
         with self.assertRaises(InvestmentError):

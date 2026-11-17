@@ -263,6 +263,13 @@ def _check_evidence_size(spec, events):
         raise InvestmentError("Combined investment evidence exceeds size bound")
 
 
+def _check_database_size(connection):
+    page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+    page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+    if page_count * page_size > MAX_DATABASE_BYTES:
+        raise InvestmentError("Investment database exceeds size bound; transaction rolled back")
+
+
 def _append_events(connection, spec, existing, old, previous, values, now):
     ids = {v["id"]: v for v in existing}
     additions = []
@@ -289,6 +296,7 @@ def _append_events(connection, spec, existing, old, previous, values, now):
     if additions:
         connection.execute("INSERT INTO commits VALUES (?,?)",
                            (ledger.revision, state_digest(ledger)))
+        _check_database_size(connection)
     return ledger.revision
 
 

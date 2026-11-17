@@ -7,6 +7,22 @@ hash-linked events and replay-verified committed states. Readers never migrate,
 repair or create it. These checks detect inconsistency, not forgery or an
 omitted later backup.
 
+## Synthetic onboarding rehearsal
+
+Before entering account evidence, rehearse the v2 command flow with isolated,
+synthetic fixtures:
+
+```powershell
+python scripts/offline_tests.py --pattern test_investment_onboarding.py
+```
+
+The regression creates a temporary journal, opens it with synthetic balances
+and holdings, assigns roles, records dated marks and a cash observation,
+compares complete synthetic account observations, generates monitoring output,
+then backs up, restores and compares reports. It does not read operational
+stores, contact providers or submit orders. Its fixture identifiers and values
+are not account recommendations or data to import into a real journal.
+
 ## Backup and restore
 
 The following are explicit maintenance operations and require task-specific
@@ -72,8 +88,11 @@ new imports or reads before another is reached; there is no automatic rollover,
 pruning, v1-to-v2 migration or capacity forecast. A copy receipt measures each
 bound at the pinned snapshot; file size alone does not measure serialized
 evidence. Monitor receipts and rehearse recovery before reaching a limit.
-Measurements are not a reservation or guarantee that another append will fit;
-file-size checks are made before opening, not after each commit.
+Imports check the database size before opening and recheck SQLite's allocated
+page count inside the write transaction before commit. If the limit would be
+exceeded, the entire append is rolled back and the prior revision remains
+available. The pre-open check still refuses an already oversized database;
+there is no automatic repair or pruning.
 Do not delete events, edit the schema, raise
 limits or restart from invented opening balances as a workaround. A future
 archive/migration design needs explicit approval, evidence continuity, full

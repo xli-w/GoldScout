@@ -221,6 +221,29 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(read(self.database, NOW).revision, 0)
         self.assertEqual(store.commit_record(self.database, preview, NOW)["revision"], 1)
 
+    def test_database_size_limit_rolls_back_import_batch(self):
+        initialize(self.database, profile(), NOW)
+        before = self.database.read_bytes()
+        with closing(sqlite3.connect(self.database)) as connection:
+            page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        byte_limit = max(self.database.stat().st_size, page_count * page_size)
+        observations = [
+            cash_observation(
+                timestamp=NOW + timedelta(seconds=index + 1),
+                account="bank" if index % 2 else "broker",
+                identifier=f"capacity-observation-{index}",
+                balance="1000" if index % 2 else "100",
+            )
+            for index in range(100)
+        ]
+        with patch.object(store, "MAX_DATABASE_BYTES", byte_limit):
+            with self.assertRaisesRegex(InvestmentError, "size bound.*rolled back"):
+                import_events(self.database, [opening(), *observations],
+                              NOW + timedelta(seconds=101))
+        self.assertEqual(self.database.read_bytes(), before)
+        self.assertEqual(read(self.database, NOW).revision, 0)
+
     def test_retry_rejects_type_changed_evidence_even_with_matching_hash(self):
         initialize(self.database, profile(), NOW)
         import_events(self.database, [opening()], NOW)

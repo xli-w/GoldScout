@@ -118,6 +118,52 @@ continue to block proposals; v2 has no proposal export or role transfers.
    admission separately under the [protocol](../backtesting-protocol.md);
    neither a research result nor a model output approves policy.
 
+## Draft policy design and investor decisions
+
+This design is **not an approved policy** and has no executable representation
+or authority. The investor must decide the following before a policy can be
+approved; unknown values are not defaults.
+
+| Decision | Required investor input |
+| --- | --- |
+| Scope | Designated accounts and wrappers, eligible products and currencies, exclusions, and treatment of unassigned assets. Product and account eligibility need separate evidence. |
+| Targets | Core/dynamic and asset-class targets, tolerances and valuation basis; confirm how each applies across accounts and wrappers. The illustrative range is not a target. |
+| Dynamic risk | Capital cap, individual and aggregate exposure limits, concentration and overlap treatment, cost/turnover limits, loss measurement, and suspension and retirement triggers. A cap cannot guarantee losses. |
+| Funding and transfers | Initial funding, treatment of new external contributions, replenishment and any human-confirmed profit-transfer rule. Automatic core-funded loss replenishment remains prohibited. |
+| Review and evidence | Review cadence and triggers, freshness and reconciliation requirements, response to missing evidence, policy expiry and the process for approval and revocation. |
+
+The current illustrative dynamic denominator is investment holdings outside the
+LISA, excluding savings and cash. It is a monitoring basis, not an approved
+target, limit or funding instruction. Any future policy must explicitly define
+its numerator and denominator, including zero or incomplete valuations; it must
+not silently reinterpret the monitoring figure as an approved risk measure.
+
+### Version and lifecycle
+
+A future implementation should bind an immutable policy version and its content
+digest to a portfolio identity, explicit scope, effective time, expiry and
+investor approval evidence. Approval must identify the exact version and record
+when the evidence became available; neither a draft, a journal role assignment,
+a review acknowledgement nor this document is approval. The mechanism for
+authenticating and recording approval is not yet designed or implemented.
+
+Changes require a new version and explicit approval. Record supersession and
+revocation as auditable lifecycle evidence without rewriting earlier decisions.
+At decision time, require an approved, effective, unexpired and unrevoked version
+for the applicable scope; ambiguous, conflicting, unavailable or stale lifecycle
+evidence blocks the decision. Revocation or expiry blocks new policy-dependent
+decisions; it does not imply liquidation, cancellation or removal of protection.
+Handling already-submitted orders requires separately approved venue-specific
+recovery and execution rules.
+
+Each future decision must bind the policy version and digest, portfolio revision,
+relevant evidence and availability clocks, valuation and reconciliation status,
+limits and assumptions. Revalidate these bindings before any separately approved
+action; concurrent changes or revocation require a fresh decision rather than
+reuse of a stale one. Do not treat proposed sale proceeds as available funding.
+The persistence model, concurrency protocol and approval interface require
+separate implementation design, failure tests and independent review.
+
 ## Consequences and verification
 
 Manual opening/onboarding, subsequent recording, reconciliation evidence,

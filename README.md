@@ -12,7 +12,7 @@ verify that recorded account data is true.
 | Investment records | Separate GBP-only v1/v2 journals, replayed reports, and explicit v2 opening evidence. |
 | Portfolio policy | Core/dynamic/unassigned attribution is recorded in v2; approved role budgets and policy are not implemented. Investment proposals are blocked. |
 | Portfolio awareness | Optional local projection of configured exposures against existing intelligence evidence; no collection or trading authority. |
-| Portfolio monitoring | Local evidence-quality, concentration, role-share and review findings; separate observation cache and gated eToro Read snapshot adapter, live unvalidated. |
+| Portfolio monitoring | Local evidence-quality, concentration, role-share and review findings; separate observation cache, a local review inbox and gated eToro Read snapshot adapter, live unvalidated. |
 | Market intelligence | Separate opt-in calendar/news collection and analysis. Advisory only; it cannot change investment records or direct trades. |
 | Legacy trading | The Alpaca bot remains available as a separate system with its own ledger, configuration, and recovery contracts. It is not the investment manager. |
 | Research | Legacy strategy experiments and GBP data-readiness tools are separate from an approved GBP portfolio-performance process. See the [research protocol](docs/backtesting-protocol.md). |
