@@ -3,6 +3,35 @@ import { readFileSync } from "node:fs";
 
 const fixtures = JSON.parse(readFileSync(new URL("../../dashboard/fixtures.json", import.meta.url), "utf8"));
 
+test("investment workspace opens investment and does not present legacy-only pages", async ({ page }) => {
+  let legacyRequests = 0;
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", scenario: null, workspace: "investment" },
+  }));
+  await page.route("**/api/v1/overview", route => {
+    legacyRequests++;
+    return route.fulfill({ status: 503, json: {} });
+  });
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/investment$/);
+  await expect(page.getByRole("heading", { name: "Long-term investment", level: 1 })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Account navigation" })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Records navigation" })).toHaveCount(0);
+  await page.goto("/positions");
+  await expect(page.getByText("Legacy trading records are not selected in this workspace.")).toBeVisible();
+  expect(legacyRequests).toBe(0);
+});
+
+test("unknown workspace does not guess an account source", async ({ page }) => {
+  let legacyRequests = 0;
+  await page.route("**/api/v1/settings", route => route.fulfill({ json: { workspace: ["demo"] } }));
+  await page.route("**/api/v1/overview", route => { legacyRequests++; return route.abort(); });
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toContainText("account source is unknown");
+  await expect(page.getByRole("navigation", { name: "Account navigation" })).toHaveCount(0);
+  expect(legacyRequests).toBe(0);
+});
+
 test("portfolio awareness keeps matching local, shows evidence and fails closed on refresh", async ({ page }) => {
   await page.clock.install();
   const investment = await (await page.request.get("/api/investment/v1/snapshot")).json();
@@ -176,6 +205,7 @@ test("investment browser rejects invalid money instead of displaying an invented
 });
 
 test("opening records show since-baseline value without inventing lifetime gain", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-01-05T12:00:00Z"));
   const at = "2026-01-01T12:00:00Z";
   const report = {
     schema_version: 2, source_mode: "recorded", portfolio_id: "synthetic", revision: 1,
@@ -456,6 +486,60 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(cashHistory.getByRole("row").nth(1)).toContainText("synthetic evidence");
   await expect(cashHistory.getByRole("row").nth(2)).toContainText("-£10.00");
   await expect(cashHistory.getByRole("row").nth(2)).toContainText("prior synthetic evidence");
+  const reconciliation = page.getByRole("region", { name: "Cash evidence overview" });
+  await expect(reconciliation).toContainText("2 differing observations");
+  await expect(reconciliation).toContainText("No cash observation");
+  await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("4 days");
+  const latest = { account_id: "bank", balance_gbp: "1000", difference_gbp: "0",
+    timestamp: "2026-01-02T12:00:00Z", available_at: "2026-01-02T12:00:00Z",
+    source: "later synthetic statement", evidence: "later matching evidence" };
+  report.cash_observations.push(latest);
+  report.accounts[0].cash_observation = { ...latest };
+  delete report.accounts[0].cash_observation.account_id;
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(reconciliation).toContainText("2 differing observations");
+  await expect(reconciliation).toContainText("synthetic evidence");
+  await expect(reconciliation).toContainText("prior synthetic evidence");
+  await expect(reconciliation).toContainText("Later matching observations do not resolve");
+  report.cash_observations.pop();
+  report.accounts[0].cash_observation = { ...report.cash_observations[1] };
+  delete report.accounts[0].cash_observation.account_id;
+  for (const [day, difference] of [[2, "0.001"], [3, "-0.001"]]) {
+    report.cash_observations.push({ account_id: "bank", balance_gbp: "1000",
+      difference_gbp: difference, timestamp: `2026-01-0${day}T12:00:00Z`,
+      available_at: `2026-01-0${day}T12:00:00Z`, source: "precise statement", evidence: "precise evidence" });
+  }
+  report.accounts[0].cash_observation = { ...report.cash_observations.at(-1) };
+  delete report.accounts[0].cash_observation.account_id;
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(reconciliation).toContainText("-£0.001");
+  await expect(cashHistory.getByRole("row").nth(1)).toContainText("-£0.001");
+  await expect(cashHistory.getByRole("row").nth(2)).toContainText("£0.001");
+  report.cash_observations.splice(-2);
+  report.accounts[0].cash_observation = { ...report.cash_observations[1] };
+  delete report.accounts[0].cash_observation.account_id;
+  const holding = { ...report.holdings[0] };
+  report.as_of = null;
+  report.complete = false;
+  report.equity_gbp = null;
+  report.since_baseline_gain_gbp = null;
+  report.twr_pct = null;
+  report.max_drawdown_pct = null;
+  report.holdings[0] = { ...holding, value_gbp: null, mark_at: null, mark_available_at: null };
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Age unavailable");
+  await expect(page.getByLabel("Investment holdings")).toContainText("Age unavailable");
+  report.as_of = at;
+  report.complete = true;
+  report.equity_gbp = "2000";
+  report.since_baseline_gain_gbp = "0";
+  report.twr_pct = "0";
+  report.max_drawdown_pct = "0";
+  report.holdings[0] = holding;
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await page.clock.setFixedTime(new Date("2025-01-01T12:00:00Z"));
+  await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Age unavailable (future or invalid clock)");
+  await page.clock.setFixedTime(new Date("2026-01-05T12:00:00Z"));
   await expect(page.getByRole("columnheader", { name: "Mark as of" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
   await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();

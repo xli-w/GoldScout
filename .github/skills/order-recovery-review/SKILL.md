@@ -14,8 +14,8 @@ Read [execution contracts](../../../docs/safety-invariants.md). Anchor at the or
 
 Reviewer mode: inspect existing evidence only; request checks rather than execute them. Report lifecycle, confirmed findings with file/line, regression coverage, and unresolved broker semantics. Authenticated paper testing requires separate approval and does not prove live behavior.
 
-The current GBP investment path exports buy/sell proposals and has no execution
-adapter. For any future investment order path, also use
+The current GBP investment path blocks proposals and has no execution adapter.
+For any future investment order path, also use
 [`investment-system-development`](../investment-system-development/SKILL.md);
 do not transfer Alpaca client-ID/retry assumptions to another venue. Require a
 separately approved adapter and venue-specific evidence for unique recovery

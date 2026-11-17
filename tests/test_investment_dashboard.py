@@ -44,6 +44,7 @@ class InvestmentDashboardTests(unittest.TestCase):
 
     def test_recorded_source_never_falls_back_to_demo_or_creates_missing_store(self):
         with self.client(investment_database=self.path) as client:
+            self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "investment")
             self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 503)
             legacy = client.get("/api/v1/overview")
             self.assertEqual(legacy.status_code, 503)

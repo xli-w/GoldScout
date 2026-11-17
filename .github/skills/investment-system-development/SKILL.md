@@ -46,10 +46,9 @@ limits below explicit.
   portfolio research or broker execution.
 - Public v2 proposal routes are blocked until role-aware policy, approved
   targets/products and loss/transfer rules exist; v2 has no proposal export.
-  Do not describe the separate v1 planner's historical export behavior as an
-  available portfolio proposal capability. Dashboard routes remain read-only
-  except explicitly enabled, authenticated v2 manual recording. Do not add a
-  broker path as a convenience to an accounting change.
+  V1 CLI export returns a blocked envelope, not an order proposal. Dashboard
+  routes remain read-only except explicitly enabled, authenticated v2 manual
+  recording. Do not add a broker path as a convenience to an accounting change.
 - Manual review acknowledgements bind a previously committed revision, require a
   complete fresh valuation, and never approve trades or suppress five-point drift.
   Monthly and annual clocks are separate; an annual review counts as monthly.
@@ -97,8 +96,8 @@ limits below explicit.
 
 ## Change procedure
 
-1. Locate the state transition/valuation/planner that owns the behavior and its
-   nearest `tests/test_investment*.py` regression. State one falsifiable
+1. Locate the state transition, valuation, or review-status function that owns
+   the behavior and its nearest `tests/test_investment*.py` regression. State one falsifiable
    hypothesis and reproduce it with a controlled UTC clock and temporary SQLite
    store. The verified baseline is Python 3.11.9; preserve Python 3.10 support.
 2. Keep accounting transitions deterministic with `Decimal`; validate event
@@ -118,7 +117,7 @@ limits below explicit.
    with zero invested units. Complete redemption followed by new funding must
    not reset prior gains or create a synthetic drawdown; if linkage cannot be
    supported, report performance unavailable rather than a false result.
-5. In planning, distinguish missing holdings valuation from a missing purchase
+5. For any separately approved future allocation planner, distinguish missing holdings valuation from a missing purchase
    reference. Incomplete held-asset valuation blocks portfolio proposals.
    Unsupported purchase references exclude those buys; any supported partial
    proposal must disclose that it is partial. Ignore references for zero-target,

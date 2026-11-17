@@ -1,18 +1,43 @@
-# Trading Bot Development
+# GoldScout Development
 
-- Read [development guidance](../docs/development.md) for commands and [safety invariants](../docs/safety-invariants.md) for domain contracts. README is the current operational reference; review reports are historical evidence, not a live backlog.
-- The separate [investment path](../docs/investment.md) currently supports GBP-only recorded accounting and read-only, export-only buy/sell proposals. Sales are bounded and proposed proceeds cannot fund buys. For `investment/**` changes, invoke `investment-system-development`; for historical simulation or selection also use `backtest-integrity-review`. Do not treat this plan as product/data feasibility approval or as authorization for broker execution.
-- The [current mandate](../docs/investment-research-context.md) covers substantial designated long-term investment capital, not household cash or emergency budgeting: majority stable core, capped dynamic experiments and maximum useful validated automation. The illustrative 80-90% core / 10-20% dynamic range is not approved weights or runtime defaults. Future role/risk accounting and standing-policy execution are unimplemented; do not auto-refill dynamic losses from the core or let AI change policy.
-- For strategy selection or portfolio-suitability research, read [investor context](../docs/investment-research-context.md) and the [backtesting protocol](../docs/backtesting-protocol.md) before proposing candidates, data acquisition, or runs. Campaign controls are stricter than CLI defaults and do not change live settings; stop at unmet feasibility gates rather than force a winner.
-- Keep [market intelligence](../docs/intelligence.md) separate from strategy signals. The initial release implements opt-in feeds, AI adapters, analysis-only browser controls and a non-authoritative bot observer; proposed extensions remain separate. This does not authorize trading influence, news/LLM signals in the research campaign, or mutations to trading/account APIs.
-- Reuse intelligence for planned portfolio awareness, source-linked research and experiment proposals. A future calendar/AI-derived dynamic signal requires separately approved prospective research, coverage/failure rules and admission evidence. The product's automation goal grants no broker access, provider activation or change to today's advisory/default-off contracts; never send private account evidence to hosted AI.
-- Default to offline development. Never start `bot.main`, contact an authenticated broker, place/cancel orders, change account settings, or run operational maintenance without explicit task-specific human approval. Paper accounts are not exempt.
-- Never read, print, transmit, or commit `.env`, credentials, tokens, or broker secrets. Have the operator enter secrets directly outside chat. Do not touch operational databases, snapshots, reports, logs, or locks for testing.
-- Use the selected, verified Python environment. The validated baseline is Python 3.11.9 with `requirements-tested.txt`; retain documented Python 3.10 compatibility unless changing support is requested. Do not hardcode a developer's interpreter path in shared files.
-- Start at the owning function or failing test. State one falsifiable hypothesis, reproduce with a focused check, make the smallest grounded edit, and immediately rerun that check. Preserve unrelated user changes.
-- Use `scripts/offline_tests.py` for regression execution. Broker interactions must be mocked and storage temporary. This runner is defense in depth, not an OS sandbox; do not launch subprocesses or native network clients to evade it.
-- Preserve fail-closed behavior, durable order intent, quantity conservation, transaction ordering, and causal market data. Never silently relax risk limits or repair accounting by guessing.
-- Follow existing unittest and module patterns. Add abstractions, dependencies, broad refactors, and annotations only when the task justifies them. Use installed Pylance/Python skills when available; repository procedures must also work without them.
-- Validate the touched slice first. Execution, accounting, shared data, and configuration changes require the full offline suite and an independent review where available. A reviewer must not edit its own findings.
-- Keep documentation and relevant regression coverage current. Report exact checks and results, unresolved assumptions, and whether broker validation occurred. Offline success and paper results do not establish real execution semantics or profitability.
-- Changes to safety hooks, offline guards, CI, credentials policy, or these instructions require explicit approval. Never weaken them merely to make a test pass. Do not commit or create branches unless requested.
+- Start with [development workflow](../docs/development.md) and
+  [safety invariants](../docs/safety-invariants.md). The [README](../README.md)
+  is the current product entry point; review reports are historical evidence.
+- The [investment system](../docs/investment.md) is a separate, GBP-only
+  operator-evidence journal. Proposals are blocked: v1 can export only a blocked
+  envelope; v2 has no proposal export. Keep proposed sales bounded and do not
+  fund buys from proposed sale proceeds. For `investment/**`, use
+  `investment-system-development`; for simulation or selection also use
+  `backtest-integrity-review`.
+- Follow the [investor mandate](../docs/investment-research-context.md) and
+  [research protocol](../docs/backtesting-protocol.md) for suitability or
+  strategy-selection work. Stop at unmet feasibility gates. Illustrative
+  allocations are not defaults or approval.
+- [Market intelligence](../docs/intelligence.md) is separate, opt-in and
+  advisory. It must not influence trading or investment policy; private account
+  evidence must never be sent to hosted AI. Follow its scoped instructions.
+- Default to offline development. Do not start `bot.main`, contact an
+  authenticated broker, submit/cancel orders, change account settings, or run
+  operational maintenance without task-specific approval. Paper accounts are
+  not exempt.
+- Never read, print, transmit, or commit `.env`, credentials, tokens, or broker
+  secrets. Do not use operational databases, snapshots, reports, logs, or locks
+  for tests.
+- Use the selected, verified Python environment: Python 3.11.9 is the validated
+  baseline; preserve documented Python 3.10 support. Never hardcode a
+  developer's interpreter path in shared files.
+- Reproduce a specific behavior first, make the smallest grounded change, and
+  immediately run its focused check. Use `scripts/offline_tests.py`; broker
+  interactions must be mocked and storage temporary. Do not use subprocesses or
+  native network clients to bypass the offline runner.
+- Preserve fail-closed behavior, durable order intent, quantity conservation,
+  transaction ordering, and causal data. Do not guess repairs or relax risk
+  limits. Run the full offline suite and request independent review for
+  execution, accounting, shared-data, or configuration changes.
+- Keep directly related documentation and regression coverage current. Report
+  exact checks, unresolved assumptions, review status, and whether broker
+  validation occurred; offline success does not establish live semantics or
+  profitability.
+- Safety hooks, offline guards, CI, credentials policy, and these instructions
+  require explicit task-specific approval to change. Never weaken them to make
+  a check pass. Do not commit or create branches unless requested.

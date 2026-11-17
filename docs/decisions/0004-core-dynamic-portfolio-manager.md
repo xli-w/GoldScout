@@ -57,6 +57,47 @@ operational safeguards.
   advisory-only runtime, default-off collection and read-only trading routes
   remain unchanged.
 
+## Requirements for a future approved policy
+
+This section defines requirements for subsequent design and approval, not an
+implemented policy or permission to propose or execute. Missing decisions have
+no defaults. Until implemented and approved, both investment store versions
+continue to block proposals; v2 has no proposal export or role transfers.
+
+1. **Mandate and approval:** bind a unique policy version, scope, effective time,
+   approver and revision to the selected investment portfolio. Record expiry,
+   supersession, revocation and an auditable reason; policy changes require
+   explicit investor approval, not AI or strategy edits.
+2. **Scope and allocation:** explicitly identify eligible accounts, wrappers,
+   products and currencies; separate asset-class targets from core/dynamic roles.
+   Define targets, tolerances, valuation and review rules, and how unassigned
+   assets are handled. The illustrative 80-90% / 10-20% range supplies no values.
+3. **Dynamic isolation:** specify initial funding, capital and aggregate/position
+   exposure limits, overlapping exposures, cumulative loss accounting, turnover
+   and costs; separately approve suspension, retirement, profit-transfer and
+   replenishment rules. No automatic refill from core losses. Caps are not
+   guaranteed realised-loss limits.
+4. **Evidence and decisions:** bind each future decision to the approved policy
+   version and unchanged portfolio revision, causal observation/availability
+   times, valuation coverage, explicit freshness and reconciliation requirements,
+   assumptions, costs, alternatives and a reason. Unknown or insufficient
+   evidence must block the affected decision, not become zero or permission.
+   Distinguish observed balances from settled buying power and do not assume
+   proposed sales fund purchases.
+5. **Authority boundary:** distinguish a policy-approved proposal from any
+   execution authority. Standing authority, if separately implemented, must
+   specify venue/account/product/strategy scope, funding, risk, expiry,
+   suspension and revocation. Durable intent, ambiguous-submission recovery,
+   partial fills, settlement, protective ownership and audit require
+   venue-specific evidence before a pilot. Pausing new risk must not silently
+   remove protection or liquidate the core.
+6. **Verification before release:** cover absent/unassigned inputs, stale or
+   conflicting evidence, policy revision/revocation, loss and transfer
+   boundaries, restart and concurrent revisions with isolated tests and
+   independent review. Define a matched all-core counterfactual and research
+   admission separately under the [protocol](../backtesting-protocol.md);
+   neither a research result nor a model output approves policy.
+
 ## Consequences and verification
 
 Manual opening/onboarding, subsequent recording, reconciliation evidence,

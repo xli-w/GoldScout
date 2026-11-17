@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
-import { NavLink, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, useLocation, useSearchParams } from "react-router-dom";
 import { Activity, ArrowDown, ArrowUp, ArrowUpRight, CircleHelp, Database, LayoutDashboard, ListOrdered, LockKeyhole, RefreshCw, Search, ShieldAlert, ShieldCheck, Wallet, X } from "lucide-react";
 import Decimal from "decimal.js";
 import { DashboardError, label, loadDashboard, money, price, quantity, runtimeStatus, sourceFreshness, timestamp, type Health, type Meta, type Position } from "./api";
@@ -97,6 +97,25 @@ function HealthView({ health, meta, now }: { health: Health; meta: Meta; now: nu
 
 export function App() {
   const client = useQueryClient();
+  const workspaceQuery = useQuery({
+    queryKey: ["workspace"],
+    queryFn: async ({ signal }) => {
+      const response = await fetch("/api/v1/settings", {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]), cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Workspace settings are unavailable.");
+      const settings: unknown = await response.json();
+      if (typeof settings !== "object" || settings === null || !("workspace" in settings)) {
+        throw new Error("Workspace settings failed validation.");
+      }
+      const workspace = settings.workspace;
+      if (workspace !== "demo" && workspace !== "trading" && workspace !== "investment") {
+        throw new Error("Workspace settings failed validation.");
+      }
+      return workspace;
+    },
+  });
+  const investmentWorkspace = workspaceQuery.data === "investment";
   const collectionFetching = useIsFetching({ queryKey: ["collection"] });
   const intelligenceFetching = useIsFetching({ queryKey: ["intelligence"] });
   const location = useLocation();
@@ -114,7 +133,8 @@ export function App() {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const query = useQuery({ queryKey: ["dashboard"], queryFn: ({ signal }) => loadDashboard(signal), refetchInterval: 5000, enabled: !intelligencePage && !guidePage && !investmentPage && !investmentGuidePage });
+  const legacyPage = !intelligencePage && !guidePage && !investmentPage && !investmentGuidePage;
+  const query = useQuery({ queryKey: ["dashboard"], queryFn: ({ signal }) => loadDashboard(signal), refetchInterval: 5000, enabled: legacyPage && workspaceQuery.isSuccess && !investmentWorkspace });
   const intelligence = useIntelligence(intelligencePage);
   const refreshing = intelligencePage ? intelligenceFetching > 0 : query.isFetching || collectionFetching > 0;
   const refresh = async () => {
@@ -150,13 +170,14 @@ export function App() {
     : null;
   const ledgerFreshness = meta ? sourceFreshness(meta.ledger, now) : "missing";
   const ledgerStale = ledgerFreshness !== "fresh";
+  if (overviewPage && investmentWorkspace) return <Navigate to="/investment" replace />;
   return <div className="shell">
     <aside className="sidebar">
-      <NavLink to="/" className="brand"><span className="brand-mark"><Activity size={24} /></span><span>GoldScout<small>Portfolio monitor</small></span></NavLink>
+      <NavLink to={investmentWorkspace ? "/investment" : "/"} className="brand"><span className="brand-mark"><Activity size={24} /></span><span>GoldScout<small>Portfolio monitor</small></span></NavLink>
       <div className="nav-groups">
         <div className="nav-section"><span className="nav-section-label">INVESTMENT</span><nav aria-label="Investment navigation"><NavLink to="/investment"><Wallet size={18} />Investment</NavLink><NavLink to="/investment-guide"><CircleHelp size={18} />Investment guide</NavLink></nav></div>
-        <div className="nav-section"><span className="nav-section-label">ACCOUNT</span><nav aria-label="Account navigation"><NavLink to="/" end><LayoutDashboard size={18} />Overview</NavLink><NavLink to="/positions"><Wallet size={18} />Positions</NavLink><NavLink to="/health"><Activity size={18} />Health</NavLink></nav></div>
-        <div className="nav-section"><span className="nav-section-label">RECORDS</span><nav aria-label="Records navigation"><NavLink to="/activity"><ListOrdered size={18} />Activity</NavLink><NavLink to="/history"><Database size={18} />History</NavLink></nav></div>
+        {workspaceQuery.isSuccess && !investmentWorkspace && <><div className="nav-section"><span className="nav-section-label">ACCOUNT</span><nav aria-label="Account navigation"><NavLink to="/" end><LayoutDashboard size={18} />Overview</NavLink><NavLink to="/positions"><Wallet size={18} />Positions</NavLink><NavLink to="/health"><Activity size={18} />Health</NavLink></nav></div>
+        <div className="nav-section"><span className="nav-section-label">RECORDS</span><nav aria-label="Records navigation"><NavLink to="/activity"><ListOrdered size={18} />Activity</NavLink><NavLink to="/history"><Database size={18} />History</NavLink></nav></div></>}
         <div className="nav-section advisory-nav-section"><span className="nav-section-label">ADVISORY</span><nav aria-label="Advisory navigation"><NavLink to="/intelligence"><Activity size={18}/>Intelligence</NavLink></nav></div>
       </div>
       <span className="nav-hint">Scroll for more sections</span>
@@ -164,17 +185,19 @@ export function App() {
     </aside>
     <div className="workspace">
       <header className="topbar"><div className="breadcrumb">Portfolio <span>/</span> <strong>{pageName}</strong></div>
-        {!guidePage && !investmentPage && !investmentGuidePage && <div className="topbar-status">{intelligencePage
+        {!guidePage && !investmentPage && !investmentGuidePage && (!legacyPage || !investmentWorkspace) && <div className="topbar-status">{intelligencePage
           ? <><span className={`mode ${intelligenceMode === "demo" ? "demo" : ""}`}>{intelligenceMode === "demo" ? "SYNTHETIC DEMO" : intelligenceMode === "recorded" ? "RECORDED INTELLIGENCE" : intelligence.isFetching ? "Checking source" : "Source unknown"}</span><span className="connection" aria-live="polite">{intelligenceStatus}</span></>
           : <><span className={`mode ${mode === "demo" ? "demo" : meta?.environment === "live" ? "live" : ""}`}>{mode === "demo" ? "SYNTHETIC DEMO" : meta?.environment ? label(meta.environment) : "Source unknown"}</span><span className="connection"><span className={`dot ${runtime}`} />Runtime {runtime}</span></>}</div>}
       </header>
       <main>
         <span className="sr-only" id="table-scroll-instructions">Scroll horizontally to see all columns.</span>
         <div className="page-heading"><div><p className="eyebrow">{guidePage ? "GUIDE" : intelligencePage ? "INTELLIGENCE WORKSPACE" : mode === "demo" ? "DEMO WORKSPACE" : "ACCOUNT WORKSPACE"}</p><h1>{pageName === "Overview" ? "Portfolio overview" : pageName}</h1>{pageDescription && <p className="page-description">{pageDescription}</p>}</div>
-          {!guidePage && !investmentPage && !investmentGuidePage && <button className="icon-button refresh" aria-label="Refresh data" title="Refresh data" disabled={refreshing} onClick={() => void refresh()}><RefreshCw size={19} className={refreshing ? "spin" : ""} /></button>}
+          {!guidePage && !investmentPage && !investmentGuidePage && (!legacyPage || (!investmentWorkspace && workspaceQuery.isSuccess)) && <button className="icon-button refresh" aria-label="Refresh data" title="Refresh data" disabled={refreshing} onClick={() => void refresh()}><RefreshCw size={19} className={refreshing ? "spin" : ""} /></button>}
         </div>
         {!guidePage && !investmentPage && !investmentGuidePage && !intelligencePage && mode === "demo" && <div className="demo-band"><Activity size={16} /><span>Synthetic data</span></div>}
-        {investmentPage ? <InvestmentView /> : investmentGuidePage ? <InvestmentGuide /> : guidePage ? <TradingGuide /> : intelligencePage ? <IntelligenceView data={intelligence}/> : query.isPending ? <div className="loading" role="status"><RefreshCw size={24} className="spin" /><span>Loading recorded account data</span></div>
+        {investmentPage ? <InvestmentView now={now} /> : investmentGuidePage ? <InvestmentGuide /> : guidePage ? <TradingGuide /> : intelligencePage ? <IntelligenceView data={intelligence}/> : investmentWorkspace ? <div className="error-state" role="status"><p>Legacy trading records are not selected in this workspace.</p><NavLink to="/investment">Open investment records</NavLink></div>
+          : workspaceQuery.isError ? <div className="error-state" role="alert"><p>Workspace settings are unavailable; account source is unknown.</p><button onClick={() => void workspaceQuery.refetch()}>Retry</button></div>
+          : workspaceQuery.isPending || query.isPending ? <div className="loading" role="status"><RefreshCw size={24} className="spin" /><span>Loading recorded account data</span></div>
           : !current ? <div className="error-state" role="alert"><ShieldAlert size={36} /><p className="eyebrow">ACCOUNT DATA UNAVAILABLE</p><h2>{failure?.code === "ledger_invalid" ? "Snapshot validation failed" : failure?.code === "schema_unsupported" ? "Unsupported ledger schema" : "No account snapshot"}</h2><p>{failure?.message || "The dashboard source could not be reached."}</p><button onClick={() => void query.refetch()}><RefreshCw size={16} />Retry</button></div>
           : <>
             <div className="snapshot-strip"><span><Database size={14} />Revision {meta?.ledger_revision ?? "Unknown"}</span><span className={ledgerStale ? "warning-text" : ""}>{label(ledgerFreshness)} snapshot</span>{query.isFetching && <span>Refreshing</span>}<time>{timestamp(meta?.ledger.observed_at || null)}</time></div>
@@ -200,7 +223,7 @@ export function App() {
             {historyPage ? <HistoryView databaseId={current.overview.meta.database_id} /> : activityPage ? <ActivityView databaseId={current.overview.meta.database_id} /> : healthPage ? <HealthView health={current.health.data} meta={current.health.meta} now={now} /> : <PositionTable positions={current.positions.data.map(position => runtime === "running" || position.protection !== "last_verified" ? position : { ...position, protection: "unknown" })} full={full} now={now} />}
             {!overviewPage && <div className="observation-band"><div><Activity size={17} /><span>Broker prices</span><strong>{!meta?.broker.observed_at ? "No price observation" : label(sourceFreshness(meta.broker, now))}</strong></div><div><Activity size={17} /><span>Monitoring</span><strong>{!meta?.telemetry.observed_at ? "No runtime observation" : label(sourceFreshness(meta.telemetry, now))}</strong></div></div>}
           </>}
-        <footer><span>GoldScout <span className="footer-separator">/</span> Portfolio monitor <span className="footer-separator">/</span> <NavLink to="/guide">Trading guide</NavLink></span><span><LockKeyhole size={12} />Trading records read-only</span></footer>
+        <footer><span>GoldScout <span className="footer-separator">/</span> Portfolio monitor <span className="footer-separator">/</span> <NavLink to={investmentWorkspace ? "/investment-guide" : "/guide"}>{investmentWorkspace ? "Investment guide" : "Trading guide"}</NavLink></span><span><LockKeyhole size={12} />Trading records read-only</span></footer>
       </main>
     </div>
   </div>;

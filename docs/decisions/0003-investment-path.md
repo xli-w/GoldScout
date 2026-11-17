@@ -40,11 +40,10 @@ revision-bound confirmation. No browser path approves or executes trades.
 Eventual execution requires a separate implementation, task-specific operator
 approval and verified venue recovery semantics.
 
-Rebalancing was specified as contribution-first; revision-bound v1 monthly and
+The historical v1 design specified contribution-first rebalancing, but no
+investment order-suggestion planner is exposed. Revision-bound v1 monthly and
 annual review acknowledgements are recorded offline, but do not approve trades.
-The historical planner implementation is not an available public proposal or
-execution path. No AI/news, leverage, crypto or active forecasting dependency
-enters the core.
+No AI/news, leverage, crypto or active forecasting dependency enters the core.
 
 ## Consequences
 
@@ -61,7 +60,7 @@ by this decision.
 
 ## Verification
 
-Focused accounting, planning and read-only API tests must use synthetic input and
+Focused accounting, review-status and read-only API tests must use synthetic input and
 temporary storage. Full offline regressions and an independent safety review are
 required for the shared accounting/configuration integration. Frontend build,
 schema/asset checks and desktop/mobile browser checks cover new views. Actual

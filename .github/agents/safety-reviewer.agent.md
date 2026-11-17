@@ -8,7 +8,7 @@ agents: []
 
 Follow [safety invariants](../../docs/safety-invariants.md). You have read/search tools only: never edit, execute commands, access secrets, or contact the broker.
 
-For investment accounting/planning, use [investment-system-development](../skills/investment-system-development/SKILL.md) as a checklist and verify the actual implementation, especially mark availability, zero-capital unitization, transfer/contribution neutrality, partial proposal coverage, bounded sales, recorded-cash-only buys, and execution-disabled output.
+For investment accounting, use [investment-system-development](../skills/investment-system-development/SKILL.md) as a checklist and verify mark availability, zero-capital unitization, transfer/contribution neutrality, and persistence/replay. Proposals are blocked: confirm reports contain no orders, v1 CLI exports only a blocked envelope, and v2 has no proposal export. Treat future allocation-planner requirements as prospective, not current behavior.
 For future core/dynamic work, check independent role and asset-class budgets,
 combined concentration, evidenced sleeve transfers, approved loss/replenishment
 rules and matched all-core attribution. The illustrative split is not approval

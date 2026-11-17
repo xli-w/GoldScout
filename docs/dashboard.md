@@ -41,6 +41,22 @@ page starts no collector/model, sends no account data to AI and cannot trade.
 Without that profile awareness is disabled. Read-only sync remains discovery,
 not an active broker/bank connection.
 
+Recorded investment mode opens the investment page at the root and hides legacy
+account/record navigation; a direct legacy URL explains that those records are
+not selected. Trading and synthetic demo modes retain their existing legacy
+navigation. Workspace selection identifies the configured source, not its
+availability or verification; an unknown workspace is not replaced by a demo.
+
+The investment page shows the age of the portfolio valuation and, for v2, each
+holding mark using the browser clock. These are elapsed times, not a freshness
+classification or a claim that the valuation is current. Missing or future
+timestamps have unavailable ages. The v2 cash evidence overview lists every
+account, including accounts without observations, the latest observed difference,
+and the count plus earliest/latest differing observations across recorded
+history. Later matching observations do not resolve prior differences. The
+separate history table remains limited to the latest 100; these displays do not
+reconcile balances, verify providers or change the journal.
+
 This is an offline measurement/planning release, not full multi-currency research
 or a human-approved broker integration. See the investment guide's capability
 limits before interpreting any return or proposal.

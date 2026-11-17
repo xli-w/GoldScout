@@ -11,9 +11,9 @@ passive holdings or the former six-month return aspiration in the new core.
 
 The separate [investment path](investment.md) provides offline GBP accounting,
 recorded valuation, v2 core/dynamic/unassigned attribution and a limited local
-read-only portfolio-awareness projection. Public v2 proposals are blocked until
-approved role-aware policy exists; no investment proposal export or broker
-adapter is available. A separate synthetic-only mechanics harness tests a narrow buy-only portfolio clock,
+read-only portfolio-awareness projection. Investment proposals are blocked
+pending approved role-aware policy. V1 `propose`/`export` return a blocked
+envelope; v2 has no proposal export or broker adapter. A separate synthetic-only mechanics harness tests a narrow buy-only portfolio clock,
 including unitized cash-funded withdrawals without liquidation and explicit
 distribution receivables across ex-open/pay-close boundaries; it is not an
 integrated historical product-performance simulator, research authorisation or
@@ -437,7 +437,7 @@ The existing [`bot.experiments`](../bot/experiments/) runner supports strict JSO
 
 ## References and operating guidance
 
-- Project [research invariants](safety-invariants.md), [development guide](development.md), and [README backtesting assumptions](../README.md#backtesting).
+- Project [research invariants](safety-invariants.md), [development guide](development.md), and [legacy backtesting reference](legacy-systems.md#backtesting).
 - HMRC: [foreign income](https://www.gov.uk/tax-foreign-income), [ISAs](https://www.gov.uk/individual-savings-accounts), and [approved offshore reporting funds](https://www.gov.uk/government/publications/offshore-funds-list-of-reporting-funds). Recheck current rules and the exact instrument/share class.
 - FCA: [PRIIPs disclosure](https://www.fca.org.uk/markets/priips-disclosure). Verify current retail disclosure and product-access rules; this is not a legal interpretation.
 - Alpaca: [non-US account guidance](https://alpaca.markets/learn/live-trading-account-non-us) and the [Europe Broker API](https://docs.alpaca.markets/eu/docs/about-broker-api) describe separate public programs. Neither verifies this investor's account-specific permissions; no authenticated access is authorized here.

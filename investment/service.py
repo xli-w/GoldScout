@@ -5,7 +5,6 @@ from datetime import timedelta
 
 from . import InvestmentError
 from .core import MAX_EVENTS, ROLES, ZERO, clock, fmt, iso, number, replay
-from .planner import review_schedule
 from .store import canonical, digest, read, read_with_clock
 
 
@@ -305,6 +304,24 @@ def opening_report(ledger, now, source_mode="recorded"):
 def snapshot(database, now=None):
     now = clock(now)
     return report(read(database, now), now)
+
+
+def review_schedule(ledger, now, allocation):
+    created = clock(ledger.spec["created_at"])
+    monthly_anchor = ledger.monthly_review_at or created
+    annual_anchor = ledger.annual_review_at or created
+    monthly = (now.year, now.month) > (monthly_anchor.year, monthly_anchor.month)
+    if annual_anchor.year == 9999:
+        annual = False
+    else:
+        try:
+            anniversary = annual_anchor.replace(year=annual_anchor.year + 1)
+        except ValueError:
+            anniversary = annual_anchor.replace(year=annual_anchor.year + 1, day=28)
+        annual = now >= anniversary
+    drifts = [Decimal(a["drift_pp"]) for a in allocation if a["drift_pp"] is not None]
+    return {"monthly_due": monthly, "annual_due": annual,
+            "drift_due": any(drift.copy_abs() >= 5 for drift in drifts) if drifts else None}
 
 
 def review_status(database, now=None):

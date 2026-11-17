@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import { RefreshCw, ShieldAlert } from "lucide-react";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import validate from "./investment-validator.js";
 import validateV2 from "./investment-validator-v2.js";
 import { label, timestamp } from "./api";
@@ -80,13 +80,64 @@ async function loadInvestment(signal: AbortSignal): Promise<InvestmentSnapshot |
   return body as InvestmentSnapshot;
 }
 
-function pounds(value: string | null) {
+function pounds(value: string | null, exact = false) {
   if (value === null) return "Unavailable";
   const amount = new Decimal(value);
-  const [whole, fraction] = amount.abs().toFixed(2).split(".");
+  const [whole, fraction] = amount.abs().toFixed(exact ? Math.max(2, amount.decimalPlaces()) : 2).split(".");
   return `${amount.isNegative() && !amount.isZero() ? "-" : ""}\u00a3${new Intl.NumberFormat("en-GB").format(BigInt(whole))}.${fraction}`;
 }
 function percent(value: string | null) { return value === null ? "Unavailable" : `${new Decimal(value).toFixed(2)}%`; }
+
+function evidenceAge(value: string | null, now: number) {
+  if (value === null) return "Age unavailable";
+  const age = now - Date.parse(value);
+  if (!Number.isFinite(age) || age < 0) return "Age unavailable (future or invalid clock)";
+  const days = Math.floor(age / 86400000);
+  if (days) return `${days} ${days === 1 ? "day" : "days"}`;
+  const hours = Math.floor(age / 3600000);
+  if (hours) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  const minutes = Math.floor(age / 60000);
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
+function CashEvidenceOverview({ data, now }: { data: OpeningSnapshot; now: number }) {
+  const differences = useMemo(() => {
+    const result = new Map<string, { count: number; first: OpeningSnapshot["cash_observations"][number];
+      latest: OpeningSnapshot["cash_observations"][number] }>();
+    for (const observation of data.cash_observations) {
+      if (new Decimal(observation.difference_gbp).isZero()) continue;
+      const prior = result.get(observation.account_id);
+      if (prior) {
+        prior.count++;
+        prior.latest = observation;
+      } else {
+        result.set(observation.account_id, { count: 1, first: observation, latest: observation });
+      }
+    }
+    return result;
+  }, [data.cash_observations]);
+  return <section className="history-group" aria-label="Cash evidence overview">
+    <h2>Cash evidence overview</h2>
+    <p className="position-note">Recorded observations are not provider verification or corrections. Later matching observations do not resolve earlier differences. Absence of a difference does not establish a current balance.</p>
+    <dl className="health-facts">{data.accounts.map(account => {
+      const history = differences.get(account.id);
+      const firstDifference = history?.first;
+      const latestDifference = history?.latest;
+      const latest = account.cash_observation;
+      return <div key={account.id}><dt>{account.name} ({account.id})</dt><dd>
+        {latest === null ? "No cash observation" : <>
+          Latest observed {timestamp(latest.timestamp)} (age: {evidenceAge(latest.timestamp, now)});
+          available {timestamp(latest.available_at)}; difference {pounds(latest.difference_gbp, true)}.
+        </>}
+        {" "}{history?.count ?? 0} differing {history?.count === 1 ? "observation" : "observations"} in recorded history.
+        {firstDifference && firstDifference !== latestDifference && <> Earliest difference: {pounds(firstDifference.difference_gbp, true)} at {timestamp(firstDifference.timestamp)};
+          source {firstDifference.source}; evidence {firstDifference.evidence}.</>}
+        {latestDifference && <> Latest difference: {pounds(latestDifference.difference_gbp, true)} at {timestamp(latestDifference.timestamp)};
+          source {latestDifference.source}; evidence {latestDifference.evidence}.</>}
+      </dd></div>;
+    })}</dl>
+  </section>;
+}
 
 const ChartDecimal = Decimal.clone({ precision: 300 });
 
@@ -606,7 +657,7 @@ function InvestmentRecording() {
   </section>;
 }
 
-export function InvestmentView() {
+export function InvestmentView({ now }: { now: number }) {
   const query = useQuery({ queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal), refetchInterval: 60000 });
   const data = query.isError ? undefined : query.data;
   return <article className="investment-view">
@@ -621,7 +672,10 @@ export function InvestmentView() {
         <p>{query.error instanceof Error ? query.error.message : "The investment source could not be reached."}</p></div>
         : <>
           <div className="demo-band"><span>{data.source_mode === "demo" ? "SYNTHETIC INVESTMENT DEMO" : "RECORDED INVESTMENT"}</span><span>Recording is opt-in / execution disabled</span></div>
-          <p className="position-note">Valuation as of {timestamp(data.as_of)}. Revision {data.revision}. {data.complete ? "Complete at the recorded clock." : "Incomplete valuation; no complete portfolio total."} Recorded inputs are not current broker verification.</p>
+          <section aria-label="Valuation evidence">
+            <p className="position-note">Valuation as of {timestamp(data.as_of)} ({evidenceAge(data.as_of, now)}{data.as_of !== null && Date.parse(data.as_of) <= now ? " ago" : ""}). Revision {data.revision}. {data.complete ? "Complete at the recorded clock." : "Incomplete valuation; no complete portfolio total."} Recorded inputs are not current broker verification.</p>
+            <p className="position-note">Ages use the browser clock. No freshness threshold or current valuation is inferred.</p>
+          </section>
           <section className="metrics" aria-label="Investment totals">
             <div><span>Portfolio value</span><strong>{pounds(data.equity_gbp)}</strong><small>GBP, recorded valuation</small></div>
             <div><span>Net contributions</span><strong>{pounds(data.net_contributions_gbp)}</strong><small>Deposits are not profit</small></div>
@@ -743,6 +797,7 @@ export function InvestmentView() {
           <section className="history-group"><h2>Cash accounts</h2><dl className="health-facts">
             {data.accounts.map(account => <div key={account.id}><dt>{account.name} ({label(account.kind)})</dt><dd>{pounds(account.cash_gbp)}</dd></div>)}
           </dl><p className="position-note">External savings are not broker buying power. Deposit protection and product eligibility require separate evidence.</p></section>
+          {data.schema_version === 2 && <CashEvidenceOverview data={data} now={now} />}
           {data.schema_version === 2 && data.accounts.some(account => account.cash_observation !== null) &&
             <section className="history-group"><h2>Observed cash balances</h2>
               <p className="position-note">Operator-entered evidence, not provider verification. Differences compare with recorded cash at that timestamp; they are not corrections or proof of a later balance.</p>
@@ -753,7 +808,7 @@ export function InvestmentView() {
                   <tbody>{[...data.cash_observations].reverse().slice(0, 100).map((observation, index) =>
                     <tr key={`${observation.account_id}:${observation.timestamp}:${index}`}>
                       <td>{timestamp(observation.timestamp)}</td><td>{observation.account_id}</td>
-                      <td>{pounds(observation.balance_gbp)}</td><td>{pounds(observation.difference_gbp)}</td>
+                      <td>{pounds(observation.balance_gbp, true)}</td><td>{pounds(observation.difference_gbp, true)}</td>
                       <td>{timestamp(observation.available_at)}</td>
                       <td>{observation.source} · {observation.evidence}</td>
                     </tr>)}</tbody>
@@ -776,8 +831,8 @@ export function InvestmentView() {
             </section>}
           <section className="history-group"><h2>Long-term holdings</h2>
             <div className="table-scroll" tabIndex={0} aria-label="Investment holdings" aria-describedby="table-scroll-instructions"><table>
-              <thead><tr><th>Fund</th><th>Account</th><th>Sleeve</th><th>Quantity</th><th>Value</th>{data.schema_version === 2 && <><th>Mark as of</th><th>Available at</th></>}</tr></thead>
-              <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}><td>{holding.name}</td><td>{holding.account_id}</td><td>{label(holding.sleeve)}</td><td>{holding.quantity}</td><td>{pounds(holding.value_gbp)}</td>{"mark_at" in holding && <><td>{timestamp(holding.mark_at)}</td><td>{timestamp(holding.mark_available_at)}</td></>}</tr>)}</tbody>
+              <thead><tr><th>Fund</th><th>Account</th><th>Sleeve</th><th>Quantity</th><th>Value</th>{data.schema_version === 2 && <><th>Mark as of</th><th>Mark age</th><th>Available at</th></>}</tr></thead>
+              <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}><td>{holding.name}</td><td>{holding.account_id}</td><td>{label(holding.sleeve)}</td><td>{holding.quantity}</td><td>{pounds(holding.value_gbp)}</td>{"mark_at" in holding && <><td>{timestamp(holding.mark_at)}</td><td>{evidenceAge(holding.mark_at, now)}</td><td>{timestamp(holding.mark_available_at)}</td></>}</tr>)}</tbody>
             </table></div>
           </section>
           <section className="history-group"><h2>Allocation proposal: {label(data.proposal.status)}</h2>

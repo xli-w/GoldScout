@@ -34,26 +34,20 @@ Reviewer mode inspects evidence without execution. Output: timing contract, repr
 
 The `investment/` package implements **recorded GBP accounting**, v2
 core/dynamic/unassigned attribution and a limited local awareness projection,
-not a historical portfolio simulator. Public investment proposals are blocked
-pending approved role-aware policy; no proposal export is available. For ledger
-or planner changes, also use
+not a historical portfolio simulator. Investment proposals are blocked pending
+approved role-aware policy; v1 CLI export returns only a blocked envelope, and
+v2 has no proposal export. For ledger or review-status changes, also use
 [`investment-system-development`](../investment-system-development/SKILL.md);
 do not infer simulation capability from the existence of GBP accounting.
 
-The current question is substantial designated investment capital under an
-approved majority-core/capped-dynamic policy versus the same funding under a
-matched all-core passive policy. Exact capital, weights, loss/transfer rules and
-admission thresholds are not yet approved; 80-90% / 10-20% is illustrative only.
-Report combined and sleeve net GBP returns, costs, shared exposure, drawdown and
-uncertainty. Internal sleeve transfers are not alpha; a generic rebalance must
-not auto-refill experimental losses from the core. Use actual applicable savings
-terms for personal reporting and label the earlier BoE GBP 1,000 rate as a proxy.
+The [current mandate](../../../docs/investment-research-context.md) and
+[protocol](../../../docs/backtesting-protocol.md) define the portfolio question
+and its feasibility gates. Proposed weights and future policy are not approved.
 
 Before any product-performance run, first read the current [investment mandate](../../../docs/investment-research-context.md), [protocol](../../../docs/backtesting-protocol.md), and [investment guide](../../../docs/investment.md). Stop at unresolved exact product/account eligibility, persistent data rights/vintages, eligible cash terms, total-return/action and point-in-time FX coverage, comparable costs/tax, or the predeclared candidate/selection rules. Never fill gaps with synthetic or unlicensed history. Synthetic fixtures may test simulator mechanics only; label them as engineering tests, not return evidence.
 
-For any causal portfolio clock, trace source effective time and `available_at` through valuation, decision, proposed fill, settlement and cash/quantity publication. A late-published mark cannot establish complete contemporaneous value at its effective clock. Contribution/withdrawal unitization must remain linked across a fully redeemed zero-equity interval; funding is not a drawdown. Distinguish invalid held-asset coverage (block portfolio valuation/proposal) from unsupported purchase references (exclude the affected purchase and clearly label any independently supported partial proposal).
+For any causal portfolio clock, trace source effective time and `available_at` through valuation, decision, proposed fill, settlement and cash/quantity publication. A late-published mark cannot establish complete contemporaneous value at its effective clock. Contribution/withdrawal unitization must remain linked across a fully redeemed zero-equity interval; funding is not a drawdown. For any separately approved future allocation planner, distinguish invalid held-asset coverage (block the decision) from unsupported purchase references (exclude the affected purchase and disclose any supported partial proposal).
 
-The historical planner implementation is not an available public proposal path.
 Market intelligence is not an allowed signal source in existing runs. Future
 calendar/AI-derived dynamic features require separate explicit prospective
 approval, coverage/failure rules, dated receipt/validated-completion and

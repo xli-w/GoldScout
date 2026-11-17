@@ -128,7 +128,8 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
     @app.get("/api/v1/settings")
     def settings():
         return {"mode": "recorded" if reader or investment_database is not None else "demo",
-                "scenario": None if reader or investment_database is not None else scenario}
+                "scenario": None if reader or investment_database is not None else scenario,
+                "workspace": "investment" if investment_database is not None else "trading" if reader else "demo"}
 
     @app.get("/api/investment/v1/snapshot")
     def investment_snapshot():

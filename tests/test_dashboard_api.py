@@ -212,9 +212,16 @@ class DashboardAPITests(DashboardTestCase):
     def test_demo_is_explicit_in_each_data_response(self):
         with self.client(scenario="partial_exit") as client:
             self.assertEqual(client.get("/api/v1/settings").json()["mode"], "demo")
+            self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "demo")
             self.assertEqual(client.get("/api/v1/overview").json()["meta"]["source_mode"], "demo")
             self.assertEqual(client.get("/api/v1/positions").json()["data"][0]["quantity"], "6")
             self.assertEqual(client.get("/api/v1/overview").json()["data"]["entries"], "blocked")
+
+    def test_recorded_trading_workspace_is_explicit_even_when_ledger_missing(self):
+        with self.client(self.database) as client:
+            self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "trading")
+            self.assertEqual(client.get("/api/v1/overview").status_code, 503)
+        self.assertFalse(self.database.exists())
 
     def test_history_demo_endpoints_filters_and_continuation(self):
         with self.client() as client:

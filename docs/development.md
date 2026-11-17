@@ -8,74 +8,24 @@ User-invoked workflow skills: `/review-change`, `/reproduce-bug`, `/validate-cha
 
 In VS Code, check the chat customization UI/diagnostics for the two agents, four workflow skills, five domain skills, and scoped instructions. If new files are not listed, reload the window or start a new chat. Hook support/enablement depends on the VS Code/Copilot version and workspace trust; inspect hook execution diagnostics and verify an ordinary execution request asks permission. Static checks cannot prove editor discovery or hook activation.
 
-## Research and Intelligence Scope
+## Product boundaries
 
-The separate [investment path](investment.md) provides GBP-only recorded
-accounting. Proposals are blocked pending approved, implemented role-aware
-policy; v2 records core/dynamic/unassigned attribution but does not implement
-those policy rules. Its store is not the
-legacy trading ledger. Use temporary profiles/events/stores for development;
-unsupported FX and entitlement, corrections beyond the narrow evidence-backed
-v2 cases, historical research and execution must remain explicit rather than
-inferred from the legacy engine.
-
-An explicitly initialised v2 investment store additionally supports
-operator-evidenced opening cash and long holdings via CLI, with a read-only
-dashboard view and non-mutating cash observations that expose discrepancies.
-Savings-account terms can be updated by appending evidence-dated CLI events;
-these facts do not accrue interest or affect valuations. V2 has no policy or
-proposal export. V1 stores remain separate and are not automatically migrated.
-V2 performance begins only at an evidenced complete common-clock baseline, not
-an invented pre-inception transaction or return.
-The v2 snapshot retains the bounded cash-observation history for reconciliation;
-the dashboard displays its latest records without applying corrections.
-Recorded fee and income attribution includes only explicit journaled fills and
-payments; it does not infer accrued cash interest or unrecorded entitlements.
-The v2 report also retains bounded replay-derived valuation history: same-clock
-events are grouped, source availability is explicit, and incomplete clocks are
-gaps rather than zeroes or interpolated values. The dashboard limits the chart
-to recent points while retaining the bounded report history.
-
-The [current mandate](investment-research-context.md) is a substantial-capital
-core-plus-dynamic portfolio manager, excluding household cash/emergency budgeting.
-The illustrative 80-90% core / 10-20% dynamic range is not a default or approved
-risk allocation. Read the [portfolio decision](decisions/0004-core-dynamic-portfolio-manager.md)
-before implementing role/risk budgets or automation. V2 records core/dynamic
-attribution independently of asset class and account; it has no risk budgets or
-role-to-role transfers, and v1 targets do not enforce role isolation.
-Document intended capabilities separately from released functionality.
-
-Prioritise useful onboarding, reconciliation, growth attribution and automated
-observation/research. Future revocable standing-policy execution is the goal,
-not blanket broker approval. It needs separately approved implementation and
-venue-specific recovery evidence. No unrestricted AI-to-order path, automatic
-experiment promotion, core-funded loss refill or runtime-default change follows
-from documentation updates.
-Manual review acknowledgements require an unchanged revision and fresh valuation;
-cash-only confirmations must match every recorded account without moving money.
-
-Use [`investment-system-development`](../.github/skills/investment-system-development/SKILL.md)
-for changes under `investment/`; use the research skill as well for simulator
-or selection work.
-
-Read [investor context](investment-research-context.md) and the [backtesting protocol](backtesting-protocol.md) before strategy selection or portfolio-suitability research. They govern the agreed GBP campaign, not live configuration or every generic USD experiment. Its feasibility gates, candidate budget, risk profiles, net cash-relative hurdle, costs, and single-use holdout rules take precedence over generic CLI defaults. The return aspiration is not a pass condition.
-
-The separate [campaign dataset tools](campaign-dataset.md) validate/snapshot user-supplied daily/weekly product histories, GBP-per-unit FX, cash rates and corporate actions offline; the read-only readiness audit performs scoped XLON daily checks. A separate normalized daily view preserves declared availability and source provenance. The FX-readiness audit and complete FX observation view select published, fresh observations only at caller-supplied clocks; they do not convert prices or verify complete event coverage, executable rates or historical vintages. Neither view nor audit supports performance. The pure `account_fills` helper is a synthetic GBP cash/quantity conservation contract only. `investment.simulation.simulate_synthetic_fixture` is a separate engineering-only harness for synchronized caller-supplied synthetic bars, next-open buys, contribution unitization, cash-funded close withdrawals without liquidation, assumed proportional costs, increment-preserving splits, synthetic per-unit distributions accrued at available-by ex-opens and paid at modeled closes, and caller-supplied synthetic cash rates accrued under a simple ACT/365 convention. Distribution entitlement and adjusted-price basis are not verified; it does not verify input provenance or actual cash-product terms and is not connected to those datasets, the investment store, a CLI, or product research. Neither tool closes GBP feasibility gates or supports performance claims. `prepare --allow-network` still uses Alpaca and remains outside the campaign's public/user-supplied-data boundary; see the [current runner blockers](backtesting-protocol.md#9-current-runner-readiness-and-blockers).
-
-Use the [intelligence guide](intelligence.md), [decision](decisions/0002-market-intelligence.md) and [scoped checklist](../.github/instructions/market-intelligence.instructions.md) for that separate development stream. Advisory/shadow decisions have no trading authority. The initial release implements opt-in feeds, AI adapters, authenticated analysis-only controls and an asynchronous bot observer. Requested, service-applied and bot-observed settings remain distinct; unverified provider behavior and proposed extensions are not established capabilities. Initialization, service startup and external calls are operational actions, not routine development checks. News/LLM trading signals remain excluded from the GBP campaign.
-AI/calendar-derived trading features and experiment admission remain planned.
-The optional [local awareness projection](portfolio-automation.md) now supports
-explicit exposure matching, existing dated briefs, operator-configured
-reminders, editable thesis history and manual calendar watch notes without
-changing collection, AI or trading authority. Notes are not an immutable
-journal or automatic feed. Provider sync
-remains discovery only. A separate local-file observation preview compares
-operator-staged GBP cash/holdings with a pinned v2 revision; it does not write
-the journal or automatically resolve discrepancies. Tests use synthetic
-evidence and temporary independent investment/intelligence stores.
-A future trading feature requires a separately approved prospective protocol,
-coverage/failure policy and admission evidence; existing exclusions are not
-silently removed by changing the mandate. Private account data is not an AI input.
+- The [investment system](investment.md) is a separate GBP evidence journal;
+  proposals are blocked and it has no execution path. Use the
+  [`investment-system-development` skill](../.github/skills/investment-system-development/SKILL.md)
+  for `investment/` changes.
+- The [investor mandate](investment-research-context.md) and
+  [backtesting protocol](backtesting-protocol.md) govern portfolio research and
+  suitability claims. Existing campaign tools and synthetic simulations do not
+  close their data, product, or accounting gates. Use
+  [`backtest-integrity-review`](../.github/skills/backtest-integrity-review/SKILL.md)
+  for research and simulation changes.
+- [Market intelligence](intelligence.md) is a separate opt-in advisory system.
+  Follow its [scoped instructions](../.github/instructions/market-intelligence.instructions.md);
+  providers and AI do not gain account or trading authority.
+- The retained Alpaca trading system remains independent. Its stores, strategies,
+  and venue-specific recovery behavior are not investment policy; see the
+  [legacy systems reference](legacy-systems.md).
 
 ## Environment and Checks
 
@@ -107,7 +57,7 @@ The [CI workflow](../.github/workflows/offline-validation.yml) installs the vers
 | Ledger / restart / persistence | [ledger](../tests/test_ledger.py), [state validation](../tests/test_state_validation.py) |
 | Candle/session/action data | [data](../tests/test_review2_data.py), [research safety](../tests/test_research_safety.py) |
 | GBP campaign import/readiness/accounting contracts | [campaign dataset](../tests/test_campaign_dataset.py), [readiness](../tests/test_campaign_readiness.py), [fill accounting](../tests/test_campaign_accounting.py) |
-| Offline investment accounting, replay and proposals | [investment](../tests/test_investment.py), [read-only investment API](../tests/test_investment_dashboard.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
+| Offline investment accounting, replay and blocked-proposal contracts | [investment](../tests/test_investment.py), [read-only investment API](../tests/test_investment_dashboard.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
 | Local portfolio awareness, exposure mapping and reminders | [awareness](../tests/test_investment_awareness.py), [durable brief evidence](../tests/test_intelligence_completion.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
 | Offline observation staging and reconciliation | [reconciliation](../tests/test_investment_reconciliation.py), [opening accounting](../tests/test_investment_opening.py) |
 | Backtest / monitor timing | [backtest](../tests/test_backtest.py), [monitor](../tests/test_review2_monitor.py) |

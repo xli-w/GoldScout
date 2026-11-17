@@ -121,7 +121,6 @@ These are development contracts, not a certification of live readiness. Current 
 - External-deposit cash is part of recorded mandate value only when included by policy; it is never broker buying power. Scheduled contributions are not settled cash. Transfers between included accounts do not count as external investment performance flows.
 - V1 and v2 investment proposals are blocked until role-aware policy, actual
   weights, products and loss/transfer rules are approved and implemented.
-  The legacy asset-class planner is not connected to reports or exports.
   Neither a report, acknowledgement nor an attribution grants execution authority.
 - Investment v1 store schemas are validated against the original tables, implicit index and immutable triggers before integrity checks or data queries can execute untrusted schema expressions. Altered or extra objects are refused; readers never repair them.
 - Manual review acknowledgements are append-only, bound to an unchanged, previously committed revision and a complete, fresh recorded valuation; they are not trade approval. Monthly and annual clocks are separate; an annual acknowledgement also counts as monthly, while five-point drift remains a trigger. Acknowledgements do not alter cash, holdings, valuation clocks or performance; later evidence cannot be backdated before them. Invalid historical attestations fail replay rather than being silently repaired.

@@ -2,7 +2,7 @@
 
 GoldScout's investment path measures an operator-selected portfolio. Allocation
 proposals are blocked pending approved and implemented role-aware rules. It
-does not trade, transfer money, choose products or promise returns. The existing [Alpaca engine](../README.md#separate-legacy-trading-capability)
+does not trade, transfer money, choose products or promise returns. The existing [Alpaca engine](legacy-systems.md#legacy-trading-guide)
 remains separate with its original stops, ownership checks and recovery.
 
 ## Current mandate
@@ -126,8 +126,8 @@ python -m investment demo --contribution
 ```
 
 `demo` prints a synthetic report without creating a store or contacting a broker.
-The local CLI supports explicit profile/store initialisation, event imports and
-report/proposal export:
+The local CLI supports explicit profile/store initialisation, event imports,
+reports and a blocked proposal-envelope export:
 
 ```powershell
 python -m investment init --profile .\profile.json --database .\investment.sqlite3
@@ -445,10 +445,10 @@ implemented. Do not put credentials or private identifiers in shared example fil
 
 All v1 and v2 investment proposals are blocked until a role-aware policy,
 actual weights, products and loss/transfer rules are approved and implemented.
-V1's previous asset-class planner remains internal research code and is not
-connected to reports or exports. V1 review clocks and drift remain visible, but
-do not grant trade authority. Scheduled contributions are not spendable cash,
-and deposit cash is not broker buying power.
+V1 retains its existing asset-class target data for reporting and review; no
+allocation planner is exposed. Review clocks and drift do not grant trade
+authority. Scheduled contributions are not spendable cash, and deposit cash is
+not broker buying power.
 
 ### Acknowledging a review
 
