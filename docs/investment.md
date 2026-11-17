@@ -281,6 +281,17 @@ never refresh valuation. The dashboard charts at most the latest 500 points
 and lists the latest 20; the report retains up to 10,000 points. This history
 is evidence for recorded growth attribution, not proof of provider balances,
 product performance, suitability or future returns.
+The dashboard also charts the recorded time-weighted return since the baseline
+and lists maximum drawdown at each displayed event clock. A complete valuation
+can still lack a supported return; such points break the return line rather than
+being treated as zero. Nearby points may be masked to make gaps visible; the
+table retains their event clocks, including fractional seconds. The chart is
+not a benchmark or a projection.
+The history table also shows the flow-neutral return between consecutive
+recorded event clocks, calculated from their cumulative unitized returns.
+It is unavailable if either return is missing or the starting unit value is
+zero; it never bridges a gap or implies calendar-period or benchmark coverage.
+The starting UTC clock is shown even if it is outside the 20-row table.
 After a baseline exists, an external flow without a complete contemporaneous
 valuation invalidates the linked TWR/drawdown series; later marks do not
 reconstruct the missing flow-time value.
@@ -527,7 +538,12 @@ and operational failures are different concerns.
 `investment.simulation.simulate_synthetic_fixture` is a pure, non-CLI test
 harness intended only for caller-supplied synthetic fixtures; it does not verify
 their provenance. It requires synchronized GBP open/close observations whose
-availability equals the event time. It models fixed human-selected product
+availability equals the event time. All fixture clocks must be explicit UTC
+timestamps with at most six fractional digits; missing or more precise clocks
+are rejected, not filled from the system clock or truncated. Inputs must be ISO
+timestamp strings or standard Python `datetime` objects; subclasses such as
+pandas `Timestamp` are rejected because their precision may be hidden. A caller
+can provide a full-precision ISO string instead, which is still checked. It models fixed human-selected product
 weights, positive contributions and cash-funded withdrawals at a close,
 buy-only allocation at the next session open, quantity increments, minimum
 notionals, an explicit proportional cost assumption, cash conservation, and a
@@ -681,16 +697,21 @@ was accessed and no return comparison ran.
 The [automation guide](portfolio-automation.md#read-only-sync-provider-discovery)
 compares Trading 212, IBKR Flex, bank aggregation and operator records. It
 recommends a conditional combination based on existing accounts, not a platform
-migration or a claim that one provider covers everything. Discovery has verified
-public documentation only, not a credential's actual permissions. No provider
-has been selected or connected. Future sync stages observations/discrepancies;
+migration or a claim that one provider covers everything. Discovery has
+verified public documentation only, not a credential's actual permissions.
+Moneybox LISA and NatWest Digital Saver were named for evaluation;
+no sync provider has passed account-level coverage/permission checks or been
+connected. Future sync stages observations/discrepancies;
 it must never automatically rewrite the accounting journal.
 
 ### Local portfolio awareness
 
 [Portfolio awareness](portfolio-automation.md) implements explicit local
 exposure-to-source mappings, existing source-dated research briefs and configurable
-review reminders through CLI and the local dashboard. It starts no collector,
+review reminders through CLI and the local dashboard. Optional operator-owned
+profile entries also show dated thesis/watch history and manually noted calendar
+events; they are editable notes, not an immutable audit log, automated feed or
+assessment. It starts no collector,
 calls no model or broker, and has no trading/accounting authority. Existing
 US-focused source coverage and AI launch gates are unchanged. Calendar absence,
 unknown coverage, stale briefs and unmapped exposures remain explicit.
@@ -725,9 +746,9 @@ following remain unsupported/unverified:
 - Core/dynamic risk/transfer budgets, matched
   all-core attribution and revocable standing-policy execution.
 - New brief-generation workflows beyond the existing public-evidence pipeline,
-  thesis/watch persistence, UK/global calendar coverage and prospectively
-  admitted intelligence-derived trading features. Local matching/reminders are
-  implemented separately and confer no approval.
+  immutable thesis/watch history or automatic thesis updates, UK/global
+  calendar coverage and prospectively admitted intelligence-derived trading
+  features. Local matching, reminders and editable thesis notes confer no approval.
 
 ### Continuation order
 
@@ -747,13 +768,13 @@ following remain unsupported/unverified:
    equity/bond/cash drift is not sufficient.
 3. **Portfolio awareness and observation — local projection and offline preview
    implemented; provider sync discovery only:** explicitly configured local
-   exposure matching, existing dated briefs/calendar alerts, review reminders and
+   exposure matching, existing dated briefs/calendar alerts, review reminders,
+   operator-maintained thesis history/manual calendar watch and
    operator-prepared GBP observation previews are read-only. Choose and verify a
    genuinely read-only provider, account, permission scope and data terms before
    implementing or enabling any sync adapter. No account data is sent to hosted
-   AI. Further scheduled brief generation,
-   thesis/watch persistence and broader calendar coverage need separate design
-   and validation.
+   AI. Further scheduled brief generation, immutable thesis tracking and broader
+   calendar coverage need separate design and validation.
 4. **Evidence and simulator engineering, in parallel with useful tracking:** close
    product/account, cash-terms, persistent source rights/vintages, action/FX,
    cost/tax and frozen-protocol gates before product-performance runs. Synthetic

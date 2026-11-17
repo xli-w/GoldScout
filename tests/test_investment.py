@@ -17,6 +17,8 @@ from threading import Barrier, Event, local
 import unittest
 from unittest.mock import patch
 
+import pandas as pd
+
 from investment import InvestmentError
 from investment.__main__ import main
 from investment.core import iso, replay
@@ -109,6 +111,77 @@ class InvestmentTests(unittest.TestCase):
         first_open = min(row["open_at"] for row in bars)
         return [{"id": "explicit-zero-rate", "effective_at": first_open,
                  "available_at": first_open, "annual_rate": "0"}]
+
+    def test_synthetic_clock_evidence_cannot_be_missing_or_truncated(self):
+        products = [{"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
+        bars = [self.synthetic_bar("equity", day, "10", "10") for day in range(3)]
+        for bar in bars:
+            for name in ("open_at", "open_available_at", "close_at", "close_available_at"):
+                bar[name] = bar[name].replace("2026", "2099", 1)
+        first_open, final_open, final_close = bars[0]["open_at"], bars[2]["open_at"], bars[2]["close_at"]
+        rows = {
+            "cash_rates": {"id": "rate", "effective_at": first_open,
+                           "available_at": first_open, "annual_rate": "0"},
+            "contributions": {"id": "deposit", "timestamp": final_close,
+                              "available_at": final_close, "amount_gbp": "1"},
+            "withdrawals": {"id": "withdrawal", "timestamp": final_close,
+                            "available_at": final_close, "amount_gbp": "1"},
+            "splits": {"id": "split", "product_id": "equity", "effective_at": final_open,
+                       "available_at": final_open, "numerator": "2", "denominator": "1"},
+            "distributions": {"id": "distribution", "product_id": "equity",
+                              "ex_at": final_open, "pay_at": final_close,
+                              "available_at": final_open, "amount_per_unit_gbp": "1"},
+        }
+        for kind, original in rows.items():
+            for replacement in (None, original["available_at"].replace("Z", ".0000001Z")):
+                options = {"cash_rates": self.zero_cash_rates(bars)}
+                row = {**original, "available_at": replacement}
+                options[kind] = [row]
+                with self.subTest(kind=kind, replacement=replacement), self.assertRaises(InvestmentError):
+                    simulate_synthetic_fixture("1000", products, {"equity": "50"}, bars, **options)
+        invalid_bars = deepcopy(bars)
+        invalid_bars[0]["open_available_at"] = first_open.replace("Z", ".0000001Z")
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "50"}, invalid_bars,
+                                       cash_rates=self.zero_cash_rates(bars))
+        nano_rate = [{"id": "nano-rate", "effective_at": first_open,
+                      "available_at": pd.Timestamp("2099-01-01T08:59:59.999999999Z"),
+                      "annual_rate": "0"}]
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "50"}, bars,
+                                       cash_rates=nano_rate)
+
+        class HigherPrecisionDatetime(datetime):
+            nanosecond = 1
+
+        hidden_nano_rate = [{"id": "hidden-nano", "effective_at": first_open,
+                             "available_at": HigherPrecisionDatetime(
+                                 2099, 1, 1, 9, tzinfo=timezone.utc),
+                             "annual_rate": "0"}]
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "50"}, bars,
+                                       cash_rates=hidden_nano_rate)
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture(
+                "1000", products, {"equity": "50"}, bars,
+                cash_rates=[{"id": "subclass-rate", "effective_at": first_open,
+                             "available_at": pd.Timestamp("2099-01-01T08:59:59.999999Z"),
+                             "annual_rate": "0"}])
+        invalid_bars = deepcopy(bars)
+        nano_close = pd.Timestamp("2099-01-01T16:00:00.000000001Z")
+        invalid_bars[0]["close_at"] = nano_close
+        invalid_bars[0]["close_available_at"] = nano_close
+        with self.assertRaises(InvestmentError):
+            simulate_synthetic_fixture("1000", products, {"equity": "50"}, invalid_bars,
+                                       cash_rates=self.zero_cash_rates(bars))
+        valid = simulate_synthetic_fixture(
+            "1000", products, {"equity": "50"}, bars,
+            cash_rates=[{"id": "early-rate",
+                         "effective_at": datetime(2099, 1, 1, 9, tzinfo=timezone.utc),
+                         "available_at": pd.Timestamp("2099-01-01T08:59:59.999999Z").isoformat(),
+                         "annual_rate": "0"}])
+        self.assertEqual(valid["summary"]["cash_rates"][0]["available_at"],
+                         "2099-01-01T08:59:59.999999Z")
 
     def test_synthetic_simulator_uses_next_open_and_flow_neutral_contributions(self):
         products = [

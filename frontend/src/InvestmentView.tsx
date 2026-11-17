@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import { RefreshCw, ShieldAlert } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import validate from "./investment-validator.js";
 import validateV2 from "./investment-validator-v2.js";
 import { label, timestamp } from "./api";
@@ -88,7 +88,20 @@ function pounds(value: string | null) {
 }
 function percent(value: string | null) { return value === null ? "Unavailable" : `${new Decimal(value).toFixed(2)}%`; }
 
+const ChartDecimal = Decimal.clone({ precision: 300 });
+
+function intervalReturn(current: OpeningSnapshot["valuation_history"][number],
+  previous: OpeningSnapshot["valuation_history"][number] | undefined) {
+  if (!previous || !previous.complete || previous.twr_pct === null ||
+      !current.complete || current.twr_pct === null) return null;
+  const start = new ChartDecimal(previous.twr_pct).plus(100);
+  const end = new ChartDecimal(current.twr_pct).plus(100);
+  if (start.lte(0) || end.lt(0)) return null;
+  return end.minus(start).div(start).mul(100).toString();
+}
+
 function InvestmentGrowthHistory({ history }: { history: OpeningSnapshot["valuation_history"] }) {
+  const returnMaskId = `investment-return-gap-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const chartHistory = history.slice(-500);
   const chartKnown = chartHistory.filter(point =>
     point.complete && point.equity_gbp !== null && point.capital_basis_gbp !== null);
@@ -104,15 +117,36 @@ function InvestmentGrowthHistory({ history }: { history: OpeningSnapshot["valuat
   const padding = spread.isZero() ? Decimal.max(high.abs().mul("0.05"), new Decimal(1)) : spread.mul("0.1");
   const minimum = low.minus(padding), maximum = high.plus(padding);
   const range = maximum.minus(minimum);
-  const firstTime = chartHistory.length ? Date.parse(chartHistory[0].timestamp) : 0;
-  const lastTime = chartHistory.length ? Date.parse(chartHistory[chartHistory.length - 1].timestamp) : firstTime;
-  const timeRange = Math.max(lastTime - firstTime, 1);
+  const microseconds = (value: string) => {
+    const fraction = value.match(/\.(\d{1,6})Z$/)?.[1] ?? "";
+    return BigInt(Date.parse(value)) * 1000n + BigInt(fraction.padEnd(6, "0").slice(3));
+  };
+  const firstTime = chartHistory.length ? microseconds(chartHistory[0].timestamp) : 0n;
+  const lastTime = chartHistory.length ? microseconds(chartHistory[chartHistory.length - 1].timestamp) : firstTime;
+  const timeRange = lastTime > firstTime ? lastTime - firstTime : 1n;
   const left = 72, right = 780, top = 20, bottom = 220;
   const x = (point: OpeningSnapshot["valuation_history"][number]) =>
-    left + (Date.parse(point.timestamp) - firstTime) / timeRange * (right - left);
+    left + Number(microseconds(point.timestamp) - firstTime) / Number(timeRange) * (right - left);
   const y = (value: string) =>
     top + new Decimal(maximum.minus(value)).div(range).toNumber() * (bottom - top);
-  const lineSegments = (field: "equity_gbp" | "capital_basis_gbp") => {
+  const returnKnown = chartHistory.filter(point => point.complete && point.twr_pct !== null);
+  const returnValues = returnKnown.map(point => new ChartDecimal(point.twr_pct!));
+  const returnLow = returnValues.length
+    ? returnValues.slice(1).reduce((value, candidate) => ChartDecimal.min(value, candidate), returnValues[0])
+    : new ChartDecimal(0);
+  const returnHigh = returnValues.length
+    ? returnValues.slice(1).reduce((value, candidate) => ChartDecimal.max(value, candidate), returnValues[0])
+    : new ChartDecimal(0);
+  const returnSpread = returnHigh.minus(returnLow);
+  const returnPadding = returnSpread.isZero()
+    ? ChartDecimal.max(returnHigh.abs().mul("0.05"), new ChartDecimal(1))
+    : returnSpread.mul("0.1");
+  const returnMinimum = returnLow.minus(returnPadding), returnMaximum = returnHigh.plus(returnPadding);
+  const returnRange = returnMaximum.minus(returnMinimum);
+  const returnY = (value: string) =>
+    top + returnMaximum.minus(value).div(returnRange).toNumber() * (bottom - top);
+  const lineSegments = (field: "equity_gbp" | "capital_basis_gbp" | "twr_pct",
+    coordinate: (value: string) => number = y) => {
     const segments: string[][] = [];
     let segment: string[] = [];
     for (const point of chartHistory) {
@@ -121,13 +155,17 @@ function InvestmentGrowthHistory({ history }: { history: OpeningSnapshot["valuat
         if (segment.length) segments.push(segment);
         segment = [];
       } else {
-        segment.push(`${x(point)},${y(value)}`);
+        segment.push(`${x(point)},${coordinate(value)}`);
       }
     }
     if (segment.length) segments.push(segment);
     return segments;
   };
-  const latest = [...history].reverse().slice(0, 20);
+  const tableStart = Math.max(0, history.length - 20);
+  const latest = history.slice(tableStart).map((point, index) => {
+    const previous = history[tableStart + index - 1];
+    return { point, previous, interval: intervalReturn(point, previous) };
+  }).reverse();
   const dateLabel = (value: string) => new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium", timeZone: "UTC",
   }).format(Date.parse(value));
@@ -174,15 +212,56 @@ function InvestmentGrowthHistory({ history }: { history: OpeningSnapshot["valuat
           </svg>
           <div className="investment-chart-legend"><span><i className="investment-legend-value" />Recorded value</span><span><i className="investment-legend-capital" />Baseline capital</span><span><i className="investment-legend-gap" />Incomplete clock</span></div>
         </figure> : <p>No complete contemporaneous valuation is available in the recent history.</p>}
+        {returnKnown.length > 0 ? <figure className="history-chart">
+          <figcaption>Time-weighted return since baseline <span>{returnKnown.length} available of {chartHistory.length} recent event clocks</span></figcaption>
+          <p className="position-note">Flow-neutral recorded return, not a benchmark or a prediction. A complete value does not necessarily mean a return is available. Percentages are rounded for display; points near a gap may be masked. Full fractional UTC clocks are shown in the table.</p>
+          <svg viewBox="0 0 800 260" role="img" aria-label="Time-weighted return since baseline; unavailable returns are gaps">
+            <defs>
+              <mask id={returnMaskId} maskUnits="userSpaceOnUse" x="0" y="0" width="800" height="260">
+                <rect x="0" y="0" width="800" height="260" fill="white" />
+                {chartHistory.filter(point => !point.complete || point.twr_pct === null).map(point =>
+                  <rect key={point.timestamp} x={x(point) - 5} y={top} width="10" height={bottom - top} fill="black" />)}
+              </mask>
+            </defs>
+            {[0, 1, 2, 3].map(index => {
+              const value = returnMaximum.minus(returnRange.mul(index).div(3));
+              const yAt = top + index / 3 * (bottom - top);
+              return <g key={index}>
+                <line x1={left} x2={right} y1={yAt} y2={yAt} className="chart-baseline" />
+                <text x={left - 8} y={yAt + 4} textAnchor="end" className="chart-label">{percent(value.toString())}</text>
+              </g>;
+            })}
+            <g mask={`url(#${returnMaskId})`}>
+              {lineSegments("twr_pct", returnY).map((segment, index) =>
+                segment.length > 1 && <polyline key={`return-${index}`} points={segment.join(" ")}
+                  fill="none" stroke="#21745f" strokeWidth="2" />)}
+              {returnKnown.map(point => <circle key={point.timestamp} cx={x(point)} cy={returnY(point.twr_pct!)} r="3" fill="#21745f">
+                <title>{`${point.timestamp} · TWR ${percent(point.twr_pct)}`}</title>
+              </circle>)}
+            </g>
+            {chartHistory.filter(point => !point.complete || point.twr_pct === null).map(point =>
+              <g key={point.timestamp}>
+                <line className="return-chart-gap" x1={x(point)} x2={x(point)} y1={top} y2={bottom}
+                  stroke="#a63747" strokeDasharray="3 4" />
+                <title>{`${point.timestamp} · ${point.gap_reason ?? "Time-weighted return unavailable."}`}</title>
+              </g>)}
+            <text x={left} y="246" className="chart-label">{dateLabel(chartHistory[0].timestamp)}</text>
+            <text x={right} y="246" textAnchor="end" className="chart-label">{dateLabel(chartHistory[chartHistory.length - 1].timestamp)}</text>
+          </svg>
+          <div className="investment-chart-legend"><span><i className="investment-legend-value" />Recorded TWR</span><span><i className="investment-legend-gap" />Return unavailable</span></div>
+        </figure> : <p>No time-weighted return is available in the recent history.</p>}
         <p className="position-note">The chart shows the latest {chartHistory.length} of {history.length} event clocks; the table shows the latest {latest.length}. Source-availability times and gaps are retained.</p>
+        <p className="position-note">Return since previous clock compares consecutive recorded time-weighted returns, not calendar periods or benchmarks. It is unavailable when either clock lacks a return or the starting unit value is zero; no gap is bridged.</p>
         <div className="table-scroll" tabIndex={0} aria-label="Recorded growth history">
           <table>
-            <thead><tr><th>Event clock (UTC)</th><th>Status and gap reason</th><th>Available at</th><th>Value</th><th>Capital basis</th><th>Gain since baseline</th><th>TWR</th></tr></thead>
-            <tbody>{latest.map(point => <tr key={point.timestamp}>
-              <td>{timestamp(point.timestamp)}</td><td>{point.complete ? "Complete" : `Gap: ${point.gap_reason}`}</td>
+            <thead><tr><th>Event clock (UTC)</th><th>Status and gap reason</th><th>Available at</th><th>Value</th><th>Capital basis</th><th>Gain since baseline</th><th>TWR</th><th>Return since previous clock</th><th>Maximum drawdown</th></tr></thead>
+            <tbody>{latest.map(({ point, previous, interval }) => <tr key={point.timestamp}>
+              <td>{point.timestamp.includes(".") ? point.timestamp : timestamp(point.timestamp)}</td><td>{point.complete ? "Complete" : `Gap: ${point.gap_reason}`}</td>
               <td>{timestamp(point.source_available_at)}</td><td>{pounds(point.equity_gbp)}</td>
               <td>{pounds(point.capital_basis_gbp)}</td><td>{pounds(point.gain_since_baseline_gbp)}</td>
               <td>{percent(point.twr_pct)}</td>
+              <td>{percent(interval)}{interval !== null && previous && <div>From {previous.timestamp}</div>}</td>
+              <td>{percent(point.max_drawdown_pct)}</td>
             </tr>)}</tbody>
           </table>
         </div>

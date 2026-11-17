@@ -3,7 +3,7 @@
 from decimal import Decimal, ROUND_DOWN, localcontext
 
 from . import InvestmentError
-from .core import clock, fields, fmt, iso, number, text
+from .core import explicit_clock, fields, fmt, iso, number, text
 
 MAX_PRODUCTS = 25
 MAX_SESSIONS = 10000
@@ -87,10 +87,10 @@ def _sessions(rows, products):
         if key in seen:
             raise InvestmentError("Duplicate product/session bar")
         seen.add(key)
-        open_at = clock(row["open_at"])
-        open_available_at = clock(row["open_available_at"])
-        close_at = clock(row["close_at"])
-        close_available_at = clock(row["close_available_at"])
+        open_at = explicit_clock(row["open_at"])
+        open_available_at = explicit_clock(row["open_available_at"])
+        close_at = explicit_clock(row["close_at"])
+        close_available_at = explicit_clock(row["close_available_at"])
         if (open_at >= close_at or open_available_at != open_at
                 or close_available_at != close_at):
             raise InvestmentError("Synthetic prices must be available at their exact observation clocks")
@@ -130,8 +130,8 @@ def _cash_flows(contributions, withdrawals, close_times):
         for row in values:
             fields(row, required)
             identifier = text(row["id"])
-            timestamp = clock(row["timestamp"])
-            available_at = clock(row["available_at"])
+            timestamp = explicit_clock(row["timestamp"])
+            available_at = explicit_clock(row["available_at"])
             amount = _bounded(row["amount_gbp"], positive=True)
             key = (timestamp, identifier)
             if identifier in identifiers:
@@ -166,8 +166,8 @@ def _splits(values, products, open_times):
         product_id = text(row["product_id"])
         if product_id not in products:
             raise InvestmentError("Split references an unconfigured product")
-        effective_at = clock(row["effective_at"])
-        available_at = clock(row["available_at"])
+        effective_at = explicit_clock(row["effective_at"])
+        available_at = explicit_clock(row["available_at"])
         numerator = _bounded(row["numerator"], positive=True)
         denominator = _bounded(row["denominator"], positive=True)
         key = (effective_at, product_id, identifier)
@@ -212,9 +212,9 @@ def _distributions(values, products, open_times, close_times, split_events):
         product_id = text(row["product_id"])
         if product_id not in products:
             raise InvestmentError("Distribution references an unconfigured product")
-        ex_at = clock(row["ex_at"])
-        pay_at = clock(row["pay_at"])
-        available_at = clock(row["available_at"])
+        ex_at = explicit_clock(row["ex_at"])
+        pay_at = explicit_clock(row["pay_at"])
+        available_at = explicit_clock(row["available_at"])
         amount_per_unit = _bounded(row["amount_per_unit_gbp"], positive=True)
         key = (ex_at, product_id, identifier)
         if identifier in identifiers:
@@ -255,8 +255,8 @@ def _cash_rates(values, open_times, close_times):
     for row in values:
         fields(row, required)
         identifier = text(row["id"])
-        effective_at = clock(row["effective_at"])
-        available_at = clock(row["available_at"])
+        effective_at = explicit_clock(row["effective_at"])
+        available_at = explicit_clock(row["available_at"])
         annual_rate = _bounded(row["annual_rate"])
         key = (effective_at, identifier)
         if identifier in identifiers:

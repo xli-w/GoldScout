@@ -9,8 +9,10 @@ is unverified, so unknown coverage never becomes trading permission.
 ## Portfolio-manager awareness
 
 The optional [local portfolio projection](portfolio-automation.md) now connects
-existing stored evidence to explicitly mapped recorded exposures, dated briefs
-and operator-configured review reminders. It performs local reads only, starts
+existing stored evidence to explicitly mapped recorded exposures, dated briefs,
+operator-configured review reminders, editable local thesis history and manual
+calendar watch notes. These notes are not an immutable audit trail, automatic
+assessment or feed. It performs local reads only, starts
 no service and sends no portfolio data to AI. Read-only sync remains provider
 discovery, not an enabled account connection.
 

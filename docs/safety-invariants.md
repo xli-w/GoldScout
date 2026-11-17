@@ -127,6 +127,10 @@ These are development contracts, not a certification of live readiness. Current 
 - Manual review acknowledgements are append-only, bound to an unchanged, previously committed revision and a complete, fresh recorded valuation; they are not trade approval. Monthly and annual clocks are separate; an annual acknowledgement also counts as monthly, while five-point drift remains a trigger. Acknowledgements do not alter cash, holdings, valuation clocks or performance; later evidence cannot be backdated before them. Invalid historical attestations fail replay rather than being silently repaired.
 - A cash-only confirmation may refresh the recorded valuation clock only when every included account has an exact matching GBP balance and evidence available at that clock; an unheld-product price mark cannot refresh that clock. It never changes money or repairs discrepancies; it is an operator attestation, not independent proof of balances or settlement. Prior journal evidence must have been available by either an acknowledgement or confirmation clock.
 - `investment.simulation.simulate_synthetic_fixture` is a pure engineering harness intended only for caller-supplied synthetic GBP bars, next-session-open buy-only allocations, contribution/withdrawal unitization, explicit synthetic distribution events, and assumed proportional costs. Synthetic withdrawals are paid only from available cash; they cannot trigger sales, and insufficient cash fails closed. Preserve unit-value continuity through complete cash redemptions and later contributions. Synthetic distributions use holdings immediately before modeled ex-open fills, create a receivable included in portfolio and contribution-allocation target valuation until their later modeled pay-close, and convert that receivable to spendable cash before close-time external flows. Reject distributions unavailable by ex-open, unheld ex-open products, and a same-product split at ex-open. Caller prices must exclude the distribution adjustment; the harness cannot verify this basis or the source/entitlement. It supports only synthetic splits effective at modeled opens and available no later than their effective time; unsupported fractional-increment outcomes fail. Explicit synthetic cash-rate events (annual decimal 0-1) require a first-open rate, may change only at modeled opens/closes, and accrue by simple ACT/365 only after being available. Overnight interest uses the prior rate; open-effective rates apply after that accrual. This is not a cash-product terms or rate model. The harness does not verify input provenance and is not connected to product datasets, the investment store, or a CLI; its output cannot support product-performance claims. It omits sales or liquidation, taxes/withholding, actual cash-account conventions, FX, fixed costs, spreads/slippage, and actual calendars/execution. Product selection, legal/access eligibility, licensed data, savings terms, historical comparisons, broker behavior, and profitability require separate evidence and approval.
+- Synthetic fixture clocks are explicit UTC values with at most microsecond
+  precision. A missing clock must never default to wall time, and
+  sub-microsecond timestamps must not be silently truncated into availability.
+  Reject datetime subclasses whose extra precision cannot be established.
 
 ## Advisory and Shadow Intelligence
 
@@ -136,6 +140,10 @@ These are development contracts, not a certification of live readiness. Current 
   Reads do not start collection or mutate either store; future/missing/stale
   evidence and unmapped exposure remain explicit. Review reminders are
   operator-configured notifications, not policy or revision acknowledgements.
+  Optional thesis histories and calendar watch entries are editable, unverified
+  local profile notes, not an immutable journal, source coverage, AI inputs or
+  trading authority. Preserve the v1 awareness wire shape; additional notes
+  appear only in the opt-in v2 projection.
   Provider discovery is not verified account-level permission or sync activation;
   future observations/discrepancies must not automatically repair accounting.
 - Portfolio intelligence may support automated awareness and hypothesis creation

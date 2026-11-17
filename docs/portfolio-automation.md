@@ -66,21 +66,123 @@ holdings and current mappings**, not holdings at the brief's publication time.
 The profile accepts up to 100 unique exposure pairs, 20 calendar pairs per
 exposure, and 20 unique reminders. Calendar horizon is 1-30 days; maximum source
 age is 60-86,400 seconds. Reminder intervals are 1-3,660 days. All timestamps are
-UTC. A profile cannot be used before its observation time, and recorded review
+UTC with at most six fractional digits. A profile cannot be used before its observation time, and recorded review
 dates cannot follow that time. The profile is local configuration, not an
 immutable review journal or investment-policy approval.
+
+### Operator thesis watch
+
+The same profile can optionally contain a `theses` array. Each thesis has an
+explicit account and optional product association and an operator-maintained,
+chronological history:
+
+```json
+"theses": [
+  {
+    "id": "example-case",
+    "title": "Example long-term case",
+    "account_id": "broker",
+    "product_id": "global-equity",
+    "history": [
+      {
+        "observed_at": "2026-11-15T12:00:00Z",
+        "status": "watch",
+        "thesis": "Example hypothesis",
+        "invalidation": "Example reason to reconsider",
+        "evidence": "Operator's source or review note"
+      }
+    ]
+  }
+]
+```
+
+Add the property to the profile object, not as a separate file. Status is an
+operator label: `watch`, `active`, `invalidated` or `closed`. Include a dated
+entry for each change and update the profile's `observed_at` to at least the
+latest entry. Entries must be strictly increasing in UTC and no later than the
+profile observation. Note and profile clocks require ISO UTC seconds, optionally
+with up to six fractional digits. The profile allows 20 theses and 1-50 entries per thesis;
+the existing 64 KiB total profile limit still applies. Accounts and products
+must exist in the investment profile; a product association requires a broker
+account. An association does not establish a current holding, role or look-through.
+
+The CLI and dashboard show these notes locally, including earlier entries.
+They do not automatically assess or update a thesis, fetch its evidence, link it
+to calendar events, acknowledge a review, change accounting or authorize a
+trade. Entries are not sent to AI. The JSON is editable operator-owned
+configuration: the app cannot enforce append-only history or prove dates and
+notes, so preserve independent evidence if an audit trail is needed. It may
+contain sensitive portfolio context; keep it private and do not put credentials
+or secrets in it.
+
+### Operator calendar watch
+
+The optional `calendar_watch` array is a manual way to note relevant UK, global
+or issuer events alongside recorded exposures while automated coverage remains
+US-focused. Add entries to the same profile:
+
+```json
+"calendar_watch": [
+  {
+    "id": "example-event",
+    "title": "Example scheduled release",
+    "account_id": "broker",
+    "product_id": "global-equity",
+    "scheduled_on": "2026-12-17",
+    "time_note": "Time not stated; source date is local",
+    "status": "tentative",
+    "observed_at": "2026-11-16T12:00:00Z",
+    "source": "Operator's source reference"
+  }
+]
+```
+
+An entry's source-local date is `YYYY-MM-DD` or null if unknown; `time_note` is
+free text, not a parsed time or time zone. The app never fabricates an instant
+or converts a date to UTC. Status is `scheduled`, `tentative` or `cancelled`;
+the observation must be no later than the profile's `observed_at`. Up to 100
+unique entries are allowed within the total profile size bound. Account and
+product associations follow the same rules as thesis notes. The CLI and
+dashboard display the operator's entire list, including past and cancelled
+entries and entries for no-longer-held products; they do not infer holdings or
+filter by the automated calendar horizon.
+
+These are editable, unverified and potentially stale operator notes, not a
+feed, source-coverage claim, automatic alert or evidence of event absence.
+Review the cited source and update notes manually; source text is not fetched
+by the application or sent to AI. For example, the
+[Bank of England MPC dates](https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates)
+and [ONS release calendar](https://www.ons.gov.uk/releasecalendar) provide
+official pages to check, but this feature does not subscribe to either.
+The ONS page links to an [iCalendar feed](https://www.ons.gov.uk/calendar/releasecalendar);
+an observed public response contained confirmed, provisional and postponed
+entries. That single response does not establish a complete time horizon,
+revision semantics, or the feed-specific reuse and retention terms. These must
+be verified before an automated adapter can claim coverage; no ONS feed has
+been added or activated.
+
+ONS also documents a [release-search API](https://developer.ons.gov.uk/search/search-releases/)
+with date filters, offset pagination, release-type filters and example
+postponement, cancellation and previous-date fields. The documented example
+does not establish a per-change revision or publication time, a consistent
+snapshot across pages, a complete future horizon, or the applicable retention
+terms. These are discovery leads, not verified coverage or permission to
+collect. Do not equate previous dates with the times changes became available.
 
 ### Read locally
 
 After the operator has explicitly initialized the separate stores:
 
 ```powershell
-python -m investment awareness --database .\investment.sqlite3 --intelligence-database .\intelligence.sqlite3 --awareness-profile .\awareness.json
+python -m investment awareness --database .\investment.sqlite3 --intelligence-database .\intelligence.sqlite3 --awareness-profile .\awareness.json --schema-version 2
 python -m dashboard --investment-database .\investment.sqlite3 --intelligence-database .\intelligence.sqlite3 --awareness-profile .\awareness.json
 ```
 
-The dashboard adds `GET /api/investment/v1/awareness`. Without an awareness
-profile it reports disabled. Missing/foreign stores, invalid bindings or invalid
+The dashboard uses `GET /api/investment/v2/awareness` for the additional notes.
+The existing v1 endpoint and default CLI report retain their original wire
+shape and omit those notes; opt in to CLI version 2 as shown above. Both versions
+validate the complete profile. Without an awareness profile they report disabled.
+Missing/foreign stores, invalid bindings or invalid
 profiles are errors, never fallback demo data or automatic store creation.
 Read failures hide previously displayed matching context. The frontend is bound
 to the awareness wire schema when packaged. Rebuild existing frontend bundles
@@ -122,28 +224,53 @@ new feed is implemented.
 
 ## Read-only sync provider discovery
 
-Discovery only, reviewed against public primary documentation on 2026-11-16.
-No provider/account has been selected, no credential inspected, no authenticated
-request made and no broker-enforced permission tested. Sending only GET requests
-does **not** make a broadly privileged key read-only.
+Discovery only, reviewed against public documentation on 2026-11-16.
+Moneybox LISA and NatWest Digital Saver were named as accounts to evaluate, but
+no account/provider has passed the integration gate. No credential was inspected,
+no authenticated request made and no broker-enforced permission tested. Sending
+only GET requests does **not** make a broadly privileged key read-only.
 
 | Route | Documented fit | Read-only evidence and unresolved gates |
 | --- | --- | --- |
-| [Trading 212 Public API](https://docs.trading212.com/api) | Self-service Invest/Stocks ISA account summary, positions and history. Beta; primary-account-currency reporting, not API multi-currency or SIPP support. | [Key guidance](https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key) explicitly permits read-only viewing permissions, optional trusted-IP restrictions and immediate key-pair deletion. Exact configured scopes, actual server enforcement, history completeness, account/product fit and acceptance of its [API terms](https://www.trading212.com/legal-documentation/API-Terms_EN.pdf) remain unverified. |
+| Moneybox LISA | Moneybox [statement help](https://www.moneyboxapp.com/faqs/category/your-account/your-account/how-can-i-get-a-statement-of-my-account) describes generating a statement for a selected account/date range in the app or website and downloading/emailing a PDF. Its separate [Round Ups help](https://www.moneyboxapp.com/faqs/what-data-do-you-access-and-how-do-you-keep-it-safe) says it uses Open Banking to read transactions from linked external accounts; that is Moneybox consuming bank data, not an API exposing the investor's Moneybox LISA to GoldScout. | No supported LISA account-data API, CSV export, machine-readable statement contract or third-party LISA connection was verified. The indexed official help pages were discoverable, but direct retrieval was denied (HTTP 403); verify the actual export locally. Coverage, point-in-time balance, transactions, revisions, retention rights and PDF format remain unverified. A local PDF normalizer is not justified until the operator confirms the real statement structure and permitted local processing. No credential scraping or undocumented mobile endpoint. |
+| NatWest Digital Saver (official product page: [Digital Regular Saver](https://www.natwest.com/savings/digital-regular-saver.html)) | NatWest Online Banking officially supports exporting selected transaction searches as Excel or PDF; its [transaction-search guidance](https://www.natwest.com/support-centre/help-with-your-card/transactions/how-do-i-search-for-transactions-online.html) says up to seven years are searchable, subject to the account having existed that long. [Midata](https://www.natwest.com/support-centre/payments/general/do-you-offer-the-ability-to-obtain-midata.html) is no longer offered; NatWest points customers to these standard exports. NatWest separately publishes an [Account & Transaction API](https://www.bankofapis.com/products/natwest-group-open-banking/accounts) in its Bank of APIs ecosystem. | The operator-generated Excel/PDF route is an actionable local evidence candidate, but the actual file structure, balance/as-of field, account selection and completeness must be checked locally; an activity export alone is not a contemporaneous account-balance observation. The general API route does not establish that this exact savings product is exposed to AIS. NatWest's consumer [Open Banking FAQ](https://www.natwest.com/mobile-app-content/mobile-app-content/aggregation-faqs.html) covers NatWest fetching selected other-bank accounts, with a stated 90-day consent period and four daily refreshes; this is the reverse direction and must not be mistaken for third-party access to NatWest. Its API portal is a developer/partner ecosystem; [NatWest Group](https://www.natwestgroup.com/who-we-are/contact-us/open-banking-and-third-party-providers-api-portal-page.html) invites customers/partners to discuss API use. The [Open Banking Directory](https://www.openbanking.org.uk/directory/) describes enrolment and checking appropriate PSD2 permissions; FCA [consumer guidance](https://www.fca.org.uk/consumers/account-information-payment-initiation-services) requires an authorised/registered provider and explicit consent. Exact account eligibility in a chosen provider's consent journey, accessible balance/transactions, latency/completeness, retention, revocation and provider terms remain unverified. Do not build direct GoldScout access or infer that app aggregation proves outbound AIS coverage. |
+| [Trading 212 Public API](https://docs.trading212.com/api) | Beta; official docs limit it to Invest and Stocks & Shares ISA, exclude SIPP, and document primary-currency reporting rather than multi-currency account data. | Trading 212's [key guidance](https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key) says the customer selects permissions, which may include viewing or placing orders; it also documents IP restrictions and key deletion. The API itself supports live orders, so only a locally verified key with view-only scopes could be considered. Account fit, exact scopes, completeness and [API terms](https://www.trading212.com/legal-documentation/API-Terms_EN.pdf) still require verification. |
 | [IBKR Flex Web Service](https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm) / [Flex reports](https://www.ibkrguides.com/clientportal/performanceandstatements/flex.htm) | Token and saved query IDs retrieve activity/trade-confirmation reports; suitable for periodic reporting rather than real-time sync. Documented optional IP restriction and token replacement. | A dedicated reporting route is a promising narrower credential surface than trading APIs, but these sources do not establish tested inability to trade with the credential. Confirm exact UK account/wrapper/report fields, delay, token/permission isolation, rate limits, revocation and permitted retention before selection. |
-| [TrueLayer Data API](https://docs.truelayer.com/docs/data-api-basics) | Bank-data/consented connection route rather than a broker feed; potentially complements broker reporting. | Data scopes and bank consent are distinct from a payments product. Individual/personal production access, commercial terms, exact designated savings/bond-provider coverage and current consent/revocation requirements are not established here. Do not equate current-account coverage with savings, NS&I or investment coverage. |
+| [TrueLayer Data API](https://docs.truelayer.com/docs/enable-your-users-to-connect-their-bank-account) | Its current Data API v3 documentation describes account and transaction information with explicit `info`, `accounts` and `transactions` scopes, one-time or recurring access, and an end-user bank-consent flow. Non-regulated merchants must use TrueLayer's hosted journey; custom consent UI requires AISP regulation. | TrueLayer's [official help article](https://support.truelayer.com/hc/en-us/articles/51026317780881-Can-I-get-production-access-for-a-personal-project-I-built-in-Sandbox) says personal projects cannot obtain production access. This makes it a poor current fit for a single-user local portfolio tool unless a genuine commercial arrangement is approved. Production access, price/retention terms, and NatWest Digital Regular Saver coverage were not verified. Do not integrate sandbox or treat a supported-bank list as proof that this savings product is selectable. |
+| [GoCardless Bank Account Data](https://docs.gocardless.com/docs/bank-account-data) | Its published [API overview](https://docs.gocardless.com/docs/bank-account-data) describes JSON account, balance and transaction data, up to 24 months' transaction history and up to 90 days' continuous access. The [quickstart](https://docs.gocardless.com/docs/bank-account-data/quickstart-guide) specifies default agreement terms of 90 days' transaction history, 90 days' access and full details/balance/transaction scope; it shows user secrets exchanged for a refresh token. Institution endpoints disclose bank-specific transaction history/access periods; bank rate limits may be as low as four calls daily per account/resource. | The public docs describe a usable API and say account verification is offered to paying customers, but this does not establish suitable commercial terms or account-level coverage. NatWest Digital Regular Saver inclusion, institution-specific data limitations, retention rights and whether this personal use is permitted need direct verification. Do not create an account, obtain a secret or test a live link during discovery. Not selected. |
+| [Hargreaves Lansdown investment reports](https://www.hl.co.uk/help/profile-settings/investment-reports-tax-certificates/find-investment-reports) | The help page says online investment reports are downloadable four times a year and show account valuation and recent transactions. | This establishes a periodic human-download route, not a machine-readable export schema or public investment-account API. A report's frequency and scope may not support timely reconciliation; check the selected account's actual report before considering a local normalizer. |
+| [Vanguard UK documents and report generator](https://www.vanguardinvestor.co.uk/need-help/answer/how-do-i-generate-a-document) | The help page describes periodic statements and a report generator for statements, valuations and other reports, plus contract notes in the document area. | The page does not establish a machine-readable format or public account-data API. Treat it as a possible manual evidence source only; confirm actual document fields, coverage and permitted local use for an existing account. |
 | Operator-owned statements/exports | Broad fallback where a particular institution has no approved read-only API. | No online credential is needed. The offline preview accepts an operator-prepared normalized JSON observation file, **not** automatic CSV/PDF ingestion or independent verification of statements. Preserve source evidence and operator reconciliation. |
 
 ### Recommended combination, not platform migration
 
 Use existing accounts rather than move capital merely for API convenience.
-Retain manual evidenced bank/bond records as the dependable baseline. If the
-investor already uses Trading 212 Invest/ISA, its explicitly documented
-read-only-key option is the strongest first broker-sync candidate in this bounded
-comparison. IBKR Flex is a complementary periodic-report candidate for existing
-IBKR holdings, not a reason to run its trading API. Defer bank aggregation until
-personal access, exact account coverage, costs and data terms are evidenced.
-There is no verified universal provider for all three portfolio locations.
+For Moneybox LISA, a user-generated PDF statement is the only official
+machine-assisted evidence path found in this review; continue with manual
+operator-normalized evidence until the actual statement and its coverage are
+checked locally. NatWest's official Excel/PDF transaction export is a more
+promising offline candidate than direct API work, but the operator still needs
+to confirm that the selected export and a separately observed balance support
+the desired observation clock. GoldScout currently accepts normalized JSON,
+not either provider's export format; do not send statements into chat or hosted
+AI. For NatWest Digital Regular Saver, the general Open Banking route is
+plausible but this exact product's third-party visibility is unproven; verify
+only through an operator-selected regulated provider's normal consent journey.
+GoldScout has no implemented AISP enrollment or provider integration. Never
+request banking credentials or attempt an account connection as a coverage test.
+TrueLayer is not currently a personal-project production route according to
+its published help; GoCardless's API shape is documented, but live account
+eligibility, current access availability and terms remain unverified. Neither
+is selected. For investments, compare
+providers only against the operator's actual existing accounts: Trading 212
+view-only scopes or IBKR Flex reporting may be evaluated if the investor already
+holds those accounts. Neither is a reason to migrate. There is no verified
+universal provider for all three portfolio locations. Public help documentation
+also shows periodic downloadable reports at Hargreaves Lansdown and Vanguard UK,
+but it does not establish a supported machine-readable investment-data contract.
+These are documentation-screen candidates, not account recommendations. No
+provider-specific export parser should be added until an existing account and a
+permitted, concrete export format are selected and checked locally.
 
 Before any adapter activation, the operator must confirm intended accounts,
 provider terms/retention rights, source completeness/latency and a **separate

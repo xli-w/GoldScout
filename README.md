@@ -89,8 +89,10 @@ orders or alter risk settings. The initial release supports advisory/shadow use 
 Reuse its source provenance, calendars, briefs and bounded provider infrastructure
 for [opt-in local portfolio awareness](docs/portfolio-automation.md), not as an
 unrestricted LLM-to-order connection. Explicit exposure mappings now support
-calendar alerts, dated briefs and review reminders without sending account data
-to AI. Sync remains provider discovery; no account provider is selected or connected.
+calendar alerts, dated briefs, review reminders and editable local thesis and
+calendar notes without sending account data to AI. Sync remains provider discovery;
+no provider has passed account-level
+permission/coverage checks or been connected.
 See the [portfolio-manager decision](docs/decisions/0004-core-dynamic-portfolio-manager.md)
 for the agreed direction and unchanged operational boundaries.
 

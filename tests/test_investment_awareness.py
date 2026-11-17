@@ -61,6 +61,29 @@ def evidence():
     }
 
 
+def thesis():
+    return {
+        "id": "long-term-case", "title": "Synthetic long-term case",
+        "account_id": "broker", "product_id": "equity",
+        "history": [
+            {"observed_at": iso(NOW - timedelta(days=1)), "status": "watch",
+             "thesis": "Initial hypothesis", "invalidation": "Evidence contradicts premise",
+             "evidence": "Operator note one"},
+            {"observed_at": iso(NOW), "status": "active",
+             "thesis": "Updated hypothesis", "invalidation": "Evidence contradicts premise",
+             "evidence": "Operator note two"},
+        ],
+    }
+
+
+def calendar_watch():
+    return {
+        "id": "uk-macro", "title": "Synthetic UK release", "account_id": "broker",
+        "product_id": "equity", "scheduled_on": "2026-12-17", "time_note": "Time not stated",
+        "status": "tentative", "observed_at": iso(NOW), "source": "Operator-checked calendar",
+    }
+
+
 class InvestmentAwarenessTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -139,6 +162,23 @@ class InvestmentAwarenessTests(unittest.TestCase):
         with self.assertRaises(InvestmentError):
             project_awareness(self.ledger, config, evidence(), NOW)
 
+    def test_profile_and_review_clocks_reject_submicrosecond_future_evidence(self):
+        config = awareness_profile()
+        config["observed_at"] = "2026-01-01T12:00:00.0000001Z"
+        with self.assertRaises(InvestmentError):
+            project_awareness(self.ledger, config, evidence(), NOW)
+        config = awareness_profile()
+        config["reviews"][0]["last_reviewed_at"] = "2026-01-01T12:00:00.0000001Z"
+        with self.assertRaises(InvestmentError):
+            project_awareness(self.ledger, config, evidence(), NOW)
+        config["reviews"][0]["last_reviewed_at"] = "2026-01-01T12:00:00,0000001+00:00"
+        with self.assertRaises(InvestmentError):
+            project_awareness(self.ledger, config, evidence(), NOW)
+        config["observed_at"] = "2026-01-01T12:00:00,000000+00:00"
+        config["reviews"][0]["last_reviewed_at"] = "2026-01-01T11:59:59,999999+00:00"
+        self.assertEqual(project_awareness(self.ledger, config, evidence(), NOW)
+                         ["reminders"][0]["status"], "upcoming")
+
     def test_review_boundaries_and_never_reviewed_are_not_approvals(self):
         config = awareness_profile()
         with self.assertRaises(InvestmentError):
@@ -151,6 +191,82 @@ class InvestmentAwarenessTests(unittest.TestCase):
         result = project_awareness(self.ledger, config, evidence(), NOW)
         self.assertEqual(result["reminders"][0]["status"], "never_reviewed")
         self.assertIsNone(result["reminders"][0]["due_at"])
+
+    def test_operator_thesis_history_is_dated_local_context_not_authority(self):
+        config = awareness_profile()
+        config["theses"] = [thesis()]
+        before = self.path.read_bytes()
+        result = project_awareness(self.ledger, config, evidence(), NOW, version=2)
+        self.assertEqual(result["theses"], config["theses"])
+        self.assertFalse(result["affects_trading"])
+        self.assertFalse(result["accounting_writes"])
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertNotIn("theses", project_awareness(self.ledger, awareness_profile(), evidence(), NOW))
+
+    def test_thesis_history_rejects_bad_binding_clocks_and_states(self):
+        config = awareness_profile()
+        config["theses"] = [thesis()]
+        config["observed_at"] = "2026-01-01T12:00:00.0000001Z"
+        with self.assertRaises(InvestmentError):
+            project_awareness(self.ledger, config, evidence(), NOW, version=2)
+        for change in ("foreign_account", "foreign_product", "future", "duplicate_time", "excess_precision",
+                       "null_time", "bad_status", "duplicate_id", "empty_history"):
+            config = awareness_profile()
+            item = thesis()
+            config["theses"] = [item]
+            if change == "foreign_account":
+                item["account_id"] = "foreign"
+            elif change == "foreign_product":
+                item["product_id"] = "foreign"
+            elif change == "future":
+                item["history"][-1]["observed_at"] = iso(NOW + timedelta(seconds=1))
+            elif change == "duplicate_time":
+                item["history"][-1]["observed_at"] = item["history"][0]["observed_at"]
+            elif change == "excess_precision":
+                item["history"][-1]["observed_at"] = "2026-01-01T12:00:00.0000001Z"
+            elif change == "null_time":
+                item["history"][0]["observed_at"] = None
+            elif change == "bad_status":
+                item["history"][-1]["status"] = "approved"
+            elif change == "duplicate_id":
+                config["theses"].append(thesis())
+            else:
+                item["history"] = []
+            with self.subTest(change=change), self.assertRaises(InvestmentError):
+                project_awareness(self.ledger, config, evidence(), NOW)
+
+    def test_operator_calendar_watch_is_local_unverified_and_does_not_create_coverage(self):
+        config = awareness_profile()
+        config["calendar_watch"] = [calendar_watch()]
+        data = evidence()
+        data["settings"] = IntelligenceSettings()
+        result = project_awareness(self.ledger, config, data, NOW, version=2)
+        self.assertEqual(result["calendar_watch"], config["calendar_watch"])
+        self.assertEqual(result["calendar_status"], "disabled")
+        self.assertEqual(result["alerts"], [])
+        self.assertFalse(result["affects_trading"])
+        self.assertFalse(result["accounting_writes"])
+
+    def test_calendar_evidence_invalid_unicode_fails_closed(self):
+        data = evidence()
+        current = data["calendar"]
+        data["calendar"] = CalendarSnapshot(current.revision, NOW, current.sources, (
+            replace(current.events[0], title="\ud800"),
+        ))
+        with self.assertRaises(InvestmentError):
+            project_awareness(self.ledger, awareness_profile(), data, NOW)
+
+    def test_operator_calendar_watch_rejects_invalid_dates_clocks_and_bindings(self):
+        for key, value in (("scheduled_on", "2026-02-30"), ("scheduled_on", "20261217"),
+                           ("observed_at", None), ("observed_at", "2026-01-01T12:00:00.0000001Z"),
+                           ("observed_at", iso(NOW + timedelta(seconds=1))),
+                           ("status", "confirmed"), ("product_id", "foreign")):
+            config = awareness_profile()
+            item = calendar_watch()
+            item[key] = value
+            config["calendar_watch"] = [item]
+            with self.subTest(key=key, value=value), self.assertRaises(InvestmentError):
+                project_awareness(self.ledger, config, evidence(), NOW)
 
     def test_dated_briefs_keep_sources_expiry_and_public_proxy_mapping(self):
         raw = (b"<rss version='2.0'><channel><item><title>Policy statement</title>"
@@ -245,26 +361,41 @@ class InvestmentAwarenessTests(unittest.TestCase):
         store.apply_pending(NOW)
         store.publish_calendar(calendar(), 1, NOW)
         config_path = Path(self.directory.name) / "awareness.json"
-        config_path.write_text(json.dumps(awareness_profile(store.database_id)), encoding="utf-8")
+        config = awareness_profile(store.database_id)
+        config["theses"] = [thesis()]
+        config["calendar_watch"] = [calendar_watch()]
+        config_path.write_text(json.dumps(config), encoding="utf-8")
         originals = {path: path.read_bytes() for path in (self.path, intelligence_path)}
-        expected = awareness_snapshot(self.path, intelligence_path, config_path, NOW)
+        expected = awareness_snapshot(self.path, intelligence_path, config_path, NOW, version=2)
+        legacy = awareness_snapshot(self.path, intelligence_path, config_path, NOW)
+        self.assertEqual(legacy["schema_version"], 1)
+        self.assertNotIn("theses", legacy)
+        self.assertNotIn("calendar_watch", legacy)
         output = io.StringIO()
         self.assertEqual(main(["awareness", "--database", str(self.path),
                                "--intelligence-database", str(intelligence_path),
-                               "--awareness-profile", str(config_path)],
+                               "--awareness-profile", str(config_path), "--schema-version", "2"],
                               stdout=output, now=NOW), 0)
         self.assertEqual(json.loads(output.getvalue()), expected)
         app = create_app(serve_frontend=False, clock=lambda: NOW, investment_database=self.path,
                          intelligence_database=intelligence_path, awareness_profile=config_path)
         with TestClient(app, base_url="http://127.0.0.1",
                         backend_options={"loop_factory": MemoryEventLoop}) as client:
-            response = client.get("/api/investment/v1/awareness")
+            self.assertEqual(client.get("/api/investment/v1/awareness").json(), legacy)
+            response = client.get("/api/investment/v2/awareness")
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json(), expected)
-            self.assertEqual(client.post("/api/investment/v1/awareness", json={},
-                                         headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+            self.assertEqual(response.json()["theses"][0]["history"], thesis()["history"])
+            self.assertEqual(response.json()["calendar_watch"], [calendar_watch()])
+            for version in (1, 2):
+                self.assertEqual(client.post(f"/api/investment/v{version}/awareness", json={},
+                                             headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+            self.assertEqual(client.get("/api/investment/v3/awareness").status_code, 404)
             with patch("investment.awareness.project_awareness", side_effect=InvestmentError("invalid")):
-                self.assertEqual(client.get("/api/investment/v1/awareness").status_code, 503)
+                self.assertEqual(client.get("/api/investment/v2/awareness").status_code, 503)
+            config["theses"][0]["history"][0]["thesis"] = "\ud800"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            self.assertEqual(client.get("/api/investment/v2/awareness").status_code, 503)
         for path, original in originals.items():
             self.assertEqual(path.read_bytes(), original)
         missing = Path(self.directory.name) / "missing.sqlite3"

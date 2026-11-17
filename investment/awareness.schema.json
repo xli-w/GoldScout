@@ -78,11 +78,47 @@
         "status": {"enum": ["due", "upcoming", "never_reviewed"]}
       }
     },
+    "thesisEntry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observed_at", "status", "thesis", "invalidation", "evidence"],
+      "properties": {
+        "observed_at": {"$ref": "#/$defs/time"},
+        "status": {"enum": ["watch", "active", "invalidated", "closed"]},
+        "thesis": {"$ref": "#/$defs/text"}, "invalidation": {"$ref": "#/$defs/text"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "thesis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "account_id", "product_id", "history"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"}, "title": {"$ref": "#/$defs/text"},
+        "account_id": {"$ref": "#/$defs/text"},
+        "product_id": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "history": {"type": "array", "minItems": 1, "maxItems": 50,
+          "items": {"$ref": "#/$defs/thesisEntry"}}
+      }
+    },
+    "calendarWatch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "account_id", "product_id", "scheduled_on", "time_note", "status", "observed_at", "source"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"}, "title": {"$ref": "#/$defs/text"},
+        "account_id": {"$ref": "#/$defs/text"},
+        "product_id": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "scheduled_on": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
+        "time_note": {"$ref": "#/$defs/text"},
+        "status": {"enum": ["scheduled", "tentative", "cancelled"]},
+        "observed_at": {"$ref": "#/$defs/time"}, "source": {"$ref": "#/$defs/text"}
+      }
+    },
     "report": {
       "type": "object", "additionalProperties": false,
+      "allOf": [{"if": {"properties": {"schema_version": {"const": 1}}},
+        "then": {"not": {"anyOf": [{"required": ["theses"]}, {"required": ["calendar_watch"]}]}}}],
       "required": ["enabled", "schema_version", "source_mode", "portfolio_id", "portfolio_revision", "intelligence_database_id", "settings_revision", "profile_hash", "profile_observed_at", "generated_at", "calendar_status", "calendar_available_at", "calendar_revision", "alerts", "briefs", "reminders", "warnings", "affects_trading", "accounting_writes"],
       "properties": {
-        "enabled": {"const": true}, "schema_version": {"const": 1}, "source_mode": {"const": "recorded"},
+        "enabled": {"const": true}, "schema_version": {"enum": [1, 2]}, "source_mode": {"const": "recorded"},
         "portfolio_id": {"$ref": "#/$defs/text"}, "portfolio_revision": {"type": "integer", "minimum": 0},
         "intelligence_database_id": {"$ref": "#/$defs/text"}, "settings_revision": {"type": "integer", "minimum": 0},
         "profile_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "profile_observed_at": {"$ref": "#/$defs/time"},
@@ -92,6 +128,8 @@
         "alerts": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/alert"}},
         "briefs": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/brief"}},
         "reminders": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/reminder"}},
+        "theses": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/thesis"}},
+        "calendar_watch": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/calendarWatch"}},
         "warnings": {"type": "array", "maxItems": 10000, "items": {"type": "string", "maxLength": 1000}},
         "affects_trading": {"const": false}, "accounting_writes": {"const": false}
       }

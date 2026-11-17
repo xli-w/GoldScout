@@ -620,6 +620,10 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(result["since_baseline_gain_gbp"], "100")
         self.assertEqual(result["twr_pct"], "10")
         self.assertEqual(result["max_drawdown_pct"], "0")
+        self.assertEqual(
+            [point["twr_pct"] for point in result["valuation_history"]],
+            ["0", "10", None, "10"],
+        )
 
     def test_failed_sqlite_commit_does_not_publish_opening_and_can_retry(self):
         initialize(self.database, profile(), NOW)

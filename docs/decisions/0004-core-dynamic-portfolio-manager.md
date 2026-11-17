@@ -43,7 +43,9 @@ operational safeguards.
   explicitly mapped exposures against existing public calendar/brief evidence
   and configured review reminders. It does not activate collection or AI, share
   account data with AI, or create a review log. Provider sync remains discovery
-  only; no provider/account is selected or connected.
+  only; Moneybox LISA and NatWest Digital Saver are public-research candidates,
+  but no sync provider has passed account-level permission/coverage checks or
+  been connected.
 - Build further observation/research automation; separately approved
   per-proposal execution may progress to revocable standing-policy execution. Standing
   authority binds account, products, strategy/policy version, funding, cost/risk

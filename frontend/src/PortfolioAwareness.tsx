@@ -4,8 +4,10 @@ import validate from "./awareness-validator.js";
 import { label, timestamp } from "./api";
 
 type Match = { account_id: string; product_id: string | null; roles: string[]; mapping_evidence: string };
+type ThesisEntry = { observed_at: string; status: "watch" | "active" | "invalidated" | "closed";
+  thesis: string; invalidation: string; evidence: string };
 type Awareness = {
-  enabled: true; portfolio_id: string; portfolio_revision: number; generated_at: string;
+  enabled: true; schema_version: 2; portfolio_id: string; portfolio_revision: number; generated_at: string;
   settings_revision: number; profile_observed_at: string; profile_hash: string;
   calendar_status: string; calendar_available_at: string | null; calendar_revision: number | null;
   alerts: { event_id: string; revision: number; source: string; source_url: string; title: string;
@@ -19,17 +21,55 @@ type Awareness = {
       published_at: string | null; received_at: string }[] }[];
   reminders: { id: string; title: string; last_reviewed_at: string | null; interval_days: number;
     evidence: string; due_at: string | null; status: string }[];
+  theses?: { id: string; title: string; account_id: string; product_id: string | null;
+    history: ThesisEntry[] }[];
+  calendar_watch?: { id: string; title: string; account_id: string; product_id: string | null;
+    scheduled_on: string | null; time_note: string; status: string; observed_at: string; source: string }[];
   warnings: string[];
 };
 
+function utcMicroseconds(value: string): bigint | null {
+  const parts = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z$/.exec(value);
+  if (!parts) return null;
+  const milliseconds = Date.parse(`${parts[1]}Z`);
+  if (!Number.isFinite(milliseconds)) return null;
+  return BigInt(milliseconds) * 1000n + BigInt((parts[2] ?? "").padEnd(6, "0"));
+}
+
+function validLocalClocks(value: Awareness): boolean {
+  if (!value.theses && !value.calendar_watch) return true;
+  const profile = utcMicroseconds(value.profile_observed_at), generated = utcMicroseconds(value.generated_at);
+  if (profile === null || generated === null || profile > generated) return false;
+  const thesisIds = new Set<string>();
+  for (const item of value.theses ?? []) {
+    if (thesisIds.has(item.id)) return false;
+    thesisIds.add(item.id);
+    let previous: bigint | null = null;
+    for (const entry of item.history) {
+      const observed = utcMicroseconds(entry.observed_at);
+      if (observed === null || observed > profile || (previous !== null && observed <= previous)) return false;
+      previous = observed;
+    }
+  }
+  const watchIds = new Set<string>();
+  return (value.calendar_watch ?? []).every(item => {
+    const observed = utcMicroseconds(item.observed_at);
+    if (watchIds.has(item.id)) return false;
+    watchIds.add(item.id);
+    return observed !== null && observed <= profile;
+  });
+}
+
 async function loadAwareness(signal: AbortSignal): Promise<Awareness | { enabled: false }> {
-  const response = await fetch("/api/investment/v1/awareness", {
+  const response = await fetch("/api/investment/v2/awareness", {
     signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]), cache: "no-store",
   });
   if (!response.ok) throw new Error("Portfolio awareness unavailable. Verify its local profile and evidence stores.");
   const value: unknown = await response.json();
   if (!validate(value)) throw new Error("Portfolio awareness response failed validation.");
-  return value as Awareness | { enabled: false };
+  const result = value as Awareness | { enabled: false };
+  if (result.enabled && (result.schema_version !== 2 || !validLocalClocks(result))) throw new Error("Portfolio awareness response failed validation.");
+  return result;
 }
 
 function Matches({ matches }: { matches: Match[] }) {
@@ -72,6 +112,16 @@ export function PortfolioAwareness({ portfolioId, revision }: { portfolioId: str
                 <a href={item.source_url} target="_blank" rel="noreferrer">Source: {item.source}</a>
                 <Matches matches={item.matches} />
               </details>)}
+              <h3>Operator calendar watch</h3>
+              <p>Manual, unverified notes may be stale; no automatic collection, reminders or source-coverage guarantee.
+                Dates are source-local, not inferred UTC times. Entries are not filtered by date or current holdings.</p>
+              {!data.calendar_watch?.length && <p>No operator calendar watch entries.</p>}
+              <ul>{data.calendar_watch?.map(item => <li key={item.id}>
+                <strong>{item.title} - {label(item.status)}</strong>; date {item.scheduled_on ?? "Unknown"};
+                {" "}{item.time_note}; observed {timestamp(item.observed_at)}.
+                {" "}Declared association: {item.account_id} / {item.product_id ?? "cash"}.
+                {" "}Source note: {item.source}
+              </li>)}</ul>
               <h3>Dated research briefs</h3>
               <p>Current means unexpired at the recorded settings and source observation, not verified truth or a live-market assessment. Expired and disabled briefs are historical context only.</p>
               {!data.briefs.length && <p>No matching briefs among the latest 20 stored briefs. Collection/AI may be disabled or evidence absent; nothing is generated by this page.</p>}
@@ -100,6 +150,20 @@ export function PortfolioAwareness({ portfolioId, revision }: { portfolioId: str
                 {" "}last reviewed {timestamp(item.last_reviewed_at, "Never recorded")}; every {item.interval_days} days.
                 {" "}{item.evidence}
               </li>)}</ul>
+              <h3>Operator thesis watch</h3>
+              <p>Locally maintained notes, not verified evidence, an immutable audit trail, a recommendation or trade approval.
+                Associations do not imply a current holding; entries are never sent to AI.</p>
+              {!data.theses?.length && <p>No theses configured.</p>}
+              {data.theses?.map(item => <details key={item.id}>
+                <summary>{item.title} - {label(item.history[item.history.length - 1].status)}</summary>
+                <p>Declared association: {item.account_id} / {item.product_id ?? "cash"}.</p>
+                {[...item.history].reverse().map(entry => <div key={entry.observed_at}>
+                  <h4>{entry.observed_at.includes(".") ? entry.observed_at : timestamp(entry.observed_at)} - {label(entry.status)}</h4>
+                  <p>Thesis: {entry.thesis}</p>
+                  <p>Invalidation: {entry.invalidation}</p>
+                  <p>Operator evidence note: {entry.evidence}</p>
+                </div>)}
+              </details>)}
               <details><summary>Local mapping provenance</summary><p>Profile SHA256: {data.profile_hash}</p></details>
             </>}
   </section>;

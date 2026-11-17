@@ -149,14 +149,16 @@ def create_app(database=None, scenario="healthy_recorded", clock=None, static_di
         except SchemaValidationError:
             return JSONResponse(status_code=409, content={"error": "investment_invalid", "message": "Investment report failed schema validation."})
 
-    @app.get("/api/investment/v1/awareness")
-    def investment_awareness():
+    @app.get("/api/investment/v{version}/awareness")
+    def investment_awareness(version: int):
+        if version not in (1, 2):
+            raise HTTPException(status_code=404)
         if awareness_profile is None:
             return {"enabled": False}
         from investment import InvestmentError
         from investment.awareness import awareness_snapshot
         try:
-            result = awareness_snapshot(investment_database, intelligence_database, awareness_profile, clock())
+            result = awareness_snapshot(investment_database, intelligence_database, awareness_profile, clock(), version)
             schema = json.loads((ROOT.parent / "investment" / "awareness.schema.json").read_text(encoding="utf-8"))
             Draft202012Validator(schema, format_checker=FormatChecker()).validate(result)
             return result

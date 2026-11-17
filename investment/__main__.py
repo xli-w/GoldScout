@@ -33,6 +33,8 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     awareness.add_argument("--database", required=True)
     awareness.add_argument("--intelligence-database", required=True)
     awareness.add_argument("--awareness-profile", required=True)
+    awareness.add_argument("--schema-version", type=int, choices=(1, 2), default=1,
+                           help="report version 2 includes operator thesis and calendar notes")
     reconcile = commands.add_parser("reconcile-preview", help="preview local staged observations; never writes")
     reconcile.add_argument("--database", required=True)
     reconcile.add_argument("--observations", required=True)
@@ -63,7 +65,7 @@ def main(argv=None, stdout=None, stderr=None, now=None):
         elif args.command == "awareness":
             from .awareness import awareness_snapshot
             value = awareness_snapshot(args.database, args.intelligence_database,
-                                       args.awareness_profile, requested_now)
+                                       args.awareness_profile, requested_now, args.schema_version)
         elif args.command == "reconcile-preview":
             from .reconciliation import preview_observations
             value = preview_observations(args.database, load_json(args.observations),

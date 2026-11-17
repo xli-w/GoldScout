@@ -32,6 +32,14 @@ def clock(value=None):
     return value.astimezone(timezone.utc)
 
 
+def explicit_clock(value):
+    if isinstance(value, datetime) and type(value) is not datetime:
+        raise InvestmentError("Datetime subclasses are not supported for explicit evidence clocks")
+    if value is None or isinstance(value, str) and re.search(r"[.,][0-9]{7}", value):
+        raise InvestmentError("An explicit UTC timestamp with at most microsecond precision is required")
+    return clock(value)
+
+
 def iso(value):
     return clock(value).isoformat().replace("+00:00", "Z")
 

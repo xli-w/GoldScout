@@ -17,7 +17,11 @@ adapter is available. A separate synthetic-only mechanics harness tests a narrow
 including unitized cash-funded withdrawals without liquidation and explicit
 distribution receivables across ex-open/pay-close boundaries; it is not an
 integrated historical product-performance simulator, research authorisation or
-broker adapter. Existing minute experiments still cannot answer this new
+broker adapter. Its fixture clocks must be explicit and no finer than
+microseconds; missing or higher-precision evidence is rejected rather than
+interpreted at a guessed or truncated time. It accepts ISO strings or standard
+Python `datetime` objects, not datetime subclasses that can hide precision.
+Existing minute experiments still cannot answer this new
 portfolio question.
 
 Continuation order: complete the external product/account, licensed-history and

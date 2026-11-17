@@ -10,7 +10,7 @@ test("portfolio awareness keeps matching local, shows evidence and fails closed 
   const matches = [{ account_id: "broker", product_id: "global-fund", roles: ["core"],
     mapping_evidence: "Operator-declared macro proxy; not fund look-through" }];
   const awareness = {
-    enabled: true, schema_version: 1, source_mode: "recorded", portfolio_id: investment.portfolio_id,
+    enabled: true, schema_version: 2, source_mode: "recorded", portfolio_id: investment.portfolio_id,
     portfolio_revision: investment.revision, intelligence_database_id: "synthetic-intelligence",
     settings_revision: 1, profile_hash: "a".repeat(64), profile_observed_at: at, generated_at: at,
     calendar_status: "available", calendar_available_at: at, calendar_revision: 1,
@@ -28,12 +28,22 @@ test("portfolio awareness keeps matching local, shows evidence and fails closed 
     }],
     reminders: [{ id: "review", title: "Portfolio mandate check", last_reviewed_at: null,
       interval_days: 30, evidence: "Operator-selected reminder only", due_at: null, status: "never_reviewed" }],
+    theses: [{ id: "case", title: "Synthetic long-term case", account_id: "broker", product_id: "global-fund",
+      history: [
+        { observed_at: "2025-12-31T12:00:00Z", status: "watch", thesis: "Initial hypothesis",
+          invalidation: "Evidence contradicts premise", evidence: "Operator note one" },
+        { observed_at: at, status: "active", thesis: "Updated hypothesis",
+          invalidation: "Evidence contradicts premise", evidence: "Operator note two" },
+      ] }],
+    calendar_watch: [{ id: "uk", title: "Synthetic UK release", account_id: "broker", product_id: "global-fund",
+      scheduled_on: "2026-12-17", time_note: "Time not stated", status: "tentative",
+      observed_at: at, source: "Operator-checked calendar" }],
     warnings: ["No complete UK/global source coverage is established."],
     affects_trading: false, accounting_writes: false,
   };
   let requests = 0;
   let unavailable = false;
-  await page.route("**/api/investment/v1/awareness", route => {
+  await page.route("**/api/investment/v2/awareness", route => {
     requests++;
     return route.fulfill(unavailable ? { status: 503, json: { error: "unavailable" } } : { json: awareness });
   });
@@ -53,10 +63,52 @@ test("portfolio awareness keeps matching local, shows evidence and fails closed 
   await expect(section.getByText("Unverified synthetic interpretation.")).toBeVisible();
   await expect(section.getByRole("link", { name: "Public statement" })).toHaveAttribute("href", "https://www.federalreserve.gov/");
   await expect(section.getByText(/Portfolio mandate check/)).toBeVisible();
+  await section.getByText("Synthetic long-term case - Active").click();
+  await expect(section.getByText("Thesis: Updated hypothesis")).toBeVisible();
+  await expect(section.getByText("Thesis: Initial hypothesis")).toBeVisible();
+  await expect(section.getByText("Operator evidence note: Operator note two")).toBeVisible();
+  const manualEvent = section.getByRole("listitem").filter({ hasText: "Synthetic UK release" });
+  await expect(manualEvent).toContainText("2026-12-17");
+  await expect(manualEvent).toContainText("Time not stated");
+  const history = structuredClone(awareness.theses[0].history);
+  for (const invalid of [
+    [history[1], history[0]],
+    [history[0], history[0]],
+    [history[0], { ...history[1], observed_at: "2026-01-01T12:00:00.000001Z" }],
+  ]) {
+    awareness.theses[0].history = invalid;
+    await section.getByRole("button", { name: "Refresh awareness" }).click();
+    await expect(section.getByRole("alert")).toHaveText("Portfolio awareness response failed validation.");
+    await expect(section.getByText("Updated hypothesis", { exact: false })).toHaveCount(0);
+  }
+  awareness.theses[0].history = history;
+  awareness.theses = [awareness.theses[0], { ...awareness.theses[0], history }];
+  await section.getByRole("button", { name: "Refresh awareness" }).click();
+  await expect(section.getByRole("alert")).toHaveText("Portfolio awareness response failed validation.");
+  awareness.theses = [awareness.theses[0]];
+  awareness.calendar_watch.push({ ...awareness.calendar_watch[0] });
+  await section.getByRole("button", { name: "Refresh awareness" }).click();
+  await expect(section.getByRole("alert")).toHaveText("Portfolio awareness response failed validation.");
+  awareness.calendar_watch.pop();
+  awareness.profile_observed_at = "2026-01-01T12:00:00.000002Z";
+  awareness.generated_at = awareness.profile_observed_at;
+  awareness.theses[0].history = [
+    { ...history[0], observed_at: "2026-01-01T12:00:00.000001Z" },
+    { ...history[1], observed_at: "2026-01-01T12:00:00.000002Z" },
+  ];
+  await section.getByRole("button", { name: "Refresh awareness" }).click();
+  await section.getByText("Synthetic long-term case - Active").click();
+  await expect(section.getByText(/2026-01-01T12:00:00.000001Z - Watch/)).toBeVisible();
+  awareness.profile_observed_at = at;
+  awareness.generated_at = at;
+  awareness.theses[0].history = history;
+  await section.getByRole("button", { name: "Refresh awareness" }).click();
+  await expect(section.getByText("Synthetic UK release", { exact: false })).toBeVisible();
   awareness.portfolio_revision++;
   await section.getByRole("button", { name: "Refresh awareness" }).click();
   await expect(section.getByRole("alert")).toContainText("Portfolio revision changed");
   await expect(section.getByText("Synthetic inflation release", { exact: false })).toHaveCount(0);
+  await expect(section.getByText("Updated hypothesis", { exact: false })).toHaveCount(0);
   awareness.portfolio_revision--;
   awareness.affects_trading = true;
   await section.getByRole("button", { name: "Refresh awareness" }).click();
@@ -177,10 +229,25 @@ test("opening records show since-baseline value without inventing lifetime gain"
         equity_gbp: "2000", capital_basis_gbp: "2000", net_contributions_gbp: "0",
         gain_since_baseline_gbp: "0", twr_pct: "0", max_drawdown_pct: "0",
         gap_reason: null },
+      { timestamp: "2026-01-01T18:00:00Z", source_available_at: "2026-01-01T18:00:00Z",
+        as_of: "2026-01-01T18:00:00Z", complete: true, equity_gbp: "2100",
+        capital_basis_gbp: "2000", net_contributions_gbp: "0",
+        gain_since_baseline_gbp: "100", twr_pct: "5", max_drawdown_pct: "0",
+        gap_reason: null },
       { timestamp: "2026-01-02T12:00:00Z", source_available_at: "2026-01-02T12:00:00Z",
         as_of: null, complete: false, equity_gbp: null, capital_basis_gbp: null,
         net_contributions_gbp: null, gain_since_baseline_gbp: null, twr_pct: null,
         max_drawdown_pct: null, gap_reason: "Incomplete synthetic valuation." },
+      { timestamp: "2026-01-03T12:00:00Z", source_available_at: "2026-01-03T12:00:00Z",
+        as_of: "2026-01-03T12:00:00Z", complete: true, equity_gbp: "1920",
+        capital_basis_gbp: "2000", net_contributions_gbp: "0",
+        gain_since_baseline_gbp: "-80", twr_pct: "-4", max_drawdown_pct: "8.57",
+        gap_reason: null },
+      { timestamp: "2026-01-04T12:00:00Z", source_available_at: "2026-01-04T12:00:00Z",
+        as_of: "2026-01-04T12:00:00Z", complete: true, equity_gbp: "2020",
+        capital_basis_gbp: "2100", net_contributions_gbp: "100",
+        gain_since_baseline_gbp: "-80", twr_pct: null, max_drawdown_pct: null,
+        gap_reason: null },
     ],
     accounts: [{ id: "bank", name: "Savings", kind: "deposit", cash_gbp: "1000",
       cash_observation: { balance_gbp: "999", difference_gbp: "-1", timestamp: at,
@@ -248,6 +315,116 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByRole("heading", { name: "Recorded growth history" })).toBeVisible();
   await expect(page.getByText("Gap: Incomplete synthetic valuation.")).toBeVisible();
   await expect(page.getByText("Only recorded valuation event clocks are shown. Lines connect observations; no intermediate values are inferred. Incomplete clocks remain gaps.")).toBeVisible();
+  const returnChart = page.getByRole("img", { name: "Time-weighted return since baseline; unavailable returns are gaps" });
+  await expect(returnChart).toBeVisible();
+  await expect(returnChart.locator("circle")).toHaveCount(3);
+  await expect(returnChart.locator("polyline")).toHaveCount(1);
+  await expect(returnChart.locator(".return-chart-gap")).toHaveCount(2);
+  await expect(page.getByLabel("Recorded growth history").getByRole("columnheader", { name: "Maximum drawdown" })).toBeVisible();
+  await expect(page.getByLabel("Recorded growth history").getByRole("row").nth(2)).toContainText("8.57%");
+  const historyTable = page.getByLabel("Recorded growth history");
+  await expect(historyTable.getByRole("columnheader", { name: "Return since previous clock" })).toBeVisible();
+  await expect(historyTable.getByRole("row").nth(4).getByRole("cell").nth(7)).toHaveText("5.00%From 2026-01-01T12:00:00Z");
+  await expect(historyTable.getByRole("row").nth(2).getByRole("cell").nth(7)).toHaveText("Unavailable");
+  await expect(historyTable.getByRole("row").nth(5).getByRole("cell").nth(7)).toHaveText("Unavailable");
+  const history = report.valuation_history;
+  report.valuation_history = history.map((point, index) => ({
+    ...point, twr_pct: index === 0 ? "100" : index === 1 ? "110" : point.twr_pct,
+  }));
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(historyTable.getByRole("row").nth(4).getByRole("cell").nth(7)).toHaveText("5.00%From 2026-01-01T12:00:00Z");
+  report.valuation_history = history.map((point, index) => ({
+    ...point, twr_pct: index === 0 ? "-100" : index === 1 ? "0" : point.twr_pct,
+  }));
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(historyTable.getByRole("row").nth(4).getByRole("cell").nth(7)).toHaveText("Unavailable");
+  report.valuation_history = history.map((point, index) => ({
+    ...point, twr_pct: index === 0 ? "0" : index === 1 ? "-100" : point.twr_pct,
+  }));
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(historyTable.getByRole("row").nth(4).getByRole("cell").nth(7)).toHaveText("-100.00%From 2026-01-01T12:00:00Z");
+  report.valuation_history = ["0", "10", null, "10"].map((twr, index) => {
+    const time = new Date(Date.UTC(2026, 0, index + 1, 12)).toISOString();
+    return { ...history[0], timestamp: time, source_available_at: time, as_of: time,
+      equity_gbp: index === 2 ? "0" : "1000", twr_pct: twr,
+      max_drawdown_pct: twr === null ? null : "0" };
+  });
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(historyTable.getByRole("row").nth(1).getByRole("cell").nth(7)).toHaveText("Unavailable");
+  await expect(historyTable.getByRole("row").nth(2).getByRole("cell").nth(7)).toHaveText("Unavailable");
+  await expect(historyTable.getByRole("row").nth(3).getByRole("cell").nth(7))
+    .toHaveText("10.00%From 2026-01-01T12:00:00.000Z");
+  report.valuation_history = Array.from({ length: 21 }, (_, index) => {
+    const time = new Date(Date.UTC(2026, 0, 1, index)).toISOString();
+    return { ...history[0], timestamp: time, source_available_at: time, as_of: time,
+      twr_pct: String(index) };
+  });
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(historyTable.getByRole("row")).toHaveCount(21);
+  await expect(historyTable.getByRole("row").nth(20).getByRole("cell").nth(7))
+    .toHaveText("1.00%From 2026-01-01T00:00:00.000Z");
+  const preciseReturns = ["1", "1.00000000000000000001", null,
+    "1.00000000000000000002", "1.00000000000000000003"];
+  report.valuation_history = history.map((point, index) => {
+    const time = `2026-01-03T12:00:00.10000${index + 1}Z`;
+    return { ...point, timestamp: time, source_available_at: time,
+      as_of: point.complete ? time : null, twr_pct: preciseReturns[index] };
+  });
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(returnChart.locator("polyline")).toHaveCount(2);
+  const preciseChart = await returnChart.evaluate(svg => ({
+    circles: [...svg.querySelectorAll("circle")].map(circle => [Number(circle.getAttribute("cx")), Number(circle.getAttribute("cy"))]),
+    gap: Number(svg.querySelector(".return-chart-gap").getAttribute("x1")),
+    lines: [...svg.querySelectorAll("polyline")].map(line => line.getAttribute("points")),
+  }));
+  expect(preciseChart.circles.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y))).toBeTruthy();
+  expect(new Set(preciseChart.circles.map(([x]) => x)).size).toBe(4);
+  expect(preciseChart.circles[1][0]).toBeLessThan(preciseChart.gap);
+  expect(preciseChart.circles[2][0]).toBeGreaterThan(preciseChart.gap);
+  expect(preciseChart.lines.every(points => !points.includes("NaN") && !points.includes("Infinity"))).toBeTruthy();
+  await expect(page.getByLabel("Recorded growth history")).toContainText("2026-01-03T12:00:00.100001Z");
+  const closeTimes = ["2026-01-01T00:00:00Z", "2026-01-01T23:59:59Z",
+    "2026-01-02T00:00:00Z", "2026-01-02T00:00:01Z", "2026-01-03T00:00:00Z"];
+  report.valuation_history = history.map((point, index) => {
+    const time = closeTimes[index];
+    return { ...point, timestamp: time, source_available_at: time,
+      as_of: point.complete ? time : null, twr_pct: point.complete ? "1" : null };
+  });
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(returnChart.locator("polyline")).toHaveCount(2);
+  const renderedGap = await returnChart.evaluate(async svg => {
+    const clone = svg.cloneNode(true);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.querySelectorAll(".return-chart-gap").forEach(line => line.remove());
+    const point = clone.querySelectorAll("circle")[1];
+    const x = Math.round(Number(point.getAttribute("cx")));
+    const y = Math.round(Number(point.getAttribute("cy")));
+    const sample = async () => {
+      const image = new Image();
+      const source = new XMLSerializer().serializeToString(clone);
+      await new Promise((resolve, reject) => {
+        image.onload = resolve; image.onerror = reject;
+        image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = 800; canvas.height = 260;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0);
+      return [...context.getImageData(x, y, 1, 1).data];
+    };
+    const masked = await sample();
+    clone.querySelector("g[mask]").removeAttribute("mask");
+    return { masked, unmasked: await sample() };
+  });
+  expect(renderedGap.unmasked.slice(0, 3)).toEqual([33, 116, 95]);
+  expect(renderedGap.masked).not.toEqual(renderedGap.unmasked);
+  report.valuation_history = history.map(point => ({ ...point, twr_pct: null, max_drawdown_pct: null }));
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(page.getByText("No time-weighted return is available in the recent history.")).toBeVisible();
+  await expect(returnChart).toHaveCount(0);
+  report.valuation_history = history;
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(returnChart).toBeVisible();
   const attribution = page.getByRole("region", { name: "Recorded fees and income" });
   await expect(attribution.getByText("Recorded transaction fees")).toBeVisible();
   await expect(attribution.getByText("Recorded interest")).toBeVisible();

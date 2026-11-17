@@ -65,8 +65,10 @@ The separate [campaign dataset tools](campaign-dataset.md) validate/snapshot use
 Use the [intelligence guide](intelligence.md), [decision](decisions/0002-market-intelligence.md) and [scoped checklist](../.github/instructions/market-intelligence.instructions.md) for that separate development stream. Advisory/shadow decisions have no trading authority. The initial release implements opt-in feeds, AI adapters, authenticated analysis-only controls and an asynchronous bot observer. Requested, service-applied and bot-observed settings remain distinct; unverified provider behavior and proposed extensions are not established capabilities. Initialization, service startup and external calls are operational actions, not routine development checks. News/LLM trading signals remain excluded from the GBP campaign.
 AI/calendar-derived trading features and experiment admission remain planned.
 The optional [local awareness projection](portfolio-automation.md) now supports
-explicit exposure matching, existing dated briefs and operator-configured
-reminders without changing collection, AI or trading authority. Provider sync
+explicit exposure matching, existing dated briefs, operator-configured
+reminders, editable thesis history and manual calendar watch notes without
+changing collection, AI or trading authority. Notes are not an immutable
+journal or automatic feed. Provider sync
 remains discovery only. A separate local-file observation preview compares
 operator-staged GBP cash/holdings with a pinned v2 revision; it does not write
 the journal or automatically resolve discrepancies. Tests use synthetic
