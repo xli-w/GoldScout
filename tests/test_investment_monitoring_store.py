@@ -52,6 +52,23 @@ class MonitoringStoreTests(unittest.TestCase):
         self.assertEqual(len(reopened["instance_id"]), 32)
         self.assertEqual(reopened["revision"], 2)
 
+    def test_dashboard_publication_can_pin_cache_instance_and_revision(self):
+        identity = read_cache(self.path, self.profile, NOW)
+        value = attempt()
+        with self.assertRaisesRegex(InvestmentError, "instance changed"):
+            append_attempt(self.path, self.profile, value, NOW,
+                           expected_instance_id="0" * 32, expected_revision=0)
+        with self.assertRaisesRegex(InvestmentError, "revision changed"):
+            append_attempt(self.path, self.profile, value, NOW,
+                           expected_instance_id=identity["instance_id"], expected_revision=1)
+        self.assertEqual(append_attempt(
+            self.path, self.profile, value, NOW,
+            expected_instance_id=identity["instance_id"], expected_revision=0), 1)
+        self.assertEqual(append_attempt(
+            self.path, self.profile, value, NOW,
+            expected_instance_id=identity["instance_id"], expected_revision=0), 1)
+        self.assertEqual(read_cache(self.path, self.profile, NOW)["revision"], 1)
+
     def test_reader_does_not_create_or_repair_foreign_or_missing_stores(self):
         missing = self.path.with_name("missing.sqlite3")
         with self.assertRaises(InvestmentError):

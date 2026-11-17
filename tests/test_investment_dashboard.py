@@ -30,6 +30,33 @@ class InvestmentDashboardTests(unittest.TestCase):
         return TestClient(create_app(serve_frontend=False, clock=lambda: self.now, **options),
                           base_url="http://127.0.0.1", backend_options={"loop_factory": MemoryEventLoop})
 
+    def monitoring_workflow_stores(self, profile_observed_at=None):
+        import json
+        from investment.monitoring_reviews import (
+            initialize_review_store, monitoring_cache_binding,
+        )
+        from investment.monitoring_store import initialize_cache, read_cache
+        from investment.store import canonical, digest
+        from test_investment_monitoring import monitoring_profile
+
+        self.now = OPENING_NOW + timedelta(days=1)
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        monitoring = monitoring_profile(profile())
+        if profile_observed_at is not None:
+            monitoring["observed_at"] = profile_observed_at.isoformat().replace("+00:00", "Z")
+        profile_path = self.path.with_name("monitoring.json")
+        cache_path = self.path.with_name("monitoring-cache.sqlite3")
+        reviews_path = self.path.with_name("monitoring-reviews.sqlite3")
+        profile_path.write_text(json.dumps(monitoring), encoding="utf-8")
+        initialize_cache(cache_path, monitoring, 86400)
+        cache = read_cache(cache_path, monitoring, self.now)
+        profile_hash = digest(canonical(monitoring))
+        binding = monitoring_cache_binding(cache_path, cache["instance_id"])
+        initialize_review_store(
+            reviews_path, profile()["portfolio_id"], profile_hash, binding)
+        return profile_path, cache_path, reviews_path, monitoring
+
     def test_monitoring_demo_disabled_and_recorded_reads_preserve_journal(self):
         import json
         from test_investment_monitoring import monitoring_profile, assignments
@@ -541,6 +568,236 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(client.post("/api/investment/v1/snapshot", json={},
                                          headers={"Origin": "http://127.0.0.1"}).status_code, 405)
         self.assertEqual(self.path.read_bytes(), original)
+
+    def test_dashboard_review_inbox_is_read_only_until_explicit_authenticated_sync(self):
+        from investment.monitoring_reviews import review_inbox
+
+        profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores()
+        journal_before = self.path.read_bytes()
+        review_before = reviews_path.read_bytes()
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path) as client:
+            response = client.get("/api/investment/v1/monitoring/reviews")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json()["enabled"])
+            self.assertFalse(response.json()["sync_current"])
+            self.assertEqual(response.json()["cases"], [])
+            self.assertEqual(client.post(
+                "/api/investment/v1/monitoring-workflow/action", json={},
+                headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+        self.assertEqual(self.path.read_bytes(), journal_before)
+        self.assertEqual(reviews_path.read_bytes(), review_before)
+        self.assertEqual(review_inbox(reviews_path)["revision"], 0)
+
+    def test_authenticated_review_actions_require_current_sync_and_are_idempotent(self):
+        from investment.monitoring_reviews import review_inbox
+        from investment.store import read as read_journal
+        from test_investment_opening import cash_observation
+
+        profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores()
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            self.assertTrue(session["enabled"])
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            self.assertEqual(client.post(
+                "/api/investment/v1/monitoring-workflow/action", json={},
+                headers=headers).status_code, 403)
+            login = client.post(
+                "/api/investment/v1/monitoring-workflow/login",
+                json={"password": "monitoring-workflow-secret"}, headers=headers)
+            self.assertEqual(login.status_code, 200, login.text)
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers["X-CSRF-Token"] = session["csrf"]
+            no_csrf = client.post(
+                "/api/investment/v1/monitoring-workflow/sync", json={},
+                headers={"Origin": "http://127.0.0.1"})
+            self.assertEqual(no_csrf.status_code, 403)
+            foreign = client.post(
+                "/api/investment/v1/monitoring-workflow/sync", json={},
+                headers={"Origin": "https://foreign.invalid",
+                         "X-CSRF-Token": session["csrf"]})
+            self.assertEqual(foreign.status_code, 403)
+            synced = client.post(
+                "/api/investment/v1/monitoring-workflow/sync", json={}, headers=headers)
+            self.assertEqual(synced.status_code, 200, synced.text)
+            inbox = client.get("/api/investment/v1/monitoring/reviews").json()
+            self.assertTrue(inbox["sync_current"])
+            case = next(item for item in inbox["cases"] if item["lifecycle"] == "active")
+            action_payload = {
+                "case_id": case["case_id"], "request_id": "dashboard-action-1",
+                "expected_revision": inbox["revision"], "action": "acknowledged",
+                "note": "Checked local source date",
+            }
+            action = client.post(
+                "/api/investment/v1/monitoring-workflow/action",
+                json=action_payload, headers=headers)
+            self.assertEqual(action.status_code, 200, action.text)
+            duplicate = client.post(
+                "/api/investment/v1/monitoring-workflow/action",
+                json=action_payload, headers=headers)
+            self.assertEqual(duplicate.status_code, 200, duplicate.text)
+            self.assertTrue(duplicate.json()["duplicate"])
+            before_revision = review_inbox(reviews_path)["revision"]
+            import_events(self.path, [cash_observation(
+                timestamp=OPENING_NOW, available_at=OPENING_NOW,
+                identifier="later-dashboard-observation")], self.now)
+            stale = client.get("/api/investment/v1/monitoring/reviews").json()
+            self.assertFalse(stale["sync_current"])
+            action_payload.update(request_id="dashboard-stale-action",
+                                  expected_revision=stale["revision"])
+            rejected = client.post(
+                "/api/investment/v1/monitoring-workflow/action",
+                json=action_payload, headers=headers)
+            self.assertEqual(rejected.status_code, 409)
+            self.assertEqual(rejected.json()["error"], "stale_review_sync")
+            self.assertEqual(review_inbox(reviews_path)["revision"], before_revision)
+            self.assertGreater(read_journal(self.path, self.now).revision, 1)
+
+    def test_manual_observation_requires_preview_and_stages_only_monitoring_cache(self):
+        from investment.monitoring_store import read_cache
+
+        profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+        original_journal = self.path.read_bytes()
+        observation = {
+            "id": "manual-dashboard-observation", "account_id": "broker",
+            "provider": "etoro", "observed_at": (OPENING_NOW + timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+            "available_at": (OPENING_NOW + timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+            "currency": "GBP", "cash": "50",
+            "holdings": [{"source_product": "local-export-fund", "quantity": "2"}],
+            "coverage": "partial", "evidence": "Operator-normalized local test evidence",
+        }
+        request_payload = {
+            "request_id": "manual-attempt-1",
+            "mapping_observed_at": OPENING_NOW.isoformat().replace("+00:00", "Z"),
+            "observation": observation,
+        }
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            self.assertEqual(client.post(
+                "/api/investment/v1/monitoring-workflow/login",
+                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers["X-CSRF-Token"] = session["csrf"]
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json=request_payload, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            preview_body = preview.json()
+            self.assertEqual(preview_body["stages_only_to"], "monitoring_cache")
+            self.assertFalse(preview_body["investment_journal_changed"])
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 0)
+            self.assertEqual(self.path.read_bytes(), original_journal)
+            confirmed = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview_body["preview_id"]}, headers=headers)
+            self.assertEqual(confirmed.status_code, 200, confirmed.text)
+            self.assertEqual(confirmed.json()["cache_revision"], 1)
+            self.assertFalse(confirmed.json()["investment_journal_changed"])
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 1)
+            self.assertEqual(self.path.read_bytes(), original_journal)
+            retried = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview_body["preview_id"]}, headers=headers)
+            self.assertEqual(retried.status_code, 200, retried.text)
+            self.assertEqual(retried.json(), confirmed.json())
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_password="monitoring-workflow-secret") as restarted:
+            session = restarted.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            self.assertEqual(restarted.post(
+                "/api/investment/v1/monitoring-workflow/login",
+                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
+            session = restarted.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers["X-CSRF-Token"] = session["csrf"]
+            retry_preview = restarted.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json=request_payload, headers=headers)
+            self.assertEqual(retry_preview.status_code, 200, retry_preview.text)
+            self.assertTrue(retry_preview.json()["already_staged"])
+            retry_confirmation = restarted.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": retry_preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(retry_confirmation.status_code, 200, retry_confirmation.text)
+            self.assertEqual(retry_confirmation.json()["cache_revision"], 1)
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 1)
+        self.assertEqual(self.path.read_bytes(), original_journal)
+
+    def test_manual_observation_preview_does_not_backdate_profile_mapping(self):
+        profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores(
+            OPENING_NOW + timedelta(minutes=10))
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            self.assertEqual(client.post(
+                "/api/investment/v1/monitoring-workflow/login",
+                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers["X-CSRF-Token"] = session["csrf"]
+            observation = {
+                "id": "mapping-time-observation", "account_id": "broker",
+                "provider": "etoro",
+                "observed_at": (OPENING_NOW + timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+                "available_at": (OPENING_NOW + timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+                "currency": "GBP", "cash": "50", "holdings": [],
+                "coverage": "partial", "evidence": "Synthetic local evidence",
+            }
+            response = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "mapping-time-attempt",
+                      "mapping_observed_at": OPENING_NOW.isoformat().replace("+00:00", "Z"),
+                      "observation": observation}, headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            compared = response.json()["reconciliation"]["accounts"][0]
+            self.assertEqual(
+                compared["comparison_unavailable_reason"],
+                "mapping_not_available_at_observation")
+
+    def test_manual_observation_confirmation_rejects_stale_journal_revision(self):
+        from investment.monitoring_store import read_cache
+        from test_investment_opening import cash_observation
+
+        profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_password="monitoring-workflow-secret") as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            self.assertEqual(client.post(
+                "/api/investment/v1/monitoring-workflow/login",
+                json={"password": "monitoring-workflow-secret"}, headers=headers).status_code, 200)
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers["X-CSRF-Token"] = session["csrf"]
+            observation = {
+                "id": "stale-preview-observation", "account_id": "broker",
+                "provider": "etoro",
+                "observed_at": (OPENING_NOW + timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+                "available_at": (OPENING_NOW + timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+                "currency": "GBP", "cash": "50", "holdings": [],
+                "coverage": "partial", "evidence": "Synthetic local evidence",
+            }
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "stale-preview-attempt",
+                      "mapping_observed_at": OPENING_NOW.isoformat().replace("+00:00", "Z"),
+                      "observation": observation}, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            import_events(self.path, [cash_observation(
+                timestamp=OPENING_NOW, available_at=OPENING_NOW,
+                identifier="journal-changed-after-preview")], self.now)
+            rejected = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(rejected.status_code, 409)
+            self.assertEqual(rejected.json()["error"], "stale_observation_preview")
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 0)
 
     def test_legacy_source_does_not_implicitly_supply_investment_records(self):
         with self.client(database=self.path) as client:

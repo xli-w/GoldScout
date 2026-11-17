@@ -77,10 +77,21 @@
 .recording-event summary { padding: 9px 12px; cursor: pointer; font-size: 12px; color: var(--ink); }
 .recording-event pre { max-height: 240px; overflow: auto; margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .recording-preview button + button { margin-left: 8px; }
+.workflow-action-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 10px; }
+.workflow-action-form label { display: grid; gap: 5px; font-size: 11px; color: var(--muted); }
+.workflow-action-form input, .workflow-action-form select { min-width: 150px; padding: 8px; border: 1px solid var(--line); border-radius: 3px; }
+.workflow-action-form button, .monitoring-workflow > .history-group > button,
+.observation-preview button { min-height: 36px; border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; background: var(--surface); color: var(--ink); }
+.review-case { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding-block: 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.review-case p { margin-block: 7px; }
+.review-case small { color: var(--muted); }
+.observation-preview { margin-top: 16px; }
+.observation-preview pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
   .recording-form { grid-template-columns: 1fr; }
   .recording-form fieldset > label { grid-template-columns: 1fr; gap: 6px; }
   .recording-row { grid-template-columns: 1fr 1fr; }
+  .review-case { grid-template-columns: 1fr; }
 }
 .history-group h3 { margin: 0; font-size: 15px; }
 .record-id { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; font: 10px "IBM Plex Mono", monospace; color: var(--muted); margin-top: 4px; }

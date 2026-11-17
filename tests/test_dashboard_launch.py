@@ -151,7 +151,8 @@ class DashboardLaunchTests(unittest.TestCase):
                                         intelligence_database=None, intelligence_demo=False,
                                         analysis_password=None, analysis_profiles=(), investment_database=None,
                                         investment_recording_password=None, awareness_profile=None,
-                                        monitoring_profile=None, monitoring_cache=None)
+                                        monitoring_profile=None, monitoring_cache=None,
+                                        monitoring_reviews=None, monitoring_workflow_password=None)
         server.assert_called_once_with("synthetic-app", host="127.0.0.1", port=8766, proxy_headers=False, access_log=False)
 
     def test_invalid_modes_and_ports_fail_before_runtime_imports(self):
@@ -171,6 +172,24 @@ class DashboardLaunchTests(unittest.TestCase):
         self.assertEqual(factory.call_args.kwargs["investment_database"], self.root / "investment.sqlite3")
         self.assertIsNone(factory.call_args.kwargs["database"])
         self.assertIn("/investment", output.getvalue())
+        self.assertFalse((self.root / "investment.sqlite3").exists())
+
+    def test_monitoring_workflow_cli_requires_separate_review_store_and_password(self):
+        server = Mock()
+        factory = Mock(return_value="workflow-app")
+        args = ["--investment-database", str(self.root / "investment.sqlite3"),
+                "--monitoring-profile", str(self.root / "monitoring.json"),
+                "--monitoring-reviews", str(self.root / "reviews.sqlite3"),
+                "--monitoring-workflow", "--api-only"]
+        with patch.dict(sys.modules, {"uvicorn": SimpleNamespace(run=server),
+                                     "dashboard.app": SimpleNamespace(create_app=factory)}):
+            with patch("dashboard.__main__.getpass.getpass",
+                       return_value="separate-monitoring-passphrase"), redirect_stdout(io.StringIO()):
+                main(args)
+        self.assertEqual(factory.call_args.kwargs["monitoring_reviews"], self.root / "reviews.sqlite3")
+        self.assertEqual(factory.call_args.kwargs["monitoring_workflow_password"],
+                         "separate-monitoring-passphrase")
+        self.assertIsNone(factory.call_args.kwargs["investment_recording_password"])
         self.assertFalse((self.root / "investment.sqlite3").exists())
 
 

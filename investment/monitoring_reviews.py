@@ -172,6 +172,15 @@ def _read_identity(connection):
     return value
 
 
+def _check_expected_identity(identity, expected_identity):
+    if expected_identity is None:
+        return
+    if (type(expected_identity) is not dict
+            or set(expected_identity) != {"portfolio_id", "profile_hash", "cache_binding"}
+            or any(identity[key] != expected_identity[key] for key in expected_identity)):
+        raise InvestmentError("Review store is bound to another portfolio, profile or cache")
+
+
 def _validate_store(connection, identity):
     cases = connection.execute(
         "SELECT case_id,finding_key,generation,finding_id,fingerprint,payload,lifecycle,"
@@ -422,10 +431,11 @@ def _active_count(connection):
         "SELECT COUNT(*) FROM review_cases WHERE lifecycle='active'").fetchone()[0]
 
 
-def review_inbox(path):
+def review_inbox(path, expected_identity=None):
     """Read the explicit review store without creating or changing it."""
     with _connection(path) as connection:
         identity = _read_identity(connection)
+        _check_expected_identity(identity, expected_identity)
         _validate_store(connection, identity)
         cases = connection.execute(
             "SELECT c.case_id,c.finding_id,c.payload,c.lifecycle,c.first_seen_at,c.last_seen_at,"
@@ -454,7 +464,24 @@ def review_inbox(path):
         }
 
 
-def update_review(path, case_id, request_id, expected_revision, action, note, now):
+def review_sync_is_current(path, report, portfolio_id, profile_hash, now,
+                           cache_binding=None):
+    """Return whether the latest explicit inbox sync matches the current report."""
+    now = explicit_clock(now)
+    current = _validated_report(report, portfolio_id, profile_hash, now)
+    if (cache_binding is None) != (current["cache_revision"] is None):
+        raise InvestmentError("Monitoring report does not match the selected cache binding")
+    expected = {"portfolio_id": portfolio_id, "profile_hash": profile_hash,
+                "cache_binding": cache_binding}
+    with _connection(path) as connection:
+        identity = _read_identity(connection)
+        _check_expected_identity(identity, expected)
+        _validate_store(connection, identity)
+        return identity["last_sync_hash"] == current["report_hash"]
+
+
+def update_review(path, case_id, request_id, expected_revision, action, note, now,
+                  expected_identity=None):
     """Append a revision-bound workflow action for an active finding."""
     text(case_id)
     text(request_id)
@@ -468,6 +495,7 @@ def update_review(path, case_id, request_id, expected_revision, action, note, no
         raise InvestmentError("Expected review revision must be a nonnegative integer")
     with _connection(path, write=True) as connection:
         identity = _read_identity(connection)
+        _check_expected_identity(identity, expected_identity)
         _validate_store(connection, identity)
         request = connection.execute(
             "SELECT revision,case_id,action,action_at,note FROM review_actions WHERE request_id=?",

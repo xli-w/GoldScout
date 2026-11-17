@@ -16,7 +16,7 @@ from investment.core import iso
 from investment.monitoring import project
 from investment.monitoring_reviews import (
     initialize_review_store, monitoring_cache_binding, review_inbox,
-    sync_review_findings, update_review,
+    review_sync_is_current, sync_review_findings, update_review,
 )
 from investment.monitoring_store import initialize_cache, read_cache
 from investment.store import canonical, digest, import_events, initialize, read
@@ -76,6 +76,26 @@ class MonitoringReviewTests(unittest.TestCase):
             self.assertEqual(len(case["finding"]["evidence_sha256"]), 64)
         self.assertNotIn(b"synthetic mapping evidence", self.reviews.read_bytes())
         self.assertFalse(any(case["review_status"] == "resolved" for case in inbox["cases"]))
+
+    def test_actions_require_latest_sync_to_match_current_report_and_exact_binding(self):
+        identity = {"portfolio_id": self.spec["portfolio_id"],
+                    "profile_hash": self.profile_hash, "cache_binding": None}
+        self.assertFalse(review_sync_is_current(
+            self.reviews, self.report, self.spec["portfolio_id"],
+            self.profile_hash, NOW, None))
+        self.sync()
+        self.assertTrue(review_sync_is_current(
+            self.reviews, self.report, self.spec["portfolio_id"],
+            self.profile_hash, NOW, None))
+        changed = deepcopy(self.report)
+        changed["portfolio_revision"] += 1
+        self.assertFalse(review_sync_is_current(
+            self.reviews, changed, self.spec["portfolio_id"],
+            self.profile_hash, NOW, None))
+        with self.assertRaisesRegex(InvestmentError, "bound to another"):
+            review_inbox(self.reviews, {
+                **identity, "profile_hash": "f" * 64,
+            })
 
     def test_actions_are_idempotent_revision_bound_and_never_resolve(self):
         result = self.sync()

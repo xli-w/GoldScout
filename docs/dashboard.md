@@ -45,6 +45,16 @@ See the [investment guide](investment.md#version-2-opening-evidence) for
 supported records and correction limits. Without this flag, all dashboard
 investment routes remain read-only.
 
+The local monitoring inbox can be exposed read-only by selecting the existing
+explicitly initialized review store with `--monitoring-reviews`. Dashboard review
+actions and manual observation staging are a distinct opt-in:
+`--monitoring-workflow` prompts for a separate password and requires that review
+store. It is not coupled to investment recording. Actions require a current
+inbox sync. Observation staging additionally requires an identified initialized
+`--monitoring-cache`, an explicit GBP reconciliation preview and a second
+confirmation; only the cache is appended, never the investment journal.
+No provider calls are made. See [monitoring operations](monitoring.md#dashboard-inbox-and-local-workflow).
+
 For [local portfolio awareness](portfolio-automation.md), additionally select an
 existing `--intelligence-database` and `--awareness-profile` JSON file. The
 investment page shows explicitly mapped calendar alerts, dated existing briefs

@@ -137,6 +137,15 @@ These are development contracts, not a certification of live readiness. Current 
   trades. Corrections are append-only and limited to the amount of the
   immediately latest contribution, withdrawal or interest event; statement
   observations remain evidence and are never automatic balance corrections.
+- Dashboard monitoring inbox reads never initialize or sync the explicitly
+  selected review store. Authenticated review actions require the separate
+  monitoring-workflow opt-in/password, a current report sync, exact portfolio,
+  profile and cache-instance binding, and revision/idempotency checks. Guided
+  manual observations require preview plus explicit confirmation and append
+  only to the distinct monitoring cache; journal, accounting and provider
+  authority remain unchanged. Review/journal/cache stores are not a single
+  atomic transaction; source revisions are rechecked immediately before writes,
+  but concurrent external journal updates may overlap that check.
 - An external flow after the baseline without a complete contemporaneous
   valuation invalidates linked TWR/drawdown; later marks cannot reconstruct
   the missing flow-time value.

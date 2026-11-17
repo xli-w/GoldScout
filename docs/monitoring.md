@@ -174,6 +174,36 @@ inbox does not update accounting, collect from a provider or suppress active
 monitoring findings. Local file protection, backup and any note-retention needs
 remain the operator's responsibility.
 
+## Dashboard inbox and local workflow
+
+The dashboard can read an explicitly selected review store without
+authentication or mutation. Select the same existing `--monitoring-reviews`
+store with the investment database and monitoring profile. The inbox displays
+finding summaries, action status and source revisions; it does not sync on page
+load. When the bound current report differs from the last sync, actions remain
+unavailable until the operator explicitly enables workflow actions and syncs.
+
+Authenticated actions use the separate `--monitoring-workflow` opt-in and
+terminal-entered password. This password is independent of
+`--investment-recording`; it cannot record journal events. Same-origin and CSRF
+checks, rate-limited short-lived sessions, bounded JSON, exact portfolio/profile/
+cache-instance binding and revision-bound idempotent actions apply. Actions are
+only acknowledged, deferred or reviewed; they never resolve a finding or approve
+a trade.
+
+Manual observation entry is available only with an explicitly initialized,
+identified `--monitoring-cache`. The operator supplies normalized local fields
+and explicit mapping evidence. The dashboard validates and previews a GBP
+reconciliation against a pinned journal revision before a separate confirmation.
+Confirmation appends the attempt only to the monitoring cache and requires the
+same journal/profile/cache instance and cache revision. It makes no provider or
+network call and never writes to the investment journal. Native-currency or
+unknown-clock observations remain unreconciled; no FX, missing values or
+accounting changes are inferred. The journal and cache are separate stores and
+cannot be committed atomically; each action checks its pinned source revisions
+immediately before writing, while a concurrent external journal update can
+overlap that check. Abandoning a preview stages nothing.
+
 Provider units are not automatically journal product IDs. GBP observations
 reuse the existing conservative comparison rules: missing source clocks,
 same-clock/later journal evidence, omitted holdings and unmapped products produce

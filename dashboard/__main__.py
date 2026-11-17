@@ -25,6 +25,10 @@ def main(argv=None):
                         help="Operator-owned local exposure/reminder JSON; requires both investment and intelligence stores")
     parser.add_argument("--monitoring-profile", type=Path, help="Local nonsecret monitoring JSON for the selected investment store")
     parser.add_argument("--monitoring-cache", type=Path, help="Existing separately initialized observation cache; never collects")
+    parser.add_argument("--monitoring-reviews", type=Path,
+                        help="Existing explicitly initialized local monitoring review store")
+    parser.add_argument("--monitoring-workflow", action="store_true",
+                        help="Enable separately authenticated local review actions and observation staging")
     args = parser.parse_args(argv)
     if args.intelligence_demo and (not args.demo or args.intelligence_database):
         parser.error("--intelligence-demo requires --demo without an intelligence database")
@@ -38,6 +42,11 @@ def main(argv=None):
         parser.error("--monitoring-profile requires --investment-database")
     if args.monitoring_cache is not None and args.monitoring_profile is None:
         parser.error("--monitoring-cache requires --monitoring-profile")
+    if args.monitoring_reviews is not None and (
+            args.investment_database is None or args.monitoring_profile is None):
+        parser.error("--monitoring-reviews requires --investment-database and --monitoring-profile")
+    if args.monitoring_workflow and args.monitoring_reviews is None:
+        parser.error("--monitoring-workflow requires an existing --monitoring-reviews store")
     if not 1024 <= args.port <= 65535:
         parser.error("Port must be between 1024 and 65535")
     if args.database is None and args.telemetry is not None:
@@ -65,7 +74,11 @@ def main(argv=None):
                              "Local investment-recording password (12+ characters): ")
                          if args.investment_recording else None,
                          awareness_profile=args.awareness_profile,
-                         monitoring_profile=args.monitoring_profile, monitoring_cache=args.monitoring_cache)
+                         monitoring_profile=args.monitoring_profile, monitoring_cache=args.monitoring_cache,
+                         monitoring_reviews=args.monitoring_reviews,
+                         monitoring_workflow_password=getpass.getpass(
+                             "Local monitoring-workflow password (12+ characters): ")
+                         if args.monitoring_workflow else None)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
     except ValueError as exc:
@@ -74,6 +87,8 @@ def main(argv=None):
     mode = "synthetic demo" if args.demo else "recorded data"
     if args.investment_recording:
         mode += " with opt-in authenticated investment recording"
+    if args.monitoring_workflow:
+        mode += " with separate authenticated monitoring workflow actions"
     print(f"GoldScout local dashboard ({mode}): http://127.0.0.1:{args.port}/{landing}")
     uvicorn.run(app, host="127.0.0.1", port=args.port, proxy_headers=False, access_log=False)
 

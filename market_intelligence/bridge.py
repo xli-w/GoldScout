@@ -64,7 +64,7 @@ class BotIntelligenceObserver:
         self._write_json(self.closed_path,{"observer_id":self.observer_id})
 
     @staticmethod
-    def _bounded_file_action(action):
+    def _bounded_file_action(action, timeout=0.1):
         try:
             completed=threading.Event()
             errors=[]
@@ -79,7 +79,7 @@ class BotIntelligenceObserver:
 
             writer=threading.Thread(target=run,name="bot-observer-close-marker",daemon=True)
             writer.start()
-            if not completed.wait(timeout=0.1):
+            if not completed.wait(timeout=timeout):
                 return TimeoutError("Observer sidecar operation exceeded its shutdown budget")
             return errors[0] if errors else None
         except Exception as exc:
@@ -122,7 +122,7 @@ class BotIntelligenceObserver:
         marker_error=self._bounded_file_action(self._write_closed_marker)
         close_error=None
         if marker_error is not None:
-            invalidation_error=self._bounded_file_action(self._remove_owned_status)
+            invalidation_error=self._bounded_file_action(self._remove_owned_status, timeout=0.5)
             if invalidation_error is not None:
                 close_error=OSError("Observer status could not be invalidated")
                 logging.getLogger("bot.intelligence").critical(
@@ -135,7 +135,7 @@ class BotIntelligenceObserver:
                     "Observer close marker unavailable; observer status is no longer active")
         else:
             _forget_closed(self.observer_id)
-        self.thread.join(timeout=1)
+        self.thread.join(timeout=0.5)
         if close_error is not None:
             raise close_error from invalidation_error
 

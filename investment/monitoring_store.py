@@ -130,11 +130,15 @@ def _validate_attempt(value, profile, now):
         raise InvestmentError("Monitoring attempt exceeds size bound")
 
 
-def append_attempt(path, profile, value, now):
+def append_attempt(path, profile, value, now, expected_instance_id=None,
+                   expected_revision=None):
     now = explicit_clock(now)
     _validate_attempt(value, profile, now)
     with _connection(path, write=True) as connection:
         identity = _identity(connection, profile)
+        if (expected_instance_id is not None
+                and identity.get("instance_id") != expected_instance_id):
+            raise InvestmentError("Monitoring cache instance changed; stage preview is stale")
         existing = connection.execute("SELECT revision,payload FROM monitor_attempts WHERE id=?",
                                       (value["id"],)).fetchone()
         payload = canonical(value)
@@ -142,6 +146,9 @@ def append_attempt(path, profile, value, now):
             if existing[1] != payload:
                 raise InvestmentError("Conflicting monitoring attempt ID")
             return existing[0]
+        if (expected_revision is not None
+                and identity.get("cache_revision") != expected_revision):
+            raise InvestmentError("Monitoring cache revision changed; stage preview is stale")
         rows = connection.execute("SELECT payload FROM monitor_attempts ORDER BY revision LIMIT ?",
                                   (MAX_ATTEMPTS + 1,)).fetchall()
         if len(rows) >= MAX_ATTEMPTS:
