@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, localcontext
+from decimal import Decimal, Inexact, ROUND_DOWN, ROUND_UP, localcontext
 import io
 import importlib
 import json
@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from investment import InvestmentError
+import investment.simulation as simulation
 from investment.__main__ import main
 from investment.core import iso, replay
 from investment.simulation import simulate_synthetic_fixture
@@ -101,6 +102,150 @@ class InvestmentTests(unittest.TestCase):
         first_open = min(row["open_at"] for row in bars)
         return [{"id": "explicit-zero-rate", "effective_at": first_open,
                  "available_at": first_open, "annual_rate": "0"}]
+
+    def test_synthetic_matched_pair_distinguishes_only_target_recipes(self):
+        products = [
+            {"id": product, "quantity_increment": "1", "minimum_notional_gbp": "1"}
+            for product in ("a", "b")
+        ]
+        bars = [self.synthetic_bar(product, day, "10", "10")
+                for day in range(2) for product in ("a", "b")]
+        targets = {"a": "80", "b": "20"}
+        options = {"cash_rates": self.zero_cash_rates(bars), "variable_cost_bps": "100"}
+        paired = simulation.simulate_synthetic_matched_pair(
+            "1000", products, bars, targets, targets, **options)
+
+        self.assertTrue(paired["synthetic_only"])
+        self.assertFalse(paired["supports_product_performance_claims"])
+        self.assertEqual(paired["first"]["targets"], targets)
+        self.assertEqual(paired["first"]["result"], paired["second"]["result"])
+        self.assertEqual(paired["first"]["result"],
+                         simulate_synthetic_fixture("1000", products, targets, bars, **options))
+        paired["first"]["targets"]["a"] = "0"
+        self.assertEqual(paired["second"]["targets"], targets)
+
+        other_targets = {"a": "20", "b": "80"}
+        paired = simulation.simulate_synthetic_matched_pair(
+            "1000", products, bars, targets, other_targets, **options)
+        self.assertEqual(paired["second"]["targets"], other_targets)
+        self.assertNotEqual(paired["first"]["result"]["summary"]["holdings"],
+                            paired["second"]["result"]["summary"]["holdings"])
+        self.assertEqual(
+            [point["observation_at"] for point in paired["first"]["result"]["curve"]],
+            [point["observation_at"] for point in paired["second"]["result"]["curve"]])
+
+    def test_synthetic_matched_pair_shares_flows_prices_rates_actions_and_costs(self):
+        products = [{"id": product, "quantity_increment": "1", "minimum_notional_gbp": "1"}
+                    for product in ("a", "b")]
+        bars = [self.synthetic_bar(product, day, price, price)
+                for day, prices in enumerate((("10", "10"), ("10", "10"),
+                                              ("5", "9"), ("5", "9")))
+                for product, price in zip(("a", "b"), prices)]
+        close_one = bars[2]["close_at"]
+        open_two = bars[4]["open_at"]
+        close_two = bars[4]["close_at"]
+        close_three = bars[6]["close_at"]
+        options = {
+            "contributions": [{"id": "deposit", "timestamp": close_one,
+                               "available_at": close_one, "amount_gbp": "100"}],
+            "withdrawals": [{"id": "withdraw", "timestamp": close_three,
+                             "available_at": close_three, "amount_gbp": "10"}],
+            "cash_rates": self.zero_cash_rates(bars) + [
+                {"id": "later-rate", "effective_at": close_two,
+                 "available_at": close_two, "annual_rate": "0.365"}],
+            "splits": [{"id": "split-a", "product_id": "a", "effective_at": open_two,
+                        "available_at": open_two, "numerator": "2", "denominator": "1"}],
+            "distributions": [{"id": "pay-b", "product_id": "b", "ex_at": open_two,
+                               "pay_at": close_three, "available_at": open_two,
+                               "amount_per_unit_gbp": "1"}],
+            "variable_cost_bps": "100",
+        }
+        first_targets = {"a": "50", "b": "50"}
+        second_targets = {"a": "30", "b": "30"}
+        original = deepcopy((products, bars, first_targets, second_targets, options))
+        with patch("builtins.open", side_effect=AssertionError("unexpected file access")), \
+                patch("sqlite3.connect", side_effect=AssertionError("unexpected database access")):
+            pair = simulation.simulate_synthetic_matched_pair(
+                "1000", products, bars, first_targets, second_targets, **options)
+
+        self.assertEqual((products, bars, first_targets, second_targets, options), original)
+        self.assertEqual(pair["shared_assumptions"],
+                         {"initial_cash_gbp": "1000", "variable_cost_bps": "100"})
+        for key, targets, entitlement in (
+                ("first", first_targets, "49"), ("second", second_targets, "29")):
+            result = pair[key]["result"]
+            self.assertEqual(pair[key]["targets"], targets)
+            self.assertEqual(result, simulate_synthetic_fixture(
+                "1000", products, targets, bars, **options))
+            self.assertEqual(result["curve"][0]["fills"], [])
+            self.assertTrue(all(fill["execution_at"] == bars[2]["open_at"]
+                                for fill in result["curve"][1]["fills"]))
+            self.assertEqual(result["summary"]["splits"], ["split-a"])
+            self.assertEqual(result["summary"]["distributions"][0]["entitlement_quantity"],
+                             entitlement)
+            self.assertEqual(result["curve"][2]["distribution_receivables_gbp"], entitlement)
+            self.assertEqual(result["curve"][3]["distribution_payments"], ["pay-b"])
+            self.assertEqual(result["summary"]["total_contributions_gbp"], "1100")
+            self.assertEqual(result["summary"]["total_withdrawals_gbp"], "10")
+            self.assertGreater(Decimal(result["summary"]["fees_gbp"]), 0)
+            self.assertGreater(Decimal(result["summary"]["cash_interest_gbp"]), 0)
+        self.assertNotEqual(pair["first"]["result"]["summary"]["fees_gbp"],
+                            pair["second"]["result"]["summary"]["fees_gbp"])
+        # Returned recipes are independent of caller-owned dictionaries.
+        first_targets["a"] = "0"
+        self.assertEqual(pair["first"]["targets"]["a"], "50")
+
+    def test_synthetic_matched_pair_rejects_invalid_shared_or_either_recipe(self):
+        products = [{"id": "a", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
+        bars = [self.synthetic_bar("a", day, "10", "10") for day in range(3)]
+        rates = self.zero_cash_rates(bars)
+        valid = {"a": "50"}
+        bad_bar = deepcopy(bars)
+        bad_bar[1]["open_available_at"] = bad_bar[1]["close_at"]
+        with self.assertRaises(InvestmentError):
+            simulation.simulate_synthetic_matched_pair(
+                "1000", products, bad_bar, valid, valid, cash_rates=rates)
+        with self.assertRaises(InvestmentError):
+            simulation.simulate_synthetic_matched_pair("1000", products, bars, valid, valid)
+        for first, second in (({"a": "101"}, valid), (valid, {"a": "101"}),
+                              (valid, {"other": "50"})):
+            with self.subTest(first=first, second=second), self.assertRaises(InvestmentError):
+                simulation.simulate_synthetic_matched_pair(
+                    "1000", products, bars, first, second, cash_rates=rates)
+
+        withdrawal_at = bars[1]["close_at"]
+        withdrawal = [{"id": "withdraw", "timestamp": withdrawal_at,
+                       "available_at": withdrawal_at, "amount_gbp": "100"}]
+        with self.assertRaisesRegex(InvestmentError, "cash.*sales are unsupported"):
+            simulation.simulate_synthetic_matched_pair(
+                "1000", products, bars, {"a": "50"}, {"a": "100"},
+                withdrawals=withdrawal, cash_rates=rates)
+
+        two_products = products + [
+            {"id": "b", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
+        two_bars = [self.synthetic_bar(product, day, "10", "10")
+                    for day in range(3) for product in ("a", "b")]
+        split_at = two_bars[4]["open_at"]
+        split = [{"id": "split-b", "product_id": "b", "effective_at": split_at,
+                  "available_at": split_at, "numerator": "2", "denominator": "1"}]
+        with self.assertRaisesRegex(InvestmentError, "positive holding"):
+            simulation.simulate_synthetic_matched_pair(
+                "1000", two_products, two_bars, {"a": "50", "b": "50"},
+                {"a": "100", "b": "0"}, cash_rates=self.zero_cash_rates(two_bars),
+                splits=split)
+
+    def test_synthetic_matched_pair_validates_before_copying_fixture(self):
+        products = [{"id": "a", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
+        bars = [self.synthetic_bar("a", 0, "10", "10")]
+        oversized = [bars[0]] * (simulation.MAX_BARS + 1)
+        invalid_row = [dict(bars[0], unexpected=[0] * 1000)]
+        for rows in (oversized, invalid_row):
+            with self.subTest(count=len(rows)), \
+                    patch.object(simulation, "deepcopy", side_effect=AssertionError("copied invalid input")), \
+                    self.assertRaises(InvestmentError):
+                simulation.simulate_synthetic_matched_pair(
+                    "1000", products, rows, {"a": "50"}, {"a": "50"},
+                    cash_rates=self.zero_cash_rates(bars))
 
     def test_synthetic_clock_evidence_cannot_be_missing_or_truncated(self):
         products = [{"id": "equity", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
@@ -593,6 +738,201 @@ class InvestmentTests(unittest.TestCase):
             Decimal(result["summary"]["net_contributions_gbp"]),
             Decimal(999))
         self.assertEqual(Decimal(result["summary"]["gain_gbp"]), Decimal(1))
+
+    def test_synthetic_repeating_unit_value_full_redemption_and_refunding(self):
+        products = [{"id": "a", "quantity_increment": "1",
+                     "minimum_notional_gbp": "100"}]
+        for days, hours, withdrawal_amount in ((121, 16, "4"), (243, 8, "5")):
+            with self.subTest(withdrawal_amount=withdrawal_amount):
+                bars = [self.synthetic_bar("a", day, "10", "10") for day in range(3)]
+                first_close = NOW.replace(hour=16)
+                second_open = first_close + timedelta(days=days, hours=hours)
+                clocks = ((NOW.replace(hour=9), first_close),
+                          (second_open, second_open + timedelta(hours=1)),
+                          (second_open + timedelta(days=1),
+                           second_open + timedelta(days=1, hours=1)))
+                for bar, (open_at, close_at) in zip(bars, clocks):
+                    bar["open_at"] = bar["open_available_at"] = iso(open_at)
+                    bar["close_at"] = bar["close_available_at"] = iso(close_at)
+                rates = [
+                    {"id": "one", "effective_at": bars[0]["open_at"],
+                     "available_at": bars[0]["open_at"], "annual_rate": "1"},
+                    {"id": "zero", "effective_at": bars[1]["open_at"],
+                     "available_at": bars[1]["open_at"], "annual_rate": "0"},
+                ]
+                withdrawal = [{"id": "full", "timestamp": bars[1]["close_at"],
+                               "available_at": bars[1]["close_at"],
+                               "amount_gbp": withdrawal_amount}]
+                contribution = [{"id": "refunding", "timestamp": bars[2]["close_at"],
+                                 "available_at": bars[2]["close_at"], "amount_gbp": "3"}]
+                result = simulate_synthetic_fixture(
+                    "3", products, {"a": "100"}, bars, withdrawals=withdrawal,
+                    contributions=contribution, cash_rates=rates)
+                pair = simulation.simulate_synthetic_matched_pair(
+                    "3", products, bars, {"a": "100"}, {"a": "100"},
+                    withdrawals=withdrawal, contributions=contribution, cash_rates=rates)
+                self.assertEqual(pair["first"]["result"], result)
+                self.assertEqual(pair["second"]["result"], result)
+                self.assertEqual(result["curve"][1]["equity_gbp"], "0")
+                self.assertEqual(result["curve"][1]["cash_gbp"], "0")
+                self.assertEqual(result["summary"]["max_drawdown_pct"], "0")
+                with localcontext() as context:
+                    context.prec = 100
+                    expected = Decimal(withdrawal_amount) / 3
+                    self.assertLess(abs(Decimal(result["curve"][1]["unit_value"]) - expected),
+                                    Decimal("1e-90"))
+                    self.assertLess(abs(Decimal(result["curve"][2]["unit_value"]) - expected),
+                                    Decimal("1e-90"))
+                partial_amount = "3.99999999" if withdrawal_amount == "4" else "4.99999999"
+                partial = [dict(withdrawal[0], amount_gbp=partial_amount)]
+                partial_result = simulate_synthetic_fixture(
+                    "3", products, {"a": "100"}, bars,
+                    withdrawals=partial, cash_rates=rates)
+                self.assertEqual(partial_result["curve"][1]["cash_gbp"], "0.00000001")
+                self.assertEqual(partial_result["curve"][1]["equity_gbp"], "0.00000001")
+                self.assertNotEqual(partial_result["curve"][1]["unit_value"], "0")
+                self.assertLess(Decimal(partial_result["summary"]["max_drawdown_pct"]),
+                                Decimal("1e-80"))
+                excess_amount = "4.00000001" if withdrawal_amount == "4" else "5.00000001"
+                with self.assertRaisesRegex(InvestmentError, "cash.*sales are unsupported"):
+                    simulate_synthetic_fixture(
+                        "3", products, {"a": "100"}, bars,
+                        withdrawals=[dict(withdrawal[0], amount_gbp=excess_amount)],
+                        cash_rates=rates)
+
+    def test_synthetic_draining_cash_with_holdings_does_not_redeem_all_units(self):
+        products = [{"id": "a", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
+        bars = [self.synthetic_bar("a", day, "1", "1") for day in range(3)]
+        withdrawal_at = bars[1]["close_at"]
+        result = simulate_synthetic_fixture(
+            "3", products, {"a": "50"}, bars, cash_rates=self.zero_cash_rates(bars),
+            withdrawals=[{"id": "cash-only", "timestamp": withdrawal_at,
+                          "available_at": withdrawal_at, "amount_gbp": "2"}])
+        self.assertEqual(result["curve"][1]["cash_gbp"], "0")
+        self.assertEqual(result["curve"][1]["equity_gbp"], "1")
+        self.assertEqual(result["curve"][1]["unit_value"], "1")
+        self.assertEqual(result["curve"][2]["unit_value"], "1")
+        self.assertEqual(result["summary"]["max_drawdown_pct"], "0")
+
+    def test_synthetic_draining_cash_with_unpaid_receivable_keeps_units(self):
+        products = [{"id": "a", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
+        bars = [self.synthetic_bar("a", day, price, price)
+                for day, price in enumerate(("10", "10", "9", "9"))]
+        ex_at, pay_at = bars[2]["open_at"], bars[3]["close_at"]
+        withdrawal_at = bars[2]["close_at"]
+        result = simulate_synthetic_fixture(
+            "1000", products, {"a": "50"}, bars, cash_rates=self.zero_cash_rates(bars),
+            withdrawals=[{"id": "cash-only", "timestamp": withdrawal_at,
+                          "available_at": withdrawal_at, "amount_gbp": "500"}],
+            distributions=[{"id": "unpaid", "product_id": "a", "ex_at": ex_at,
+                            "available_at": ex_at, "pay_at": pay_at,
+                            "amount_per_unit_gbp": "1"}])
+        self.assertEqual(result["curve"][2]["cash_gbp"], "0")
+        self.assertEqual(result["curve"][2]["distribution_receivables_gbp"], "50")
+        self.assertEqual(result["curve"][2]["equity_gbp"], "500")
+        self.assertEqual(result["curve"][2]["unit_value"], "1")
+        self.assertEqual(result["curve"][3]["cash_gbp"], "50")
+        self.assertEqual(result["curve"][3]["unit_value"], "1")
+        self.assertEqual(result["summary"]["max_drawdown_pct"], "0")
+
+    def test_synthetic_decimal_context_cannot_change_results_or_target_validation(self):
+        products = [{"id": product, "quantity_increment": "0.001",
+                     "minimum_notional_gbp": "1"} for product in ("a", "b")]
+        bars = [self.synthetic_bar(product, day, "10", "10")
+                for day in range(3) for product in ("a", "b")]
+        targets = {"a": "50.00000001", "b": "49.99999999"}
+        invalid_targets = {"a": "50.00000001", "b": "50"}
+        close_at = bars[2]["close_at"]
+        options = {
+            "cash_rates": self.zero_cash_rates(bars),
+            "contributions": [
+                {"id": "one", "timestamp": close_at, "available_at": close_at,
+                 "amount_gbp": "123.45678901"},
+                {"id": "two", "timestamp": close_at, "available_at": close_at,
+                 "amount_gbp": "2.34567891"},
+            ],
+            "variable_cost_bps": "123.45678901",
+        }
+        with localcontext() as context:
+            context.prec = 100
+            expected = simulate_synthetic_fixture("1000", products, targets, bars, **options)
+            expected_pair = simulation.simulate_synthetic_matched_pair(
+                "1000", products, bars, targets, targets, **options)
+        self.assertEqual(expected["summary"]["total_contributions_gbp"], "1125.80246792")
+        for precision in (6, 28, 100):
+            with self.subTest(precision=precision), localcontext() as context:
+                context.prec = precision
+                self.assertEqual(simulate_synthetic_fixture(
+                    "1000", products, targets, bars, **options), expected)
+                self.assertEqual(simulation.simulate_synthetic_matched_pair(
+                    "1000", products, bars, targets, targets, **options), expected_pair)
+                self.assertEqual(context.prec, precision)
+                with self.assertRaises(InvestmentError):
+                    simulate_synthetic_fixture("1000", products, invalid_targets, bars, **options)
+                with self.assertRaises(InvestmentError):
+                    simulation.simulate_synthetic_matched_pair(
+                        "1000", products, bars, targets, invalid_targets, **options)
+        for rounding, trap_inexact in ((ROUND_DOWN, False), (ROUND_UP, False),
+                                       (ROUND_DOWN, True)):
+            with self.subTest(rounding=rounding, trap_inexact=trap_inexact), localcontext() as context:
+                context.prec = 6
+                context.rounding = rounding
+                context.traps[Inexact] = trap_inexact
+                self.assertEqual(simulate_synthetic_fixture(
+                    "1000", products, targets, bars, **options), expected)
+                self.assertEqual(simulation.simulate_synthetic_matched_pair(
+                    "1000", products, bars, targets, targets, **options), expected_pair)
+                self.assertEqual(context.rounding, rounding)
+                self.assertEqual(context.traps[Inexact], trap_inexact)
+
+    def test_synthetic_pair_and_single_reject_overweight_at_low_precision(self):
+        products = [{"id": product, "quantity_increment": "1", "minimum_notional_gbp": "1"}
+                    for product in ("a", "b")]
+        bars = [self.synthetic_bar(product, 0, "10", "10") for product in ("a", "b")]
+        valid = {"a": "50", "b": "50"}
+        invalid = {"a": "50.00000001", "b": "50"}
+        for precision in (6, 100):
+            for paired in (False, True):
+                with self.subTest(precision=precision, paired=paired), localcontext() as context:
+                    context.prec = precision
+                    with self.assertRaises(InvestmentError):
+                        if paired:
+                            simulation.simulate_synthetic_matched_pair(
+                                "1000", products, bars, valid, invalid,
+                                cash_rates=self.zero_cash_rates(bars))
+                        else:
+                            simulate_synthetic_fixture(
+                                "1000", products, invalid, bars,
+                                cash_rates=self.zero_cash_rates(bars))
+
+    def test_synthetic_hostile_decimal_context_keeps_cash_and_quantity_rejections(self):
+        products = [{"id": "a", "quantity_increment": "1", "minimum_notional_gbp": "1"}]
+        bars = [self.synthetic_bar("a", day, "10", "10") for day in range(3)]
+        targets = {"a": "50"}
+        withdrawal_at, split_at = bars[1]["close_at"], bars[2]["open_at"]
+        scenarios = (
+            {"withdrawals": [{"id": "too-much", "timestamp": withdrawal_at,
+                              "available_at": withdrawal_at, "amount_gbp": "501"}]},
+            {"splits": [{"id": "thirds", "product_id": "a", "effective_at": split_at,
+                         "available_at": split_at, "numerator": "1", "denominator": "3"}]},
+        )
+        for rounding in (ROUND_DOWN, ROUND_UP):
+            for paired in (False, True):
+                for scenario in scenarios:
+                    with self.subTest(rounding=rounding, paired=paired, scenario=scenario), \
+                            localcontext() as context:
+                        context.prec = 6
+                        context.rounding = rounding
+                        context.traps[Inexact] = True
+                        with self.assertRaises(InvestmentError):
+                            if paired:
+                                simulation.simulate_synthetic_matched_pair(
+                                    "1000", products, bars, targets, targets,
+                                    cash_rates=self.zero_cash_rates(bars), **scenario)
+                            else:
+                                simulate_synthetic_fixture(
+                                    "1000", products, targets, bars,
+                                    cash_rates=self.zero_cash_rates(bars), **scenario)
 
     def test_synthetic_cash_withdrawal_refuses_implicit_sales_and_late_events(self):
         products = [{"id": "equity", "quantity_increment": "1",

@@ -148,6 +148,9 @@ is explicit; reporting a missing/invalid store does not initialise or repair it.
 The store must retain its original v1 tables, implicit index and immutable
 triggers. Altered definitions or extra objects, including manually added
 indexes, are refused; preserve the evidence rather than editing the schema.
+Explicit backup and restore, capacity monitoring, trust boundaries and recovery
+steps are documented in the [investment journal lifecycle](investment-journal.md).
+Operational maintenance requires separate approval.
 
 The first accounting contract is **GBP-only, operator-recorded evidence**. It
 supports per-account funded cash and long holdings, actual fill fees, recorded
@@ -534,6 +537,13 @@ legacy stops or a guarantee against losses. Market drawdowns, missing evidence
 and operational failures are different concerns.
 
 ### Synthetic simulator mechanics (engineering only)
+
+`investment.simulation.simulate_synthetic_matched_pair` runs two fixed target
+recipes against one shared synthetic fixture: clocks, flows, prices, rates,
+actions and cost assumptions are identical by construction. Either recipe's
+failure aborts the pair. It does not model role budgets or loss-refill isolation,
+approve policy, or establish dynamic alpha or suitability. Never use real
+product history with this engineering-only harness.
 
 `investment.simulation.simulate_synthetic_fixture` is a pure, non-CLI test
 harness intended only for caller-supplied synthetic fixtures; it does not verify

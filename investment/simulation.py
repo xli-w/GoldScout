@@ -1,6 +1,8 @@
 """Synthetic-only daily portfolio mechanics; not a product research runner."""
 
-from decimal import Decimal, ROUND_DOWN, localcontext
+from copy import deepcopy
+from decimal import (Context, Decimal, DivisionByZero, InvalidOperation, Overflow,
+                     ROUND_DOWN, ROUND_HALF_EVEN, localcontext)
 
 from . import InvestmentError
 from .core import explicit_clock, fields, fmt, iso, number, text
@@ -21,6 +23,12 @@ LIMITATIONS = [
     "The proportional variable-cost input is an assumption, not a validated execution-cost estimate.",
     "No CLI, campaign dataset, broker, account, or live investment store is connected.",
 ]
+
+
+def _synthetic_decimal_context():
+    return Context(prec=100, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999,
+                   capitals=1, clamp=0, flags=[],
+                   traps=[InvalidOperation, DivisionByZero, Overflow])
 
 
 def _bounded(value, positive=False):
@@ -379,6 +387,15 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
     must provide synthetic fixtures, whose provenance it cannot independently
     verify.
     """
+    with localcontext(_synthetic_decimal_context()):
+        return _simulate_synthetic_fixture(
+            initial_cash_gbp, products, targets, bars, contributions, variable_cost_bps,
+            splits, cash_rates, withdrawals, distributions)
+
+
+def _simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
+                                contributions, variable_cost_bps, splits,
+                                cash_rates, withdrawals, distributions):
     initial_cash = _bounded(initial_cash_gbp, positive=True)
     fee_bps = _bounded(variable_cost_bps)
     if fee_bps > 10000:
@@ -506,7 +523,12 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
                 if cash + flow < 0:
                     raise InvestmentError(
                         "Synthetic withdrawal exceeds available cash; sales are unsupported")
-                units += flow / unit_value
+                if flow < 0 and -flow == cash and not holdings and not receivables:
+                    # The entire cash-only portfolio is redeemed; avoid a rounded
+                    # division leaving phantom units at a repeating unit value.
+                    units = Decimal(0)
+                else:
+                    units += flow / unit_value
                 if units < 0:
                     raise InvestmentError("Synthetic withdrawal exceeds invested unit value")
                 cash += flow
@@ -612,4 +634,71 @@ def simulate_synthetic_fixture(initial_cash_gbp, products, targets, bars,
             "unfilled_allocations": unfilled_allocations,
         },
         "limitations": LIMITATIONS.copy(),
+    }
+
+
+def _validate_pair_before_copy(initial_cash_gbp, products, bars, first_targets,
+                               second_targets, contributions, variable_cost_bps,
+                               splits, cash_rates, withdrawals, distributions):
+    """Apply the simulator's bounded input validation before copying a fixture."""
+    _bounded(initial_cash_gbp, positive=True)
+    if _bounded(variable_cost_bps) > 10000:
+        raise InvestmentError("Variable cost must be between zero and 10000 basis points")
+    product_state = _products(products, first_targets)
+    _products(products, second_targets)
+    sessions = _sessions(bars, product_state)
+    close_times = {session["close_at"] for _, session in sessions}
+    open_times = {session["open_at"] for _, session in sessions}
+    _cash_flows(contributions, withdrawals, close_times)
+    split_events = _splits(splits, product_state, open_times)
+    _distributions(distributions, product_state, open_times, close_times, split_events)
+    _cash_rates(cash_rates, open_times, close_times)
+
+
+def simulate_synthetic_matched_pair(initial_cash_gbp, products, bars,
+                                    first_targets, second_targets, contributions=(),
+                                    variable_cost_bps="0", splits=(), cash_rates=(),
+                                    withdrawals=(), distributions=()):
+    """Run two fixed target recipes over the same synthetic-only fixture.
+
+    All inputs except the targets are shared by construction. Both recipes
+    must succeed under the existing simulator's rules; no partial pair is
+    returned. Callers must not mutate inputs during validation or snapshotting.
+    This does not model management roles, transfers or dynamic alpha.
+    """
+    with localcontext(_synthetic_decimal_context()):
+        _validate_pair_before_copy(
+            initial_cash_gbp, products, bars, first_targets, second_targets, contributions,
+            variable_cost_bps, splits, cash_rates, withdrawals, distributions)
+    common = deepcopy({
+        "initial_cash_gbp": initial_cash_gbp,
+        "products": products,
+        "bars": bars,
+        "contributions": contributions,
+        "variable_cost_bps": variable_cost_bps,
+        "splits": splits,
+        "cash_rates": cash_rates,
+        "withdrawals": withdrawals,
+        "distributions": distributions,
+    })
+    first_targets = deepcopy(first_targets)
+    second_targets = deepcopy(second_targets)
+    first = simulate_synthetic_fixture(targets=first_targets, **common)
+    second = simulate_synthetic_fixture(targets=second_targets, **common)
+    return {
+        "schema_version": 1,
+        "scope": "synthetic_matched_portfolio_mechanics_only",
+        "synthetic_only": True,
+        "supports_product_performance_claims": False,
+        "shared_assumptions": {
+            "initial_cash_gbp": common["initial_cash_gbp"],
+            "variable_cost_bps": common["variable_cost_bps"],
+        },
+        "first": {"targets": first_targets, "result": first},
+        "second": {"targets": second_targets, "result": second},
+        "limitations": LIMITATIONS.copy() + [
+            "Target recipes are fixed buy-only mechanics, not role budgets, funding transfers, policy approval or dynamic alpha.",
+            "Generic contribution allocation can buy underweight products and does not enforce role or loss-refill isolation.",
+            "Matched synthetic outcomes do not establish allocation suitability or satisfy research feasibility gates.",
+        ],
     }

@@ -51,6 +51,7 @@ and [dashboard guide](docs/dashboard.md) before using recorded data.
 ## Guides
 
 - [Investment operations and limitations](docs/investment.md)
+- [Investment journal backup, restore and capacity](docs/investment-journal.md)
 - [Portfolio awareness and observation preview](docs/portfolio-automation.md)
 - [Market intelligence](docs/intelligence.md)
 - [GBP research protocol](docs/backtesting-protocol.md) and [campaign data](docs/campaign-dataset.md)

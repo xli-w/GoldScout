@@ -31,6 +31,14 @@ regressions are permissible as engineering evidence, but are not return research
 and do not satisfy any external gate. If any gate remains unmet, stop before
 loading product histories or producing comparative returns.
 
+On 2026-11-17 the operator selected Moneybox LISA statements as a candidate
+observation source. Public help was discoverable but direct retrieval was
+denied; statement format, field coverage, account permissions and data rights
+remain unverified. This does not select exact investable products or a licensed
+historical dataset, establish applicable cash terms, approve core/dynamic
+policy, or freeze the comparison. The [source screen](portfolio-automation.md#selected-moneybox-statement-route-verification-status)
+records what remains unknown. Product-performance work remains blocked.
+
 Before any portfolio performance comparison:
 
 1. Verify exact product/UK/account/wrapper eligibility, licensed persistent data

@@ -62,6 +62,13 @@ These are development contracts, not a certification of live readiness. Current 
   result, browser setting or this documentation change. Current per-task broker
   approval, durable intent, reconciliation and read-only route safeguards remain.
 - The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; dashboard/read-only commands never create, migrate, repair, or mutate it. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
+- The [investment backup and restore commands](investment-journal.md) copy a
+  pinned, validated journal using SQLite in an operator-controlled directory,
+  validate copied evidence, commit boundaries and replay, and publish to a new
+  path without overwriting. They never automatically install a
+  restore; operational maintenance still requires explicit approval. A valid
+  older or forged copy is not proven current or authentic by its internal
+  hashes, and external evidence and receipts remain separate.
 - V1 begins at explicitly evidenced empty inception. V2 can start from an explicit
   opening record of cash and long holdings without inferring prior transactions,
   cost basis or lifetime gain. A performance baseline starts only at a complete

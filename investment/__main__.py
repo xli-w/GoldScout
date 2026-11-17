@@ -24,6 +24,10 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     events = commands.add_parser("import", help="atomically import explicit local event JSON array")
     events.add_argument("--events", required=True)
     events.add_argument("--database", required=True)
+    for name in ("backup", "restore"):
+        command = commands.add_parser(name, help="copy a validated investment store to a new path")
+        command.add_argument("--database", required=True, help="existing source store")
+        command.add_argument("--destination", required=True, help="new destination; never overwrites")
     for name in ("report", "propose", "export"):
         command = commands.add_parser(name, help="read-only stdout JSON; never executes")
         command.add_argument("--database", required=True)
@@ -58,6 +62,9 @@ def main(argv=None, stdout=None, stderr=None, now=None):
         elif args.command == "import":
             import_events(args.database, load_json(args.events), now)
             value = snapshot(args.database, now)
+        elif args.command in ("backup", "restore"):
+            from .lifecycle import copy_verified
+            value = copy_verified(args.database, args.destination, requested_now)
         elif args.command == "report":
             value = snapshot(args.database, now)
         elif args.command == "review-status":
