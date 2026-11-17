@@ -181,15 +181,14 @@ export function App() {
   if (location.pathname === "/" && investmentWorkspace) return <Navigate to="/investment" replace />;
   return <div className="shell">
     <aside className="sidebar">
-      <NavLink to={investmentWorkspace ? "/investment" : workspaceQuery.data === "demo" ? "/legacy" : "/"} className="brand"><span className="brand-mark"><Activity size={24} /></span><span>GoldScout<small>{investmentWorkspace ? "Investment journal" : "Legacy trading"}</small></span></NavLink>
+      <NavLink to={investmentWorkspace ? "/investment" : workspaceQuery.data === "demo" ? "/legacy" : "/"} className="brand" aria-label={`GoldScout ${investmentWorkspace ? "Investment journal" : "Legacy trading"}`}><span className="brand-mark"><Activity size={24} /></span><span className="brand-name">GoldScout<small>{investmentWorkspace ? "Investment journal" : "Legacy trading"}</small></span></NavLink>
       <div className="nav-groups">
-        <div className="nav-section"><span className="nav-section-label">INVESTMENT</span><nav aria-label="Investment navigation"><NavLink to="/investment"><Wallet size={18} />Investment</NavLink><NavLink to="/investment-guide"><CircleHelp size={18} />Investment guide</NavLink></nav></div>
-        {workspaceQuery.data === "demo" && investmentWorkspace && <div className="nav-section"><span className="nav-section-label">LEGACY</span><nav aria-label="Legacy navigation"><NavLink to="/legacy"><Activity size={18} />Trading demo</NavLink></nav></div>}
-        {workspaceQuery.isSuccess && !investmentWorkspace && <><div className="nav-section"><span className="nav-section-label">ACCOUNT</span><nav aria-label="Account navigation"><NavLink to={workspaceQuery.data === "demo" ? "/legacy" : "/"} end><LayoutDashboard size={18} />Overview</NavLink><NavLink to="/positions"><Wallet size={18} />Positions</NavLink><NavLink to="/health"><Activity size={18} />Health</NavLink></nav></div>
-        <div className="nav-section"><span className="nav-section-label">RECORDS</span><nav aria-label="Records navigation"><NavLink to="/activity"><ListOrdered size={18} />Activity</NavLink><NavLink to="/history"><Database size={18} />History</NavLink></nav></div></>}
-        <div className="nav-section advisory-nav-section"><span className="nav-section-label">ADVISORY</span><nav aria-label="Advisory navigation"><NavLink to="/intelligence"><Activity size={18}/>Intelligence</NavLink></nav></div>
+        <div className="nav-section"><span className="nav-section-label">INVESTMENT</span><nav aria-label="Investment navigation"><NavLink to="/investment"><Wallet size={18} /><span>Investment</span></NavLink><NavLink to="/investment-guide"><CircleHelp size={18} /><span>Investment guide</span></NavLink></nav></div>
+        {workspaceQuery.data === "demo" && investmentWorkspace && <div className="nav-section"><span className="nav-section-label">LEGACY</span><nav aria-label="Legacy navigation"><NavLink to="/legacy"><Activity size={18} /><span>Trading demo</span></NavLink></nav></div>}
+        {workspaceQuery.isSuccess && !investmentWorkspace && <><div className="nav-section"><span className="nav-section-label">ACCOUNT</span><nav aria-label="Account navigation"><NavLink to={workspaceQuery.data === "demo" ? "/legacy" : "/"} end><LayoutDashboard size={18} /><span>Overview</span></NavLink><NavLink to="/positions"><Wallet size={18} /><span>Positions</span></NavLink><NavLink to="/health"><Activity size={18} /><span>Health</span></NavLink></nav></div>
+        <div className="nav-section"><span className="nav-section-label">RECORDS</span><nav aria-label="Records navigation"><NavLink to="/activity"><ListOrdered size={18} /><span>Activity</span></NavLink><NavLink to="/history"><Database size={18} /><span>History</span></NavLink></nav></div></>}
+        <div className="nav-section advisory-nav-section"><span className="nav-section-label">ADVISORY</span><nav aria-label="Advisory navigation"><NavLink to="/intelligence"><Activity size={18}/><span>Intelligence</span></NavLink></nav></div>
       </div>
-      <span className="nav-hint">Scroll for more sections</span>
       <div className="sidebar-bottom"><LockKeyhole size={16} /><span>Trading read-only</span><span className="local-label">LOCAL</span></div>
     </aside>
     <div className="workspace">

@@ -76,6 +76,8 @@ it reads no broker credentials and makes no broker requests. Optional analysis-o
 intelligence controls are described in the [intelligence guide](intelligence.md). Step 3 adds optional
 non-authoritative scheduler telemetry. Live prices and unrealized P&L remain
 unavailable until a separately timestamped price observation source exists.
+The interface uses a persistent dark theme and a left navigation sidebar; on
+small screens the sidebar becomes a compact, vertically scrollable rail.
 The footer links to a trading guide covering default strategies, risk rules, and
 important limitations; it remains available when account data is unavailable.
 Its defaults are descriptive and may differ from the operator's settings.

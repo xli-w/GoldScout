@@ -723,17 +723,38 @@ test("position protection shows its observation time and stop definitions", asyn
   await expect(positionRow).toContainText("Observed Nov 13, 2026");
 });
 
-test("small screens retain runtime and expose scrollable navigation and tables", async ({ page }, testInfo) => {
+test("dark theme and sidebar persist across navigation and reload", async ({ page }) => {
+  await page.goto("/legacy");
+  const sidebar = page.locator(".sidebar");
+  await expect(sidebar).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Account navigation" })).toBeVisible();
+  const theme = () => page.evaluate(() => ({
+    background: getComputedStyle(document.documentElement).backgroundColor,
+    scheme: getComputedStyle(document.documentElement).colorScheme,
+  }));
+  expect(await theme()).toEqual({ background: "rgb(8, 13, 12)", scheme: "dark" });
+  await page.getByRole("link", { name: "Positions", exact: true }).click();
+  await expect(page).toHaveURL(/\/positions$/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Positions", level: 1 })).toBeVisible();
+  await expect(sidebar).toBeVisible();
+  expect(await theme()).toEqual({ background: "rgb(8, 13, 12)", scheme: "dark" });
+});
+
+test("small screens retain sidebar navigation, runtime, and scrollable tables", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "Small-screen layout");
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto("/legacy");
   await expect(page.locator(".connection")).toContainText("Runtime");
   await expect(page.locator(".connection")).toBeVisible();
-  await expect(page.getByText("Scroll for more sections")).toBeVisible();
-  const nav = page.locator(".nav-groups");
-  expect(await nav.evaluate(element => element.scrollWidth > element.clientWidth)).toBeTruthy();
-  await page.getByRole("link", { name: "Intelligence", exact: true }).focus();
-  expect(await nav.evaluate(element => element.scrollLeft > 0)).toBeTruthy();
+  const sidebar = page.locator(".sidebar");
+  await expect(sidebar).toBeVisible();
+  await expect(page.getByRole("link", { name: "Intelligence", exact: true })).toBeVisible();
+  const bounds = await sidebar.boundingBox();
+  expect(bounds.x).toBe(0);
+  expect(bounds.width).toBeLessThan(100);
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  expect((await sidebar.boundingBox()).y).toBe(0);
   const table = page.getByLabel("Position table");
   await expect(table).toHaveAttribute("aria-describedby", "table-scroll-instructions");
   expect(await table.evaluate(element => getComputedStyle(element, "::before").content)).toContain("Scroll");
