@@ -35,6 +35,15 @@ operational safeguards.
   dynamic family with costs, uncertainty and a matched all-core counterfactual.
   No automatic risk expansion, experiment promotion or core-funded loss refill.
   Leverage, shorts, crypto and speculative options remain unapproved.
+- Recommended future funding boundary: do not transfer core capital to the
+  dynamic sleeve or automatically replenish experimental losses. New external
+  contributions may be explicitly assigned to the dynamic sleeve only within
+  an approved cap. Dynamic-to-core profit transfers may be considered only
+  under a separately approved, human-confirmed rule. Any user-selectable
+  preference must default off and may only disable or choose among behaviors
+  already authorized by the versioned policy; a toggle cannot grant authority.
+  These are future design constraints, not an implemented policy or permission
+  to transfer funds.
 - Reuse legacy intelligence provenance, calendars, archival briefs, providers and
   bounded analysis infrastructure. Reuse execution safety concepts only where
   venue semantics actually match. Do not share operational stores, adopt legacy
@@ -75,8 +84,11 @@ continue to block proposals; v2 has no proposal export or role transfers.
 3. **Dynamic isolation:** specify initial funding, capital and aggregate/position
    exposure limits, overlapping exposures, cumulative loss accounting, turnover
    and costs; separately approve suspension, retirement, profit-transfer and
-   replenishment rules. No automatic refill from core losses. Caps are not
-   guaranteed realised-loss limits.
+   replenishment rules. The recommended boundary prohibits core-funded loss
+   replenishment; external contributions must be explicitly assigned within
+   the approved cap. Any dynamic-to-core profit transfer requires a separate
+   human-confirmed rule. Optional settings may not broaden policy authority.
+   Caps are not guaranteed realised-loss limits.
 4. **Evidence and decisions:** bind each future decision to the approved policy
    version and unchanged portfolio revision, causal observation/availability
    times, valuation coverage, explicit freshness and reconciliation requirements,

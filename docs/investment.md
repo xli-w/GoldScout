@@ -63,6 +63,15 @@ The dynamic sleeve is a controlled opportunity budget, not a requirement to
 keep every experiment invested. Zero deployed dynamic risk is valid until a
 candidate passes; rejected ideas must not be replaced merely to fill the budget.
 
+The recommended future funding boundary is to prohibit core-to-dynamic
+transfers and automatic loss replenishment. An external contribution may be
+explicitly assigned to the dynamic sleeve only within an approved cap.
+Dynamic-to-core profit transfers may be considered only under a separately
+approved, human-confirmed rule. User-selectable preferences must default off
+and may only choose among behaviors already authorized by a versioned policy;
+a toggle cannot create authority. These are design constraints, not active
+policy: role-to-role transfers and proposals remain disabled.
+
 ### Decision support and automation contract
 
 The following describes the target capability, not a claim that every feature is
@@ -781,24 +790,39 @@ or source availability. It cannot
 verify that input is synthetic and must not be used with private account data.
 
 This is **not a broker mock adapter or runnable pilot**: there is no venue
-client, durable intent, authenticated approval, locking, cash reservation,
+client, authenticated approval, locking across a broker call, cash reservation,
 settlement, fill-price/fee accounting, or connection to the investment journal.
-A synthetic restart is trace replay, not process/crash recovery. The supplied
-policy and approval IDs are declarations, not checked approvals. Ownership,
-funding and spend-limit checks are explicitly unavailable; the limit in the
-fixture cannot constrain a real fill. Outputs do
-not establish broker semantics, readiness or permission to submit.
+`investment.pilot_store` separately persists these **synthetic test events**
+in a dedicated, explicitly initialized append-only SQLite journal. Initialization
+builds and validates a temporary copy before non-overwriting publication; failed
+initialization does not leave a partial destination. Each append validates the
+complete prior chain and replay in a transaction. Its v2 format encodes event
+identity and payload as a canonical pair; development-only v1 journals using a
+different hash encoding are rejected, with no migration path. Fresh connections
+exercise close/reopen persistence and rollback, not recovery of real broker
+state after process or machine failure. This internal test utility has no CLI or
+integration with any operational store. The supplied policy and
+approval IDs are declarations, not checked approvals. Ownership, funding and
+spend-limit checks are explicitly unavailable; the limit in the fixture cannot
+constrain a real fill. Outputs do not establish broker semantics, readiness or
+permission to submit.
 
-For venue evidence, prior public screening identified a non-idempotency warning
-in Trading 212's [market-order documentation](https://docs.trading212.com/api/orders/placemarketorder)
-and a paginated [historical orders endpoint](https://docs.trading212.com/api/historical-events/orders_1).
-On 2026-11-17 direct retrieval of these pages failed; indexed search results
-support the warning but do not independently verify the full current contract.
-Do not infer a client-assigned idempotency key, unique post-timeout recovery,
-complete visibility, execution-price cap, finality or settlement from a matching
-order or from this fixture. Obtain current official venue evidence and, if
-separately approved, carefully scoped broker trials before treating any such
-property as verified.
+On 2026-11-17 a follow-up fetch of Trading 212's official [market-order
+documentation](https://docs.trading212.com/api/orders/placemarketorder)
+succeeded after an earlier transient transport-level fetch failure. It says
+market orders execute at the next available price, warns of slippage, says the
+endpoint is not idempotent and repeated requests may duplicate orders, and
+returns a system-generated order ID. Its [historical orders
+endpoint](https://docs.trading212.com/api/historical-events/orders_1) documents
+cursor pagination (up to 50 items) and order/fill/wallet-impact fields. The
+pages do **not** document a client-assigned idempotency key or a uniquely
+verified recovery procedure after an ambiguous submit. A market order also
+does not provide the spend/price cap required for a bounded GBP pilot. These
+facts rule out blind retry; they do not prove that a matching history record
+uniquely identifies the submission, that history is immediately complete, or
+that a limit/other order type would resolve the same recovery gaps. Exact
+account scope, response timing, fill revisions and settlement semantics still
+need verification.
 
 Before any real or paper pilot, separately establish and approve the actual
 account/wrapper and product eligibility, order type and executable price/cost

@@ -39,6 +39,17 @@ historical dataset, establish applicable cash terms, approve core/dynamic
 policy, or freeze the comparison. The [source screen](portfolio-automation.md#selected-moneybox-statement-route-verification-status)
 records what remains unknown. Product-performance work remains blocked.
 
+On 2026-11-17 a follow-up fetch of Trading 212's official [market-order
+documentation](https://docs.trading212.com/api/orders/placemarketorder)
+succeeded after a transient transport failure. It explicitly warns that
+repeated market-order requests may create duplicates and describes execution
+at the next available price with possible slippage. Its [historical orders
+endpoint](https://docs.trading212.com/api/historical-events/orders_1) documents
+cursor pagination and fill/wallet-impact fields, but not unique recovery after
+an ambiguous submission. Do not retry an uncertain submit. This public evidence
+does not authorize account access or orders; see the [offline-only pilot
+boundary](investment.md#trading-212-pilot-offline-recovery-engineering-only).
+
 Before any portfolio performance comparison:
 
 1. Verify exact product/UK/account/wrapper eligibility, licensed persistent data

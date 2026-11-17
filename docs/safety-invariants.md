@@ -62,11 +62,13 @@ These are development contracts, not a certification of live readiness. Current 
   result, browser setting or this documentation change. Current per-task broker
   approval, durable intent, reconciliation and read-only route safeguards remain.
 - The [Trading 212 pilot trace](investment.md#trading-212-pilot-offline-recovery-engineering-only)
-  is synthetic, in-memory engineering only. Its approval, ownership and restart
-  events are declarations, not real approval or broker recovery evidence; it
-  cannot submit orders, persist intent, reserve cash or update investment
-  accounting. An ambiguous submission cannot be retried or adopted in the
-  trace. Do not connect it to a broker or use it as an execution gate.
+  and its separately bounded SQLite journal are synthetic engineering only.
+  Journal persistence exercises close/reopen replay and rollback, but does not
+  contain durable real-order intent or broker evidence. Approval, ownership and
+  restart events are declarations, not real approval or recovery evidence. The
+  journal cannot submit orders, reserve cash or update investment accounting.
+  An ambiguous submission cannot be retried or adopted in the trace. Do not
+  connect it to a broker or use it as an execution gate.
 - The [investment store](../investment/store.py) is distinct from trading and intelligence stores. Initialization is explicit; dashboard/read-only commands never create, migrate, repair, or mutate it. Evidence is append-only, duplicate-identical imports are idempotent, conflicts fail, and committed cash/quantity effects must replay after restart.
 - The [investment backup and restore commands](investment-journal.md) copy a
   pinned, validated journal using SQLite in an operator-controlled directory,

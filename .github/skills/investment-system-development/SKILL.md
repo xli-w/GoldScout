@@ -71,6 +71,14 @@ limits below explicit.
   all-core comparisons and prospective evidence. Neither a return result nor
   a research brief grants standing authority. News/LLM trading exclusions remain
   for existing runs; future calendar/AI features require separate approval.
+- `investment.pilot` and `investment.pilot_store` are synthetic-only recovery
+  engineering. The latter is a separate, explicitly initialized temporary
+  journal, not the accounting ledger or production order-intent store. They
+  have no venue client, authenticated approval, cash reservation, fill
+  accounting, or verified Trading 212 ownership/recovery. Never connect them to
+  a broker, operational data or real account evidence. Trading 212 documents
+  market-order non-idempotency; an uncertain submit must not be retried based
+  only on matching history.
 - `investment.simulation.simulate_synthetic_fixture` is only an engineering
   harness: synchronized GBP observations, next-session-open buy-only fills,
   positive contributions, cash-funded close-time withdrawals (no liquidation),

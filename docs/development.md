@@ -60,6 +60,7 @@ The [CI workflow](../.github/workflows/offline-validation.yml) installs the vers
 | Offline investment accounting, replay and blocked-proposal contracts | [investment](../tests/test_investment.py), [read-only investment API](../tests/test_investment_dashboard.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
 | Local portfolio awareness, exposure mapping and reminders | [awareness](../tests/test_investment_awareness.py), [durable brief evidence](../tests/test_intelligence_completion.py), [desktop/mobile views](../frontend/tests/dashboard.spec.mjs) |
 | Offline observation staging and reconciliation | [reconciliation](../tests/test_investment_reconciliation.py), [opening accounting](../tests/test_investment_opening.py) |
+| Synthetic-only investment pilot lifecycle and persistence | [trace replay](../tests/test_investment_pilot.py), [temporary journal/recovery](../tests/test_investment_pilot_store.py) |
 | Backtest / monitor timing | [backtest](../tests/test_backtest.py), [monitor](../tests/test_review2_monitor.py) |
 | Experiment runner (spec, dataset, selection, holdout) | [experiments](../tests/test_experiments.py) |
 | Intelligence calendar/contracts/wire schema | [intelligence](../tests/test_market_intelligence.py) |

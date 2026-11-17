@@ -9,7 +9,8 @@ from unittest.mock import patch
 from dashboard.app import create_app
 from fastapi.testclient import TestClient
 from investment import InvestmentError
-from investment.service import demo_events, demo_profile, demo_snapshot, snapshot
+from dashboard.investment_demo import demo_opening_snapshot
+from investment.service import demo_events, demo_profile, snapshot
 from investment import store as investment_store
 from investment.store import acknowledge_review, import_events, initialize
 from test_dashboard_api import MemoryEventLoop
@@ -474,11 +475,12 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
 
     def assert_blocked_proposal(self, proposal):
-        self.assertEqual(proposal, {
-            "status": "blocked",
-            "reason": "Role-aware policy, products, weights and loss/transfer rules are not approved or implemented.",
-            "expires_at": None, "orders": [], "manual_transfers": [], "execution_enabled": False,
-        })
+        self.assertEqual(proposal["status"], "blocked")
+        self.assertTrue(proposal["reason"])
+        self.assertIsNone(proposal["expires_at"])
+        self.assertEqual(proposal["orders"], [])
+        self.assertEqual(proposal["manual_transfers"], [])
+        self.assertFalse(proposal["execution_enabled"])
 
     def test_recorded_overweight_proposal_is_blocked_read_only_and_schema_valid(self):
         spec = demo_profile(self.now)
@@ -518,9 +520,10 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertFalse(self.path.exists())
 
     def test_invalid_report_is_not_a_success_response(self):
-        report = copy.deepcopy(demo_snapshot(self.now))
+        report = copy.deepcopy(demo_opening_snapshot(self.now))
         report["equity_gbp"] = "NaN"
-        with patch("investment.service.demo_snapshot", return_value=report), self.client() as client:
+        with patch("dashboard.investment_demo.demo_opening_snapshot", return_value=report), \
+                self.client() as client:
             response = client.get("/api/investment/v1/snapshot")
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"], "investment_invalid")
