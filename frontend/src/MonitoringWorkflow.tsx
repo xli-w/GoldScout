@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { timestamp } from "./api";
+import { label, timestamp } from "./api";
 
 type ReviewCase = {
   case_id: string; finding_id: string; finding: {
@@ -21,8 +21,20 @@ type Session = {
   enabled: boolean; csrf: string | null; cache_enabled: boolean;
   review_enabled?: boolean; accounts: { account_id: string; provider: string }[];
 };
+type StagedHolding = { source_product: string; quantity: string };
+type ProductMapping = { source_product: string; product_id: string; evidence: string };
+type Comparison = { observed: string | null; recorded: string | null; difference: string | null; status: string };
+type ReconciledHolding = Comparison & {
+  source_product: string; product_id: string | null; mapping_evidence: string | null;
+};
+type ReconciledAccount = {
+  source_account: string; account_id: string | null; observed_at: string; available_at: string;
+  freshness: string; comparison_unavailable_reason: string | null; cash_coverage: string;
+  holdings_coverage: string; coverage_evidence: string; cash: Comparison;
+  holdings: ReconciledHolding[]; missing_recorded_products: string[];
+};
 type Reconciliation = {
-  status: string; revision?: number; generated_at?: string; accounts?: unknown[];
+  status: string; revision?: number; generated_at?: string; accounts?: ReconciledAccount[];
   missing_recorded_accounts?: string[]; limitations?: string[]; reason?: string;
 };
 type StagePreview = {
@@ -95,6 +107,39 @@ function ActionRow({ item, inboxRevision, csrf, enabled, changed }: {
   </div>;
 }
 
+function ReconciliationSummary({ result }: { result: Reconciliation }) {
+  return <section className="reconciliation-summary" aria-label="Reconciliation results">
+    <h4>Comparison with recorded journal evidence</h4>
+    <p>Status: <strong>{result.status === "matched" ? "Matched at the stated clocks" : label(result.status)}</strong>.
+      A match does not establish present custody or settled buying power.</p>
+    {result.reason && <p>{label(result.reason)}</p>}
+    {result.accounts?.map(account => <article key={account.source_account}>
+      <h5>{account.source_account} → {account.account_id ?? "No account mapping"}</h5>
+      <p>Observation {timestamp(account.observed_at)}; available {timestamp(account.available_at)}; {label(account.freshness)}.
+        Cash coverage: {label(account.cash_coverage)}; holdings coverage: {label(account.holdings_coverage)}.</p>
+      {account.comparison_unavailable_reason && <p>Comparison unavailable: {label(account.comparison_unavailable_reason)}.</p>}
+      <dl><div><dt>Cash</dt><dd>{label(account.cash.status)}; observed GBP {account.cash.observed ?? "unknown"},
+        {" "}recorded GBP {account.cash.recorded ?? "unavailable"}, difference GBP {account.cash.difference ?? "unavailable"}.</dd></div></dl>
+      {account.holdings.length > 0 && <div className="table-scroll"><table>
+        <thead><tr><th>Observed product</th><th>Journal product</th><th>Observed quantity</th>
+          <th>Recorded quantity</th><th>Difference</th><th>Status</th></tr></thead>
+        <tbody>{account.holdings.map((holding, index) => <tr key={`${holding.source_product}:${index}`}>
+          <td>{holding.source_product}</td><td>{holding.product_id ?? "Unmapped"}</td>
+          <td>{holding.observed ?? "unknown"}</td><td>{holding.recorded ?? "unavailable"}</td>
+          <td>{holding.difference ?? "unavailable"}</td><td>{label(holding.status)}</td>
+        </tr>)}</tbody>
+      </table></div>}
+      {account.missing_recorded_products.length > 0 && <p>Recorded products not represented in this observation: {account.missing_recorded_products.join(", ")}.</p>}
+      <p>Coverage evidence: {account.coverage_evidence}</p>
+    </article>)}
+    {result.missing_recorded_accounts && result.missing_recorded_accounts.length > 0 &&
+      <p>Recorded accounts absent from this observation: {result.missing_recorded_accounts.join(", ")}.</p>}
+    {result.limitations && <details><summary>Comparison limitations</summary>
+      <ul>{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>
+    </details>}
+  </section>;
+}
+
 export function MonitoringWorkflowPage() {
   const client = useQueryClient();
   const inbox = useQuery({ queryKey: ["monitoring-reviews"],
@@ -113,8 +158,8 @@ export function MonitoringWorkflowPage() {
   const [cash, setCash] = useState("");
   const [coverage, setCoverage] = useState<"complete" | "partial" | "unknown">("partial");
   const [evidence, setEvidence] = useState("");
-  const [holdings, setHoldings] = useState("[]");
-  const [productMappings, setProductMappings] = useState("[]");
+  const [holdings, setHoldings] = useState<StagedHolding[]>([]);
+  const [productMappings, setProductMappings] = useState<ProductMapping[]>([]);
   const data = inbox.data;
   const auth = session.data;
   const csrf = auth?.csrf || "";
@@ -138,8 +183,13 @@ export function MonitoringWorkflowPage() {
   async function previewObservation(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError(""); setPreview(null);
     try {
-      const observedHoldings: unknown = JSON.parse(holdings);
-      const mappings: unknown = JSON.parse(productMappings);
+      const observedHoldings = holdings.filter(item => item.source_product.trim() || item.quantity.trim());
+      if (observedHoldings.some(item => !item.source_product.trim() || !item.quantity.trim()))
+        throw new Error("Complete both the source product and quantity for each holding, or remove that row.");
+      const mappings = productMappings.filter(item =>
+        item.source_product.trim() || item.product_id.trim() || item.evidence.trim());
+      if (mappings.some(item => !item.source_product.trim() || !item.product_id.trim() || !item.evidence.trim()))
+        throw new Error("Complete all product mapping fields, or remove that mapping row.");
       const selectedAccountId = accountId || auth?.accounts[0]?.account_id;
       const account = auth?.accounts.find(item => item.account_id === selectedAccountId);
       if (!account) throw new Error("Select an explicitly configured account.");
@@ -149,7 +199,6 @@ export function MonitoringWorkflowPage() {
         cash: cash === "" ? null : cash, holdings: observedHoldings,
         coverage, evidence,
       };
-      if (!Array.isArray(mappings)) throw new Error("Product mappings must be a JSON list.");
       if (mappings.length) {
         observation.product_mappings = mappings;
         observation.mapping_available_at = mappingAt;
@@ -177,7 +226,11 @@ export function MonitoringWorkflowPage() {
     finally { setBusy(false); }
   }
   return <article className="investment-view monitoring-workflow">
-    <section className="history-group">
+    <nav className="monitoring-workflow-nav" aria-label="Monitoring workflow sections">
+      <a href="#review-inbox">Review inbox</a>
+      <a href="#observation-staging">Stage an observation</a>
+    </nav>
+    <section className="history-group" id="review-inbox">
       <h2>Monitoring review inbox</h2>
       <p>Read-only summaries from the explicitly selected local review store. Reading never syncs or changes it.</p>
       {inbox.isError && <p role="alert">The selected review inbox or its exact portfolio/profile/cache binding is unavailable.</p>}
@@ -200,7 +253,7 @@ export function MonitoringWorkflowPage() {
       </>}
     </section>
 
-    <section className="history-group">
+    <section className="history-group" id="observation-staging">
       <h2>Operator-normalized observation staging</h2>
       <p>Local manual entry only; no provider/network access. Preview compares available GBP evidence first.
         Confirmation appends only to the separate monitoring cache—never the investment journal.</p>
@@ -228,14 +281,45 @@ export function MonitoringWorkflowPage() {
             <option value="complete">Complete (operator-declared)</option>
             <option value="partial">Partial</option><option value="unknown">Unknown</option>
           </select></label>
-          <label>Mapping evidence observed at (UTC)<input required value={mappingAt}
+          <label>Account and product mapping evidence available at (UTC)<input required value={mappingAt}
             placeholder="2026-11-17T11:00:00Z" onChange={event => setMappingAt(event.target.value)} /></label>
           <label>Operator evidence description<input required maxLength={2000} value={evidence}
             onChange={event => setEvidence(event.target.value)} /></label>
-          <label>Holdings JSON list (source_product and quantity)<textarea value={holdings}
-            onChange={event => setHoldings(event.target.value)} /></label>
-          <label>Explicit product mappings JSON list (optional)<textarea value={productMappings}
-            onChange={event => setProductMappings(event.target.value)} /></label>
+          <fieldset className="monitoring-entry-group">
+            <legend>Observed holdings</legend>
+            <p>Enter only source evidence. Do not enter a row for an unknown quantity; coverage remains explicit.</p>
+            {holdings.map((holding, index) => <div className="monitoring-entry-row" key={index}>
+              <label>Source product name<input required value={holding.source_product}
+                onChange={event => setHoldings(rows => rows.map((row, i) => i === index
+                  ? { ...row, source_product: event.target.value } : row))} /></label>
+              <label>Observed quantity<input required inputMode="decimal" value={holding.quantity}
+                onChange={event => setHoldings(rows => rows.map((row, i) => i === index
+                  ? { ...row, quantity: event.target.value } : row))} /></label>
+              <button type="button" aria-label={`Remove observed holding ${index + 1}`}
+                onClick={() => setHoldings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
+            </div>)}
+            <button type="button" onClick={() => setHoldings(rows => [...rows, { source_product: "", quantity: "" }])}>
+              Add observed holding</button>
+          </fieldset>
+          <fieldset className="monitoring-entry-group">
+            <legend>Explicit product mappings (optional)</legend>
+            <p>Mappings are operator-supplied evidence. They are never inferred from names.</p>
+            {productMappings.map((mapping, index) => <div className="monitoring-entry-row" key={index}>
+              <label>Source product<input required value={mapping.source_product}
+                onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
+                  ? { ...row, source_product: event.target.value } : row))} /></label>
+              <label>Journal product ID<input required value={mapping.product_id}
+                onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
+                  ? { ...row, product_id: event.target.value } : row))} /></label>
+              <label>Evidence for this mapping<input required value={mapping.evidence}
+                onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
+                  ? { ...row, evidence: event.target.value } : row))} /></label>
+              <button type="button" aria-label={`Remove product mapping ${index + 1}`}
+                onClick={() => setProductMappings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
+            </div>)}
+            <button type="button" onClick={() => setProductMappings(rows =>
+              [...rows, { source_product: "", product_id: "", evidence: "" }])}>Add product mapping</button>
+          </fieldset>
           <button type="submit" disabled={busy || !csrf}>Preview and reconcile</button>
         </form>
         {preview && <div className="recording-preview observation-preview" role="region" aria-label="Observation reconciliation preview">
@@ -246,7 +330,7 @@ export function MonitoringWorkflowPage() {
           <details><summary>Normalized observation to be staged</summary>
             <pre>{JSON.stringify(preview.observation, null, 2)}</pre>
           </details>
-          <pre>{JSON.stringify(preview.reconciliation, null, 2)}</pre>
+          <ReconciliationSummary result={preview.reconciliation} />
           <button type="button" disabled={busy} onClick={() => void confirmStage()}>
             Confirm and stage only to the monitoring cache
           </button>

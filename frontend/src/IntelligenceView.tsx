@@ -71,11 +71,16 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       <h2>Current source coverage</h2>
       <p>U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS. UK/global calendars and issuer coverage are not established; coverage remains incomplete and unverified.</p>
     </section>
-    <section className="position-section">
+    <nav className="intelligence-sections" aria-label="Intelligence sections">
+      <div><span>Evidence</span><a href="#intelligence-calendar">Calendar</a><a href="#intelligence-briefs">AI briefs</a>
+        <a href="#intelligence-news">Source evidence</a></div>
+      <div><span>Settings</span><a href="#intelligence-controls">Analysis controls</a></div>
+    </nav>
+    <section className="position-section" id="intelligence-calendar">
       <div className="section-heading"><h2><CalendarDays size={18}/> Economic calendar</h2><span className="status caution">Coverage unverified</span></div>
       <div className="table-scroll" tabIndex={0} aria-label="Economic calendar" aria-describedby="table-scroll-instructions"><table><thead><tr><th>Event</th><th>Scheduled (UTC)</th><th>Instruments</th></tr></thead><tbody>{snapshot.calendar.map(event=><tr key={event.event_id}><td>{event.title}</td><td>{timestamp(event.scheduled_at,"Unknown")}</td><td>{event.symbols.join(', ')}</td></tr>)}</tbody></table>{snapshot.calendar.length===0&&<div className="intelligence-empty"><h3>No calendar events recorded</h3><p>{calendarCollectionActive?"No events are recorded in this snapshot. Calendar coverage remains unverified; this does not establish that no events are scheduled.":"Calendar collection is off in the applied settings. This empty view does not establish that no events are scheduled."}</p></div>}</div>
     </section>
-    <section className="position-section">
+    <section className="position-section" id="intelligence-briefs">
       <div className="section-heading"><h2>AI briefs</h2><span className="subtle">{snapshot.budget?.calls??0} reserved calls today</span></div>
       {snapshot.briefs.length===0?<div className="intelligence-empty"><h3>No AI briefs recorded</h3><p>{briefGenerationActive?"No briefs are recorded in this snapshot. Enabled settings do not guarantee a completed analysis.":"Brief generation requires Market intelligence, News collection, and AI summaries in the applied settings. This empty list is not evidence that no relevant events exist."}</p></div>:snapshot.briefs.map(brief=><article className="intelligence-brief" key={brief.brief_id}>
         <div><span className="status caution">{Date.parse(brief.expires_at)<=Date.now()?'Expired':'Unverified'} / {brief.recommendation}</span><span className="subtle">{brief.provider} / {brief.model}</span></div>
@@ -92,13 +97,13 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
         <p>{brief.interpretation}</p><ul>{brief.uncertainties.map(value=><li key={value}>{value}</li>)}</ul>
       </article>)}
     </section>
-    <section className="position-section">
+    <section className="position-section" id="intelligence-news">
       <div className="section-heading"><h2><Newspaper size={18}/> Source evidence</h2></div>
       <div className="snapshot-strip" role="status"><span>Last news-source observation: {snapshot.source_status?label(snapshot.source_status.status):"Unknown"}</span><span>{timestamp(snapshot.source_status?.available_at||null)}</span></div>
       {snapshot.news.map(item=><article id={`evidence-${item.evidence_id}`} className="intelligence-news" key={item.evidence_id}><a href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a><time>Published {timestamp(item.published_at,"Unknown")}</time><p>{item.snippet}</p></article>)}
       {snapshot.news.length===0&&<div className="intelligence-empty"><h3>No news evidence recorded</h3><p>{newsCollectionActive?`No news items are recorded in this snapshot. ${sourceObservation} News coverage may be incomplete.`:"News collection is off in the applied settings. No evidence here does not establish that no relevant news exists."}</p></div>}
     </section>
-    <section className="intelligence-controls">
+    <section className="intelligence-controls" id="intelligence-controls">
       <div className="section-heading"><div><h2>Analysis controls</h2><span className="subtle">Optional settings for collection and analysis</span></div><span className="status caution">No trading authority</span></div>
       <div className="intelligence-revisions" aria-label="Analysis settings status">
         <div><span>Latest request</span><strong>{requested?`Revision ${requested.settings.revision}: awaiting application`:latestControl?`${label(latestControl.status)} / ${latestControl.reason}`:"No recorded request"}</strong></div>

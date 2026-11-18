@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import validate from "./monitoring-validator.js";
 import { timestamp } from "./api";
@@ -58,6 +59,8 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
             observed positions: {item.native_summary.position_count}. Not verified cash, GBP value or complete holdings.</>}
         </li>)}</ul>
         <h3>Findings for review</h3>
+        <p><NavLink className="text-link" to="/investment/reviews">Open the separate review inbox</NavLink>
+          {" "}to synchronize and record an append-only workflow action. Inbox status does not resolve a finding.</p>
         <ul>{data.findings.map(item => <li key={item.id}>
           <strong>{item.subject}: {item.status}</strong> - {item.explanation}
           {item.calculation !== null && <> Calculation: {item.calculation}.</>}

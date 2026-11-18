@@ -383,6 +383,104 @@ type RecordingPreview = { preview_id: string; revision: number; event: Record<st
 type OpeningHoldingInput = { account_id: string; product_id: string; quantity: string; price_gbp: string };
 type ScopeHoldingInput = OpeningHoldingInput & { existing: boolean };
 
+const RECORD_REVIEW_FIELDS = [
+  ["action", "Action"], ["target", "Identity type"], ["account_id", "Account"],
+  ["destination_account_id", "Destination account"], ["product_id", "Product"],
+  ["entity_id", "Identity"], ["role", "Management role"], ["amount_gbp", "Amount"],
+  ["balance_gbp", "Observed balance"], ["quantity", "Quantity"],
+  ["price_gbp", "Price per unit"], ["fee_gbp", "Recorded fee"], ["ratio", "Split ratio"],
+  ["currency", "Currency"], ["name", "Name"], ["source", "Source"],
+  ["timestamp", "Effective / recorded at"], ["available_at", "Evidence available at"],
+  ["evidence", "Evidence description"],
+] as const;
+
+function recordReviewValue(key: string, value: unknown, event: Record<string, unknown>,
+  session: RecordingSession): string {
+  if (typeof value !== "string" && typeof value !== "number") return "Unavailable";
+  const text = String(value);
+  if (key === "account_id" || key === "destination_account_id") {
+    const account = session.accounts.find(item => item.id === text);
+    return account ? `${account.name} (${account.id})` : text;
+  }
+  if (key === "product_id") {
+    const product = session.products.find(item => item.id === text);
+    return product ? `${product.name} (${product.id})` : text;
+  }
+  if (key === "entity_id") {
+    const collection = event.target === "account" ? session.accounts : session.products;
+    const item = collection.find(candidate => candidate.id === text);
+    return item ? `${item.name} (${item.id})` : text;
+  }
+  if (key === "amount_gbp" || key === "balance_gbp" || key === "price_gbp" || key === "fee_gbp")
+    return pounds(text, true);
+  if (key === "timestamp" || key === "available_at") return timestamp(text);
+  if (key === "currency") return text.toUpperCase();
+  if (key === "action" || key === "target" || key === "role")
+    return label(text);
+  if (key === "quantity") return `${text} units`;
+  return text;
+}
+
+function RecordReview({ preview, session }: { preview: RecordingPreview; session: RecordingSession }) {
+  const event = preview.event;
+  const kind = typeof event.type === "string" ? event.type : "record";
+  const fields = RECORD_REVIEW_FIELDS.filter(([key]) => event[key] !== undefined);
+  const balances = typeof event.balances_gbp === "object" && event.balances_gbp !== null
+    ? event.balances_gbp as Record<string, unknown> : null;
+  const holdings = Array.isArray(event.holdings)
+    ? event.holdings.filter((item): item is Record<string, unknown> =>
+      typeof item === "object" && item !== null) : [];
+  const replacement = typeof event.replacement_event === "object" && event.replacement_event !== null
+    ? event.replacement_event as Record<string, unknown> : null;
+  const replacementFields = replacement
+    ? RECORD_REVIEW_FIELDS.filter(([key]) => replacement[key] !== undefined) : [];
+  const newAccount = typeof event.account === "object" && event.account !== null
+    ? event.account as Record<string, unknown> : null;
+  const newProduct = typeof event.product === "object" && event.product !== null
+    ? event.product as Record<string, unknown> : null;
+  return <section className="record-review" aria-label="Record summary">
+    <h4>{label(kind)} — server-validated preview</h4>
+    <p>Journal revision {preview.revision}; preview expires {timestamp(preview.expires_at)}.
+      The summary below is from the exact event shown in the expandable details.</p>
+    <dl>{fields.map(([key, title]) => <div key={key}><dt>{title}</dt>
+      <dd>{recordReviewValue(key, event[key], event, session)}</dd></div>)}</dl>
+    {replacement && <section aria-label="Correction replacement details">
+      <h5>Replacement details</h5>
+      <p>Corrects an earlier {typeof replacement.type === "string" ? label(replacement.type) : "journal"}
+        {" "}record at {typeof replacement.timestamp === "string" ? timestamp(replacement.timestamp) : "an unavailable clock"}.
+        Original evidence remains in the journal.</p>
+      <dl>{replacementFields.map(([key, title]) => <div key={key}><dt>{title}</dt>
+        <dd>{recordReviewValue(key, replacement[key], replacement, session)}</dd></div>)}</dl>
+    </section>}
+    {newAccount && <p>Account added to scope: {String(newAccount.name ?? "Name unavailable")}
+      {" "}({String(newAccount.id ?? "ID unavailable")}), {String(newAccount.kind ?? "classification unavailable")}.</p>}
+    {newProduct && <p>Product added: {String(newProduct.name ?? "Name unavailable")}
+      {" "}({String(newProduct.id ?? "ID unavailable")}), {String(newProduct.sleeve ?? "classification unavailable")}.</p>}
+    {balances && <section aria-label="Opening cash by account"><h5>Cash included in this record</h5><dl>
+      {Object.entries(balances).map(([id, value]) => {
+        const account = session.accounts.find(item => item.id === id);
+        return <div key={id}><dt>{account ? `${account.name} (${id})` : id}</dt>
+          <dd>{typeof value === "string" ? pounds(value, true) : "Unavailable"}</dd></div>;
+      })}
+    </dl></section>}
+    {holdings.length > 0 && <section aria-label="Holdings included in this record"><h5>Holdings included</h5><ul>
+      {holdings.map((holding, index) => {
+        const account = session.accounts.find(item => item.id === holding.account_id);
+        const product = session.products.find(item => item.id === holding.product_id);
+        const priceValue = holding.price_gbp;
+        return <li key={`${String(holding.account_id)}:${String(holding.product_id)}:${index}`}>
+          {account?.name ?? String(holding.account_id ?? "Account unavailable")} / {product?.name ?? String(holding.product_id ?? "Product unavailable")}:
+          {" "}{String(holding.quantity ?? "Quantity unavailable")} units; price {typeof priceValue === "string" ? pounds(priceValue, true) : "unknown — not zero"}.
+        </li>;
+      })}
+    </ul></section>}
+    <details className="recording-event">
+      <summary>Exact event and evidence being appended</summary>
+      <pre>{JSON.stringify(event, null, 2)}</pre>
+    </details>
+  </section>;
+}
+
 function localDateTime() {
   const value = new Date();
   value.setMinutes(value.getMinutes() - value.getTimezoneOffset());
@@ -393,6 +491,11 @@ function eventClock(value: string) {
   const parsed = new Date(value);
   if (!value || Number.isNaN(parsed.getTime())) throw new Error("Enter a valid local date and time.");
   return parsed.toISOString();
+}
+
+function openDisclosure(id: string) {
+  const section = document.getElementById(id);
+  if (section instanceof HTMLDetailsElement) section.open = true;
 }
 
 async function recordingRequest<T>(path: string, csrf?: string, payload?: unknown): Promise<T> {
@@ -631,22 +734,33 @@ function InvestmentRecording() {
     <p>Explicit operator records only. Evidence and balances are not independently verified; this cannot place orders or move money.</p>
     {preview ? <div className="recording-preview" role="group" aria-label="Review record before confirmation">
       <h3>Review before recording</h3>
-      <p>{String(preview.event.type)} at the recorded portfolio revision {preview.revision}. This preview expires at {timestamp(preview.expires_at)}.</p>
       <dl className="health-facts">
         <div><dt>Current recorded value</dt><dd>{pounds(preview.before.equity_gbp)}</dd></div>
         <div><dt>Value after this record</dt><dd>{pounds(preview.after.equity_gbp)}</dd></div>
-        <div><dt>Effective time</dt><dd>{timestamp(String(preview.event.timestamp))}</dd></div>
       </dl>
-      <details className="recording-event" open aria-label="Full event being appended">
-        <summary>Full event and evidence being appended</summary>
-        <pre>{JSON.stringify(preview.event, null, 2)}</pre>
-      </details>
+      <RecordReview preview={preview} session={session} />
       <p className="position-note">Only confirm if the event, account, amount, evidence and before/after values match the source you reviewed.</p>
       <button type="button" disabled={busy} onClick={() => void confirmPreview()}>Confirm and append record</button>
       <button type="button" disabled={busy} onClick={() => setPreview(null)}>Cancel preview</button>
     </div> : <form className="recording-form" onSubmit={makePreview}>
-      {opened && <label>Record type<select value={kind} onChange={event => setKind(event.target.value)}>
-        {availableKinds.map(value => <option key={value} value={value}>{label(value)}</option>)}
+      {opened && <label>What are you recording?<select value={kind} onChange={event => setKind(event.target.value)}>
+        <optgroup label="Cash and income">
+          {["contribution", "withdrawal", "transfer", "interest", "dividend", "cash_observation"]
+            .filter(value => availableKinds.includes(value)).map(value =>
+              <option key={value} value={value}>{label(value)}</option>)}
+        </optgroup>
+        <optgroup label="Holdings and attribution">
+          {["buy", "sell", "mark", "split", "role_assignment"]
+            .filter(value => availableKinds.includes(value)).map(value =>
+              <option key={value} value={value}>{label(value)}</option>)}
+        </optgroup>
+        <optgroup label="Journal scope">
+          {["profile_change", "scope_addition"].filter(value => availableKinds.includes(value)).map(value =>
+            <option key={value} value={value}>{label(value)}</option>)}
+        </optgroup>
+        {availableKinds.includes("correction") && <optgroup label="Evidence correction">
+          <option value="correction">Correct an eligible earlier record</option>
+        </optgroup>}
       </select></label>}
       {kind === "correction" && <label>Event to correct<select required value={correctionEventId}
         onChange={event => {
@@ -887,6 +1001,7 @@ export function InvestmentView({ now }: { now: number }) {
   return <article className="investment-view">
     <div className="record-toolbar">
       <NavLink className="text-link" to="/investment-guide">Investment guide</NavLink>
+      {data?.source_mode === "recorded" && <NavLink className="record-action" to="/investment/record">Record evidence</NavLink>}
       <button className="icon-button refresh" aria-label="Refresh investment" disabled={query.isFetching} onClick={() => void query.refetch()}>
         <RefreshCw size={19} className={query.isFetching ? "spin" : ""} />
       </button>
@@ -910,20 +1025,16 @@ export function InvestmentView({ now }: { now: number }) {
             <div><span>Gain since baseline</span><strong>{pounds(data.since_baseline_gain_gbp)}</strong><small>Net of recorded fees</small></div>
           </section>
           <nav className="investment-sections" aria-label="Investment sections">
-            <a href="#investment-overview">Overview</a>
-            <a href="#investment-roles">Management roles</a>
-            <a href="#investment-performance">Performance history</a>
-            <a href="#investment-monitoring">Monitoring</a>
-            <a href="#investment-records">Journal records</a>
-            <a href="#investment-accounts">Cash and holdings</a>
-            <a href="#investment-awareness">Portfolio awareness</a>
-            <a href="#investment-policy">Proposal and limits</a>
+            <div><span>Portfolio</span><a href="#investment-roles">Roles</a><a href="#investment-performance">Performance</a></div>
+            <div><span>Review</span><a href="#investment-monitoring">Monitoring</a>
+              <a href="#investment-accounts" onClick={() => openDisclosure("investment-accounts")}>Accounts and cash</a>
+              <a href="#investment-records" onClick={() => openDisclosure("investment-records")}>Journal history</a></div>
+            <div><span>More</span><a href="#investment-awareness" onClick={() => openDisclosure("investment-awareness")}>Awareness</a>
+              <a href="#investment-policy" onClick={() => openDisclosure("investment-policy")}>Proposal and limits</a></div>
           </nav>
           <section className="investment-boundary" aria-label="Proposal boundary">
             <ShieldAlert size={18} />
             <p><strong>{data.proposal.status === "blocked" ? "Proposals are blocked." : "Proposal is review-only."}</strong> Recorded balances and illustrative role attribution are not approved targets or trade authority.</p>
-            {data.source_mode === "recorded" &&
-              <NavLink className="text-link" to="/investment/record">Record evidence</NavLink>}
           </section>
           <InvestmentNextSteps data={data} onReviewCashEvidence={() => {
             if (accountsRef.current) accountsRef.current.open = true;

@@ -17,10 +17,14 @@
 .record-toolbar > .refresh { margin-left: auto; }
 .history-chart { margin: 0 0 28px; padding: 16px 0; border-block: 1px solid var(--line); }
 .history-group[id] { scroll-margin-top: 20px; }
-.investment-sections { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+.investment-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0 0 18px; }
+.investment-sections > div, .intelligence-sections > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.investment-sections > div > span, .intelligence-sections > div > span { width: 100%; color: var(--muted); font: 10px "IBM Plex Mono", monospace; text-transform: uppercase; }
 .investment-sections a { border: 1px solid var(--line); border-radius: 4px; background: #fff; padding: 8px 11px; color: #377764; font-size: 12px; }
 .investment-sections a:hover { background: #f1f5f3; }
 .investment-sections a:focus-visible { outline: 2px solid #21836c; outline-offset: 3px; }
+.record-action { display: inline-flex; align-items: center; min-height: 36px; padding: 8px 12px; border: 1px solid var(--green); border-radius: 4px; color: var(--green); font-size: 12px; text-decoration: none; }
+.record-action:hover { background: var(--surface-raised); }
 .investment-view [id] { scroll-margin-top: 20px; }
 .investment-boundary { display: flex; align-items: center; gap: 12px; margin: 0 0 24px; padding: 12px 14px; border-left: 3px solid #a63747; background: #fff2f1; color: #71444a; }
 .investment-boundary p { margin: 0; flex: 1; font-size: 12px; line-height: 1.5; }
@@ -76,6 +80,15 @@
 .recording-row label { display: grid; gap: 5px; min-width: 0; font-size: 11px; color: var(--muted); }
 .recording-preview { border: 1px solid var(--line); border-left: 3px solid var(--green); padding: 14px; }
 .recording-preview h3 { margin: 0; font-size: 14px; }
+.record-review { margin-block: 16px; padding: 14px; background: var(--surface); border-radius: 4px; overflow-wrap: anywhere; }
+.record-review > h4 { margin: 0; font-size: 14px; }
+.record-review > p { font-size: 12px; line-height: 1.5; }
+.record-review dl, .reconciliation-summary dl { display: grid; gap: 8px; margin: 12px 0; }
+.record-review dl > div, .reconciliation-summary dl > div { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1fr); gap: 12px; }
+.record-review dt, .reconciliation-summary dt { color: var(--muted); font-size: 12px; }
+.record-review dd, .reconciliation-summary dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.record-review h5 { margin: 16px 0 8px; font-size: 12px; }
+.record-review li { margin-block: 6px; font-size: 12px; }
 .recording-event { margin: 12px 0; border: 1px solid var(--line); background: #f7faf9; }
 .recording-event summary { padding: 9px 12px; cursor: pointer; font-size: 12px; color: var(--ink); }
 .recording-event pre { max-height: 240px; overflow: auto; margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
@@ -90,11 +103,31 @@
 .review-case small { color: var(--muted); }
 .observation-preview { margin-top: 16px; }
 .observation-preview pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.monitoring-workflow-nav, .intelligence-sections { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px 20px; }
+.monitoring-workflow-nav a, .intelligence-sections a { padding: 8px 11px; border: 1px solid var(--line); border-radius: 4px; color: var(--green); font-size: 12px; text-decoration: none; }
+.monitoring-workflow-nav a:hover, .intelligence-sections a:hover { background: var(--surface-raised); }
+.intelligence-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.intelligence-sections a { width: fit-content; }
+.monitoring-entry-group { grid-column: 1 / -1; display: grid; gap: 12px; border: 1px solid var(--line); padding: 14px; min-width: 0; }
+.monitoring-entry-group legend { padding-inline: 5px; font-size: 12px; }
+.monitoring-entry-group > p { margin: 0; font-size: 12px; color: var(--muted); }
+.monitoring-entry-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 10px; align-items: end; min-width: 0; }
+.monitoring-entry-row label { display: grid; gap: 5px; min-width: 0; font-size: 11px; color: var(--muted); }
+.monitoring-entry-row input { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface-raised); color: var(--ink); }
+.monitoring-entry-group button { width: fit-content; min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-raised); color: var(--ink); }
+.reconciliation-summary { margin-block: 16px; padding: 14px; border-top: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
+.reconciliation-summary h4 { margin: 0; font-size: 14px; }
+.reconciliation-summary article { padding-block: 12px; border-bottom: 1px solid var(--line); }
+.reconciliation-summary h5 { margin: 0; font-size: 12px; }
+.reconciliation-summary p, .reconciliation-summary li { font-size: 12px; line-height: 1.5; }
+.reconciliation-summary .table-scroll { margin-block: 12px; }
 @media (max-width: 640px) {
   .recording-form { grid-template-columns: 1fr; }
   .recording-form fieldset > label { grid-template-columns: 1fr; gap: 6px; }
   .recording-row { grid-template-columns: 1fr 1fr; }
   .review-case { grid-template-columns: 1fr; }
+  .monitoring-entry-row { grid-template-columns: 1fr; }
+  .record-review dl > div, .reconciliation-summary dl > div { grid-template-columns: 1fr; gap: 3px; }
 }
 .history-group h3 { margin: 0; font-size: 15px; }
 .record-id { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; font: 10px "IBM Plex Mono", monospace; color: var(--muted); margin-top: 4px; }
@@ -266,6 +299,7 @@ input, select, textarea { accent-color: #40d899; }
   background: var(--surface-raised); color: var(--ink); border-color: var(--line);
 }
 .investment-sections a, .text-link, footer a { color: #78e1b0; }
+.record-action { color: #78e1b0; border-color: #34785a; }
 .investment-sections a:hover, .icon-button:hover { background: #20372a; }
 .metrics { gap: 12px; padding: 0; border: 0; }
 .investment-view .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -310,7 +344,7 @@ tbody tr:hover { background: #182b21; }
   .shell { grid-template-columns: 185px minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
-  .shell { display: grid; grid-template-columns: 72px minmax(0, 1fr); }
+  .shell { display: grid; grid-template-columns: 84px minmax(0, 1fr); }
   .sidebar { height: 100vh; min-height: 0; padding: 14px 5px; border-right: 1px solid var(--line); border-bottom: 0; }
   .brand { justify-content: center; }
   .brand-name, .nav-section-label, .sidebar-bottom { display: none; }
@@ -318,7 +352,7 @@ tbody tr:hover { background: #182b21; }
   .nav-section { display: grid; padding: 0; }
   .advisory-nav-section { border: 0; border-top: 1px solid var(--line); padding: 8px 0 0; margin: 0; }
   .sidebar .nav-section nav { display: grid; gap: 4px; min-width: 0; }
-  .sidebar .nav-section nav a { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-height: 54px; padding: 7px 2px; border: 0; border-radius: 6px; font-size: 9px; line-height: 1.15; text-align: center; white-space: normal; overflow-wrap: anywhere; }
+  .sidebar .nav-section nav a { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-height: 56px; padding: 7px 2px; border: 0; border-radius: 6px; font-size: 10px; line-height: 1.2; text-align: center; white-space: normal; overflow-wrap: anywhere; }
   .sidebar .nav-section nav a svg { display: block; flex-shrink: 0; }
   .sidebar .nav-section nav a.active { background: #142d21; color: var(--green); }
   .metrics { gap: 8px; }

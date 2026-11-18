@@ -124,10 +124,15 @@ test("intelligence briefs link only loaded evidence and show their validity wind
 
   await expect(page.locator(".page-description")).toHaveText("Optional calendar, news, and analysis. Advisory only and separate from account records.");
   await expect(page.getByRole("navigation",{name:"Advisory navigation"})).toContainText("Intelligence");
+  const sections=page.getByRole("navigation",{name:"Intelligence sections"});
+  await expect(sections.getByRole("link",{name:"Source evidence"})).toHaveAttribute("href","#intelligence-news");
+  await expect(sections.getByRole("link",{name:"Analysis controls"})).toHaveAttribute("href","#intelligence-controls");
   await expect(page.locator(".intelligence-brief-time")).toContainText("Available Mar 8, 2026");
   await expect(page.locator(".intelligence-brief-time")).toContainText("Expires Mar 8, 2026");
   await expect(page.getByRole("link",{name:"Evidence: Synthetic cited source"})).toHaveAttribute("href","#evidence-evidence-1");
   await expect(page.getByText("Not in this snapshot: missing-evidence",{exact:true})).toBeVisible();
+  await page.getByRole("navigation",{name:"Intelligence sections"}).getByRole("link",{name:"Source evidence"}).click();
+  await expect(page).toHaveURL(/#intelligence-news$/);
   const sourceSection=page.locator(".position-section").filter({has:page.getByRole("heading",{name:"Source evidence"})});
   await expect(sourceSection.locator(".snapshot-strip")).toContainText("Last news-source observation: Available");
   await expect(sourceSection.locator(".snapshot-strip")).toContainText("Mar 8, 2026");

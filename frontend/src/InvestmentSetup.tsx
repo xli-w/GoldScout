@@ -12,7 +12,7 @@ const identifier = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const newAccount = (): Account => ({ id: identifier("account"), binding: identifier("local"),
   name: "", kind: "", cash: "" });
 const steps = ["Accounts", "Products", "Opening evidence", "Review"];
-const fixedWarning = "Accounts and products are fixed after creation in this wizard. Adding them later is not supported by this wizard.";
+const fixedWarning = "Accounts and products are fixed after creation by the initial setup wizard. Later scope additions and eligible profile changes require separate recording opt-in and server-gated previews; they do not enable unrestricted editing.";
 
 function amount(value: string, label: string, positive = false): string {
   if (!/^(?:0|[1-9]\d{0,14})(?:\.\d{1,8})?$/.test(value) ||

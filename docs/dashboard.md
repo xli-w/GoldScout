@@ -30,6 +30,13 @@ revision confirmation. Setup does not grant recording authority.
 Monitoring cache/workflow writes have separate gates; a page refresh never
 collects provider data or updates accounting.
 
+Investment and advisory pages provide section shortcuts for their longer
+evidence views. Recording previews show a human-readable summary with the exact
+event retained in expandable details. Monitoring observation entry uses
+separate holding and explicit mapping fields; comparison results are displayed
+separately from append-only review-inbox actions. Neither workflow status nor a
+reconciliation match establishes current custody or approves a trade.
+
 The server has no user login and must remain loopback-only: host/origin and
 CSRF defenses are not authentication or protection against another local user.
 Do not expose or tunnel it. Intelligence analysis controls require their own
