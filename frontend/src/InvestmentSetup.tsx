@@ -111,8 +111,8 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     void run(async () => {
       if (session?.state === "recoverable" && (!recoveryEntry || !recovery?.requires_opening))
         throw new Error("The original setup details are unavailable. Keep all setup files unchanged and reload for recovery guidance.");
-      const timestamp = utc(effective, "Balances as of");
-      const availableAt = utc(available, "Source available from");
+      const timestamp = recoveryEntry ? utc(effective, "Balances as of") : new Date().toISOString();
+      const availableAt = recoveryEntry ? utc(available, "Source available from") : timestamp;
       if (availableAt < timestamp) throw new Error('"Source available from" cannot be earlier than "Balances as of". Check the dates against your source; do not guess.');
       const wireAccounts: SetupProfile["accounts"] = accounts.map(a => {
         if (!a.name.trim() || !a.kind) throw new Error("Give each account a name and choose its type.");
@@ -186,9 +186,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   return <section className="investment-setup" aria-label="Investment setup" aria-busy={busy}>
     <p className="eyebrow">WELCOME TO GOLDSCOUT</p>
     <h1 ref={heading} tabIndex={-1}>Let's set up your portfolio</h1>
-    <p className="setup-intro">Keep a record of your savings and investments in pounds. You'll add your accounts,
-      enter starting balances, then check everything before saving.</p>
-    <p className="position-note">Manual records only. This does not connect to a bank or broker, move money or make investment decisions.</p>
+    <p className="setup-intro">Keep a record of your savings and investments in pounds. You'll add your accounts, enter starting balances, then check everything before saving.</p>
     <p className="setup-draft-note">{session?.state === "recoverable"
       ? "Leaving or reloading loses any re-entered figures. Existing setup files may already contain saved records."
       : "Your draft is not saved until you confirm. Leaving or reloading this page loses your progress."}</p>
@@ -259,8 +257,10 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
             <li key={p.id}>{p.name} — {p.sleeve === "equity" ? "Shares / equity" : "Bonds"}, {p.currency};
               smallest quantity step {p.quantity_increment}; minimum purchase GBP {p.minimum_notional_gbp}</li>)}</ul>}
           <dl className="review-dates">
-            <div><dt>Balances and prices as of</dt><dd>{reviewTimestamp(preview.opening.timestamp)}</dd></div>
-            <div><dt>Source available from</dt><dd>{reviewTimestamp(preview.opening.available_at)}</dd></div>
+            <div><dt>{session.state === "recoverable" ? "Balances and prices as of" : "Starting figures recorded at"}</dt>
+              <dd>{reviewTimestamp(preview.opening.timestamp)}</dd></div>
+            {session.state === "recoverable" &&
+              <div><dt>Source available from</dt><dd>{reviewTimestamp(preview.opening.available_at)}</dd></div>}
           </dl>
           <p>Where these figures came from: {preview.opening.evidence}</p>
           <p>Performance tracking starts from: {preview.report.baseline_as_of === null ? "Not available yet" : reviewTimestamp(preview.report.baseline_as_of)}.
@@ -387,23 +387,20 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                     Recovery verifies the original confirmed opening hash.</p>
                   <pre>{JSON.stringify(recovery.profile, null, 2)}</pre></details>
               </section>}
-              <p>Enter what you had at one point in time: cash in every account and all investments you already owned.</p>
-              <h3>1. When do the figures apply?</h3>
-              <p className="position-note">Use the same date and time for all balances and prices. Enter dates in {Intl.DateTimeFormat().resolvedOptions().timeZone};
-                the review shows local time alongside exact UTC time.</p>
-              <p className="example-note"><strong>Two different dates:</strong> a statement might describe balances at 6 pm on 1 July
-                but first become available at 9 am on 2 July. Enter those two times, not today's typing time.
-                This is an example, not suggested dates for your records.</p>
-              <details className="help-disclosure"><summary>Why are there two dates?</summary>
-                <p>"Balances as of" is the time the figures describe. "Source available from" is when that information actually became available,
-                  not the time you are typing it. For example, a statement may describe an earlier date but be published later.</p>
-                <p>Late information or unknown prices can prevent a complete starting value or performance starting point (baseline).
-                  Earlier transactions, purchase costs and past gains are not reconstructed.</p>
-              </details>
-              <label>Balances as of (local time)<input required type="datetime-local" value={effective}
-                onChange={event => { changed(); setEffective(event.target.value); }} /></label>
-              <label>Source available from (local time)<input required type="datetime-local" value={available}
-                onChange={event => { changed(); setAvailable(event.target.value); }} /></label>
+              <p>Enter the cash and holdings you have now. All starting figures use one current time, captured when you request the preview.</p>
+              <h3>1. Starting figures</h3>
+              <p className="position-note">The review shows the recorded time in your local timezone alongside its exact UTC time.
+                This setup cannot be backdated.</p>
+              {recoveryEntry && <details className="help-disclosure" open>
+                <summary>Re-enter the original opening time</summary>
+                <p>Recovery must reproduce the original record exactly. Enter its original dates and source details; approximate values are refused.</p>
+              </details>}
+              {recoveryEntry && <>
+                <label>Balances as of (local time)<input required type="datetime-local" value={effective}
+                  onChange={event => { changed(); setEffective(event.target.value); }} /></label>
+                <label>Source available from (local time)<input required type="datetime-local" value={available}
+                  onChange={event => { changed(); setAvailable(event.target.value); }} /></label>
+              </>}
               <h3>2. Cash in each account</h3>
               <p>Enter cash only, not the value of investments held in the account. Enter 0 if your source confirms no cash. Don't leave a cash balance blank.</p>
               {accounts.map(a => <label key={a.id}>Cash for {a.name} (GBP)<input required inputMode="decimal" maxLength={34}

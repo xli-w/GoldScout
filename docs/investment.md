@@ -20,20 +20,22 @@ the bound preview. No login or hand-written profile is required.
 
 The wizard walks through **Accounts**, **Investments**, **Starting balances**,
 and **Review and save**. Cash-only users can skip adding investments. Expand
-the help panels for privacy/storage, account types, quantity rules and the
-two dates; required fields remain visible. Missing prices remain unknown, not
-zero. The final review shows the exact figures, source, dates and warnings
-before confirmation. Leaving or reloading loses an unsaved draft.
+the help panels for privacy/storage, account types and quantity rules; required
+fields remain visible. Missing prices remain unknown, not zero. Enter current
+cash and holdings; the opening is timestamped when you request its preview, and
+the review shows that one time in local and UTC formats before confirmation.
+Leaving or reloading loses an unsaved draft.
 
 Fictional setup examples distinguish an investment from the units held in an
 account. Quantity steps and minimum purchases must come from the provider's
 rules for that investment/account; unknown values are not prefilled in the
 manual investment-addition form. Pause if a required fact cannot be verified.
 Setup and recording reviews show local time with its timezone alongside the
-unchanged UTC timestamp. A statement's balance time and publication/availability
-time are different facts, not interchangeable entry-time defaults. Ambiguous
-local times when clocks move back are refused rather than silently choosing an
-occurrence; pause unless an unambiguous supported time can be supplied.
+unchanged UTC timestamp. New setup records both opening clocks at preview
+submission because the figures are entered as current; setup does not backdate
+them. Interrupted-setup recovery still requires the original opening clocks to
+reconstruct and verify the exact record. Ambiguous recovery times when clocks
+move back are refused rather than silently choosing an occurrence.
 
 On **Your portfolio**, start with **What needs attention** and the recorded date.
 These are not live bank balances. Optional roles and detailed history are

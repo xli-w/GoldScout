@@ -86,7 +86,10 @@ profitability or live readiness. [README](../README.md) defines current scope.
 - Setup requires same-origin/CSRF, a bound preview and explicit confirmation.
   Startup/status/preview creates no files. Existing artifacts are never
   overwritten. Setup stages/replay-validates before no-overwrite publication;
-  profile copy, journal and receipts are not one atomic filesystem transaction.
+  guided first-run setup records current starting figures at preview submission,
+  using that one clock for both opening effective time and `available_at`.
+  Interrupted-setup recovery preserves the original clocks for exact verification.
+  Profile copy, journal and receipts are not one atomic filesystem transaction.
   A post-publication failure must preserve/report the committed journal.
   Recovery requires exact setup provenance, not an arbitrary empty database.
 - [Backup/restore](investment-journal.md) uses pinned validated SQLite backup,

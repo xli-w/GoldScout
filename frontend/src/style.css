@@ -348,7 +348,6 @@ tbody tr:hover { background: #182b21; }
 .recording-form > .help-disclosure { grid-column: 1 / -1; margin: 0; }
 .recording-form .form-note, .workflow-action-form .form-note { grid-column: 1 / -1; width: 100%; margin: 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
 .field-help { display: block; font-size: 12px; line-height: 1.6; font-weight: 400; color: var(--muted); }
-.example-note { padding: 12px 14px; border-left: 3px solid var(--green); background: var(--surface); font-size: 13px; line-height: 1.65; }
 .review-dates { display: grid; gap: 12px; margin-block: 16px; }
 .review-dates dt { font-weight: 500; }
 .review-dates dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.65; }

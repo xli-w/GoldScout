@@ -96,9 +96,11 @@ async function accountStep(page, broker = false) {
   await page.getByRole("checkbox", { name: /These are the GBP accounts I want to track/ }).check();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 }
-async function evidenceStep(page) {
-  await page.getByLabel("Balances as of (local time)").fill("2026-01-01T10:00");
-  await page.getByLabel("Source available from (local time)").fill("2026-01-01T11:00");
+async function evidenceStep(page, recoveryEntry = false) {
+  if (recoveryEntry) {
+    await page.getByLabel("Balances as of (local time)").fill("2026-01-01T10:00");
+    await page.getByLabel("Source available from (local time)").fill("2026-01-01T11:00");
+  }
   await page.getByLabel("Cash for Synthetic savings (GBP)").fill("1234.56");
   await page.getByLabel("Where did these figures come from?").fill("Synthetic dated statement, selected scope only.");
 }
@@ -111,7 +113,12 @@ async function depositPreview(page) {
 
 test("guided deposit setup requires review and creates only on explicit confirmation", async ({ page }) => {
   const api = await setupRoutes(page);
+  await page.clock.setFixedTime(new Date("2026-01-01T10:00:00.000Z"));
   await unlock(page);
+  await expect(page.getByText("Keep a record of your savings and investments in pounds. You'll add your accounts, enter starting balances, then check everything before saving.", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Manual records only/)).toHaveCount(0);
+  await expect(page.getByLabel("Balances as of (local time)")).toHaveCount(0);
+  await expect(page.getByLabel("Source available from (local time)")).toHaveCount(0);
   const help = page.getByText("Before you start: privacy, storage and later changes", { exact: true });
   const disclosure = help.locator("..");
   await expect(disclosure).not.toHaveAttribute("open", "");
@@ -129,6 +136,8 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await expect(preview.getByText(/Where these figures came from/)).toBeVisible();
   await expect(preview.locator(".review-dates")).toContainText("Europe/London");
   await expect(preview.locator(".review-dates")).toContainText("UTC: 2026-01-01T10:00:00.000Z");
+  await expect(preview.locator(".review-dates")).toContainText("Starting figures recorded at");
+  await expect(preview.locator(".review-dates")).not.toContainText("Source available from");
   await preview.getByText("How starting values and performance are recorded", { exact: true }).click();
   await expect(preview.getByText(/All opening roles are unassigned/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
@@ -140,7 +149,9 @@ test("guided deposit setup requires review and creates only on explicit confirma
   expect(Object.values(request.opening.balances_gbp)).toEqual(["1234.56"]);
   expect(request.opening.holdings).toEqual([]);
   expect(request.opening.timestamp).toMatch(/Z$/);
-  expect(request.opening.available_at).toMatch(/Z$/);
+  expect(request.opening.timestamp).toBe("2026-01-01T10:00:00.000Z");
+  expect(request.opening.available_at).toBe(request.opening.timestamp);
+  expect(request.profile.created_at).toBe(request.opening.timestamp);
   const confirm = page.getByRole("button", { name: "Confirm and create local records" });
   await expect(confirm).toBeDisabled();
   await page.getByRole("checkbox", { name: /I reviewed every account/ }).check();
@@ -254,7 +265,7 @@ test("revision-zero recovery prefills only the original locked profile and recon
   await expect(page.getByLabel("Cash for Synthetic broker (GBP)")).toHaveValue("");
   await expect(page.getByLabel("Balances as of (local time)")).toHaveValue("");
   await expect(page.getByLabel("Where did these figures come from?")).toHaveValue("");
-  await evidenceStep(page);
+  await evidenceStep(page, true);
   await page.getByLabel("Cash for Synthetic broker (GBP)").fill("0.00");
   await page.getByRole("button", { name: "Add holding", exact: true }).click();
   await page.getByLabel("Holding 1 account").selectOption("original-broker");
@@ -278,7 +289,7 @@ test("reconstructed opening hash refusal cannot advance to confirmation or edit 
   const api = await setupRoutes(page, { state: "recoverable", recovery: recovery(), refusePreview: true });
   await page.goto("/setup");
   await page.getByRole("button", { name: "Re-enter original opening evidence" }).click();
-  await evidenceStep(page);
+  await evidenceStep(page, true);
   await page.getByLabel("Cash for Synthetic broker (GBP)").fill("1");
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("refused");
