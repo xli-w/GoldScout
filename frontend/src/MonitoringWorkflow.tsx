@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { NavLink } from "react-router-dom";
 import { label, reviewTimestamp, timestamp } from "./api";
+import { localClock } from "./recording";
 
 type ReviewCase = {
   case_id: string; finding_id: string; finding: {
@@ -20,7 +21,9 @@ type Inbox = { enabled: false } | {
 };
 type Session = {
   enabled: boolean; csrf: string | null; cache_enabled: boolean;
-  review_enabled?: boolean; accounts: { account_id: string; provider: string }[];
+  review_enabled?: boolean;
+  accounts: { account_id: string; name: string; provider: string }[];
+  products: { product_id: string; name: string }[];
 };
 type StagedHolding = { source_product: string; quantity: string };
 type ProductMapping = { source_product: string; product_id: string; evidence: string };
@@ -198,21 +201,24 @@ export function MonitoringWorkflowPage() {
       const selectedAccountId = accountId || auth?.accounts[0]?.account_id;
       const account = auth?.accounts.find(item => item.account_id === selectedAccountId);
       if (!account) throw new Error("Select an explicitly configured account.");
+      const observedClock = observedAt ? localClock(observedAt) : null;
+      const availableClock = localClock(availableAt);
+      const mappingClock = localClock(mappingAt);
       const observation: Record<string, unknown> = {
         id: observationId, account_id: account.account_id, provider: account.provider,
-        observed_at: observedAt || null, available_at: availableAt, currency: "GBP",
+        observed_at: observedClock, available_at: availableClock, currency: "GBP",
         cash: cash === "" ? null : cash, holdings: observedHoldings,
         coverage, evidence,
       };
       if (mappings.length) {
         observation.product_mappings = mappings;
-        observation.mapping_available_at = mappingAt;
+        observation.mapping_available_at = mappingClock;
       }
       const attemptRequestId = requestId || crypto.randomUUID();
       setRequestId(attemptRequestId);
       const result = await postJson<StagePreview>(
         "/api/investment/v1/monitoring-workflow/observation/preview", csrf,
-        { request_id: attemptRequestId, mapping_observed_at: mappingAt, observation });
+        { request_id: attemptRequestId, mapping_observed_at: mappingClock, observation });
       setPreview(result);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Preview rejected."); }
     finally { setBusy(false); }
@@ -276,8 +282,9 @@ export function MonitoringWorkflowPage() {
         not a portfolio transaction. There is no provider or network access.</p>
       <details className="help-disclosure"><summary>How this differs from recording a transaction</summary>
         <p>A snapshot compares what a source reported with your journal. It does not repair a difference or change the journal.
-          Required dates and mappings say when the source was available and which account or investment it represents.
-          Use explicit UTC times such as 2026-11-17T12:05:00Z; never guess unknown cash or quantities.</p>
+          The dates keep separate when figures apply, when the source became available, and when account or investment matches
+          were established. Enter source times in your computer's local timezone; they are converted to UTC for review.
+          If the timezone is unclear, pause rather than guessing.</p>
         <p>The save request reference (attempt ID) identifies this save request. Keep it unchanged when retrying the same snapshot.
           "Complete" means you declare the source coverage complete; it is not independent verification.</p>
       </details>
@@ -294,7 +301,7 @@ export function MonitoringWorkflowPage() {
           <label>Account to compare<select required value={accountId || auth.accounts[0]?.account_id || ""}
             onChange={event => setAccountId(event.target.value)}>
             {auth.accounts.map(item => <option key={item.account_id} value={item.account_id}>
-              {item.account_id} / {item.provider}</option>)}
+              {item.name}</option>)}
           </select></label>
           <label>Snapshot reference (source observation ID)<input required maxLength={200} value={observationId}
             aria-label="Snapshot reference (source observation ID)" aria-describedby="snapshot-reference-help"
@@ -307,10 +314,10 @@ export function MonitoringWorkflowPage() {
             <p>Leave blank to generate one on preview. Keep it unchanged when retrying the same snapshot.
               This identifies the request, not the source statement.</p>
           </details>
-          <label>Snapshot applies at (UTC, blank if unknown)<input value={observedAt}
-            placeholder="2026-11-17T12:00:00Z" onChange={event => setObservedAt(event.target.value)} /></label>
-          <label>Source available from (UTC)<input required value={availableAt}
-            placeholder="2026-11-17T12:05:00Z" onChange={event => setAvailableAt(event.target.value)} /></label>
+          <label>When do these figures apply? (leave blank if unknown)<input type="datetime-local" value={observedAt}
+            onChange={event => setObservedAt(event.target.value)} /></label>
+          <label>When was this source available?<input required type="datetime-local" value={availableAt}
+            onChange={event => setAvailableAt(event.target.value)} /></label>
           <label>Cash (GBP decimal; blank if unknown)<input inputMode="decimal" value={cash}
             onChange={event => setCash(event.target.value)} /></label>
           <label>How much does the source cover?<select aria-label="How much does the source cover?" aria-describedby="snapshot-coverage-help"
@@ -319,16 +326,14 @@ export function MonitoringWorkflowPage() {
             <option value="partial">Some information only</option><option value="unknown">I cannot establish coverage</option>
           </select><small className="field-help" id="snapshot-coverage-help">An empty holdings list does not prove that the account has no investments.
             Unknown cash or quantity is not zero.</small></label>
-          <label>Account/investment match known from (UTC)<input required value={mappingAt}
-            aria-label="Account/investment match known from (UTC)" aria-describedby="snapshot-mapping-help"
-            placeholder="2026-11-17T11:00:00Z" onChange={event => setMappingAt(event.target.value)} />
+          <label>When was the account or investment match established?<input required type="datetime-local" value={mappingAt}
+            aria-describedby="snapshot-mapping-help" onChange={event => setMappingAt(event.target.value)} />
             <small className="field-help" id="snapshot-mapping-help">When the source identifying this account and any matched investments was available.
               Names alone are not proof of a match. If unknown, pause rather than guessing.</small></label>
           <label>Where did these figures come from?<input required maxLength={2000} value={evidence}
             onChange={event => setEvidence(event.target.value)} /></label>
-          <p className="form-note">These monitoring fields require UTC, ending in Z. For example, 10 am in London on 1 July is
-            09:00:00Z on that date, not 10:00:00Z. Check the source's timezone and date; do not copy this example as evidence.
-            Keep the time the figures describe separate from when the source became available.</p>
+          <p className="form-note">Enter each source time in your computer's local timezone. The preview shows the converted time
+            as well. Keep the time figures apply separate from when the source became available.</p>
           <fieldset className="monitoring-entry-group">
             <legend>Investments listed in the source</legend>
             <p>Enter only source evidence. Do not enter a row for an unknown quantity; coverage remains explicit.</p>
@@ -353,17 +358,23 @@ export function MonitoringWorkflowPage() {
               <label>Investment name to match<input required value={mapping.source_product}
                 onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, source_product: event.target.value } : row))} /></label>
-              <label>Recorded investment reference (ID)<input required value={mapping.product_id}
+              <label>Recorded investment<select required value={mapping.product_id}
                 onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
-                  ? { ...row, product_id: event.target.value } : row))} /></label>
+                  ? { ...row, product_id: event.target.value } : row))}>
+                <option value="">Choose an investment</option>
+                {auth.products.map(product => <option key={product.product_id} value={product.product_id}>
+                  {product.name}</option>)}
+              </select></label>
               <label>Source supporting this match<input required value={mapping.evidence}
                 onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, evidence: event.target.value } : row))} /></label>
               <button type="button" aria-label={`Remove product mapping ${index + 1}`}
                 onClick={() => setProductMappings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
             </div>)}
-            <button type="button" onClick={() => setProductMappings(rows =>
-              [...rows, { source_product: "", product_id: "", evidence: "" }])}>Add investment match</button>
+            {auth.products.length === 0
+              ? <p>No recorded investments are available to match. Source holdings can still be compared without a match.</p>
+              : <button type="button" onClick={() => setProductMappings(rows =>
+                [...rows, { source_product: "", product_id: "", evidence: "" }])}>Add investment match</button>}
           </fieldset>
           <button type="submit" disabled={busy || !csrf}>Preview comparison</button>
         </form>

@@ -392,7 +392,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
     def monitoring_workflow_session(request: Request):
         if monitoring_workflow is None:
             return {"enabled": False, "csrf": None,
-                    "accounts": [], "cache_enabled": False}
+                    "accounts": [], "products": [], "cache_enabled": False}
         from dashboard.monitoring_workflow import WorkflowError
         from investment import InvestmentError
         try:
@@ -401,9 +401,17 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             token = result.pop("_token")
             accounts, cache_enabled = [], monitoring_cache is not None
             sources = workflow_sources()
-            accounts = [{"account_id": item["account_id"], "provider": item["provider"]}
-                        for item in sources["profile"]["accounts"]]
-            result.update({"accounts": accounts, "cache_enabled": cache_enabled,
+            portfolio_accounts = {
+                item["id"]: item for item in sources["ledger"].spec["accounts"]}
+            accounts = [{
+                "account_id": item["account_id"],
+                "name": portfolio_accounts[item["account_id"]]["name"],
+                "provider": item["provider"],
+            } for item in sources["profile"]["accounts"]]
+            products = [{"product_id": item["id"], "name": item["name"]}
+                        for item in sources["ledger"].spec["products"]]
+            result.update({"accounts": accounts, "products": products,
+                           "cache_enabled": cache_enabled,
                            "review_enabled": monitoring_reviews is not None})
             response = JSONResponse(result)
             response.set_cookie(

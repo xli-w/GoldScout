@@ -34,20 +34,21 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
     queryFn: ({ signal }) => load(signal), retry: false, refetchInterval: poll ? 60000 : false });
   const data = query.data;
   const mismatch = data?.enabled && (data.portfolio_id !== portfolioId || data.portfolio_revision !== revision);
-  return <section className="history-group portfolio-monitoring" id="investment-monitoring" aria-label="Portfolio monitoring">
-    <h2>Portfolio monitoring</h2>
-    <p className="position-note">Checks that may need your attention. Refresh reads saved information; it does not contact a provider or change your accounts.</p>
-    <div className="monitoring-actions">
-      <button type="button" onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh monitoring</button>
-      <label><input type="checkbox" checked={poll} onChange={event => setPoll(event.target.checked)} /> Refresh saved checks every minute</label>
-    </div>
+  return <section className="history-group portfolio-monitoring" aria-label="Portfolio monitoring">
+    <h2>Checks from saved information</h2>
+    <p className="position-note">These checks read saved information only. They do not contact providers or change your accounts.</p>
     {query.isError || mismatch ? <p role="alert">{mismatch && !query.isError
       ? "Investment revision changed. Refresh both views before interpreting findings."
-      : "Portfolio monitoring is unavailable. Previous findings are not current."}</p>
-      : query.isPending ? <p>Loading monitoring evidence...</p>
-      : data?.enabled === false ? <p>Optional monitoring is not configured. You can still use your portfolio.
-        {" "}<NavLink to="/investment-guide#monitoring-setup">Learn about monitoring setup</NavLink>.</p>
+      : "Saved checks are unavailable. Previous findings are not current."}
+        {" "}<button type="button" onClick={() => void query.refetch()} disabled={query.isFetching}>Try again</button></p>
+      : query.isPending ? <p>Loading saved checks...</p>
+      : data?.enabled === false ? <p>These optional checks are not set up. Your portfolio works without them.
+        {" "}<NavLink to="/investment-guide#monitoring-setup">Learn about optional checks</NavLink>.</p>
       : data?.enabled && <>
+        <div className="monitoring-actions">
+          <button type="button" onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh checks</button>
+          <label><input type="checkbox" checked={poll} onChange={event => setPoll(event.target.checked)} /> Refresh checks every minute</label>
+        </div>
         <p>{data.source_mode === "demo" ? "Synthetic monitoring demonstration" : "Recorded local evidence"}; checked {timestamp(data.generated_at)}.</p>
         <p>Experimental (dynamic) share: {data.dynamic_pct === null ? "Unavailable"
           : `${new Decimal(data.dynamic_pct).toFixed(2)}%`} of eligible non-LISA investment holdings. Savings, LISA and cash excluded.

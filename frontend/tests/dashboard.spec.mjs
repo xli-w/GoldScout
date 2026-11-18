@@ -8,6 +8,7 @@ test("monitoring shows synthetic findings and invalidates them on failed refresh
   });
 
   await page.goto("/investment");
+  await page.locator("#investment-monitoring > summary").click();
   const section = page.getByRole("region", { name: "Portfolio monitoring", exact: true });
   await expect(section.getByText(/Synthetic monitoring demonstration/)).toBeVisible();
   await expect(section.getByRole("link", { name: "Open the separate review inbox" })).toHaveAttribute("href", "/investment/reviews");
@@ -20,7 +21,7 @@ test("monitoring shows synthetic findings and invalidates them on failed refresh
   await expect(section.getByRole("checkbox")).not.toBeChecked();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
   unavailable = true;
-  await section.getByRole("button", { name: "Refresh monitoring", exact: true }).click();
+  await section.getByRole("button", { name: "Refresh checks", exact: true }).click();
   await expect(section.getByRole("alert")).toContainText("unavailable");
   await expect(section.getByText(/Nonzero replayed cash-observation differences remain/)).toHaveCount(0);
 });
@@ -32,38 +33,37 @@ test("monitoring refuses mismatched revisions and malformed responses", async ({
     json: malformed ? { ...report, dynamic_pct: "NaN" } : { ...report, portfolio_revision: report.portfolio_revision + 1 },
   }));
   await page.goto("/investment");
+  await page.locator("#investment-monitoring > summary").click();
   const section = page.getByRole("region", { name: "Portfolio monitoring", exact: true });
   await expect(section.getByRole("alert")).toContainText("revision changed");
   await expect(section.getByText(/Synthetic monitoring demonstration/)).toHaveCount(0);
   malformed = true;
-  await section.getByRole("button", { name: "Refresh monitoring", exact: true }).click();
+  await section.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(section.getByRole("alert")).toContainText("unavailable");
   await expect(section.getByText(/Synthetic monitoring demonstration/)).toHaveCount(0);
 });
 
-test("investment sections provide grouped shortcuts and a prominent recording path", async ({ page }) => {
+test("portfolio shortcuts prioritize accounts and keep optional details available", async ({ page }) => {
   const snapshot = await (await page.request.get("/api/investment/v1/snapshot")).json();
   snapshot.source_mode = "recorded";
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: snapshot }));
   await page.goto("/investment");
   const sections = page.getByRole("navigation", { name: "Investment sections" });
   await expect(sections.getByText("Portfolio")).toBeVisible();
-  await expect(sections.getByText("Review")).toBeVisible();
-  await expect(sections.getByRole("link", { name: "Accounts and cash" })).toHaveAttribute("href", "#investment-accounts");
+  await expect(sections.getByText("Records and checks")).toBeVisible();
+  await expect(sections.getByRole("link", { name: "Accounts and investments" })).toHaveAttribute("href", "#investment-account-summary");
+  await expect(page.getByRole("region", { name: "Accounts and investments" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
   await expect(page.locator("#investment-roles")).not.toHaveAttribute("open", "");
-  await sections.getByRole("link", { name: "Roles (optional)" }).focus();
+  await page.locator("#investment-roles > summary").focus();
   await page.keyboard.press("Enter");
   await expect(page.locator("#investment-roles")).toHaveAttribute("open", "");
   await expect(page.getByRole("heading", { name: "Management roles" })).toBeVisible();
-  await sections.getByRole("link", { name: "Monitoring" }).click();
+  await sections.getByRole("link", { name: "Optional checks" }).click();
   await expect(page).toHaveURL(/#investment-monitoring$/);
-  await sections.getByRole("link", { name: "Accounts and cash" }).click();
-  await expect(page.locator("#investment-accounts")).toHaveAttribute("open", "");
-  await sections.getByRole("link", { name: "Journal history" }).click();
+  await expect(page.locator("#investment-monitoring")).toHaveAttribute("open", "");
+  await sections.getByRole("link", { name: "Record history" }).click();
   await expect(page.locator("#investment-records")).toHaveAttribute("open", "");
-  await sections.getByRole("link", { name: "Proposal and limits" }).click();
-  await expect(page.locator("#investment-policy")).toHaveAttribute("open", "");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
   await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
@@ -75,7 +75,8 @@ test("monitoring observation staging uses structured fields and readable reconci
     route.fulfill({ json: { enabled: false } }));
   await page.route("**/api/investment/v1/monitoring-workflow/session", route =>
     route.fulfill({ json: { enabled: true, csrf: "synthetic-csrf", cache_enabled: true,
-      accounts: [{ account_id: "local-broker", provider: "manual" }] } }));
+      accounts: [{ account_id: "local-broker", name: "My brokerage", provider: "manual" }],
+      products: [{ product_id: "fund", name: "Synthetic fund" }] } }));
   await page.route("**/api/investment/v1/monitoring-workflow/observation/preview", route => {
     submitted = route.request().postDataJSON();
     return route.fulfill({ json: {
@@ -89,20 +90,25 @@ test("monitoring observation staging uses structured fields and readable reconci
   await page.goto("/investment/reviews");
   await expect(page.getByRole("navigation", { name: "Monitoring workflow sections" })).toBeVisible();
   await expect(page.getByLabel("Holdings JSON list (source_product and quantity)")).toHaveCount(0);
+  await expect(page.getByLabel("Account to compare")).toContainText("My brokerage");
   await page.getByLabel("Snapshot reference (source observation ID)", { exact: true }).fill("observation-1");
-  await page.getByLabel("Source available from (UTC)").fill("2026-01-03T12:05:00Z");
+  await page.getByLabel("When do these figures apply? (leave blank if unknown)").fill("2026-01-03T12:00");
+  await page.getByLabel("When was this source available?").fill("2026-01-03T12:05");
+  await page.getByLabel("When was the account or investment match established?").fill("2026-01-03T11:00");
   await page.getByLabel("Where did these figures come from?").fill("Synthetic operator statement");
   await page.getByRole("button", { name: "Add observed holding" }).click();
   await page.getByLabel("Investment name in source").fill("Synthetic fund");
   await page.getByLabel("Number of units in source").fill("2");
   await page.getByRole("button", { name: "Add investment match" }).click();
   await page.getByLabel("Investment name to match").fill("Synthetic fund");
-  await page.getByLabel("Recorded investment reference (ID)").fill("fund");
+  await page.getByLabel("Recorded investment").selectOption("fund");
   await page.getByLabel("Source supporting this match").fill("Synthetic mapping note");
-  await page.getByLabel("Account/investment match known from (UTC)", { exact: true }).fill("2026-01-03T11:00:00Z");
   await page.getByRole("button", { name: "Preview comparison" }).click();
   await expect.poll(() => submitted?.observation?.holdings?.length).toBe(1);
   expect(submitted.observation.holdings).toEqual([{ source_product: "Synthetic fund", quantity: "2" }]);
+  expect(submitted.observation.observed_at).toMatch(/Z$/);
+  expect(submitted.observation.available_at).toMatch(/Z$/);
+  expect(submitted.mapping_observed_at).toMatch(/Z$/);
   expect(submitted.observation.product_mappings).toEqual([{
     source_product: "Synthetic fund", product_id: "fund", evidence: "Synthetic mapping note",
   }]);
@@ -180,19 +186,15 @@ test("next steps reflect incomplete evidence and historical differences without 
   }));
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
-  const steps = page.getByRole("region", { name: "Next steps" });
-  await expect(steps).toContainText("Your total is unavailable");
-  await expect(steps).toContainText(`Price missing: ${originalHolding.name}`);
-  await expect(steps.getByRole("link", { name: "Review this holding" })).toHaveAttribute("href", "#investment-holdings");
-  await expect(steps.getByRole("link", { name: "record an investment price" })).toHaveAttribute("href", "/investment/record");
-  await expect(steps).toContainText("A later price does not repair an earlier gap");
+  const steps = page.getByRole("region", { name: "What needs attention" });
+  await expect(steps).toContainText("A complete total needs prices for every holding");
+  await expect(steps).toContainText(originalHolding.name);
+  await expect(steps.getByRole("link", { name: "Review holdings" })).toHaveAttribute("href", "#investment-holdings");
+  await expect(steps.getByRole("link", { name: "Add a price record" })).toHaveAttribute("href", "/investment/record");
+  await expect(steps).toContainText("A later price cannot fill an earlier gap");
   await expect(steps).toContainText("Performance tracking has no starting point yet");
-  await expect(steps).toContainText("No cash observations have been recorded");
-  await expect(steps).toContainText("Backup status is unknown");
-  const extraHelp = steps.getByText("Adding records, changing accounts and optional roles", { exact: true });
-  await expect(extraHelp.locator("..")).not.toHaveAttribute("open", "");
-  await extraHelp.click();
-  await expect(steps.getByText(/Adding a funded account needs complete balances/)).toBeVisible();
+  await expect(steps).not.toContainText("No cash observations have been recorded");
+  await expect(steps).not.toContainText("Backup status is unknown");
 
   report.holdings[0] = { ...originalHolding, mark_available_at: report.generated_at };
   report.cash_observations = [
@@ -206,8 +208,7 @@ test("next steps reflect incomplete evidence and historical differences without 
   report.accounts[0].cash_observation = { ...report.cash_observations[1] };
   delete report.accounts[0].cash_observation.account_id;
   await page.getByRole("button", { name: "Refresh investment" }).click();
-  await expect(steps).toContainText("Your total is unavailable");
-  await expect(steps.getByText(/Price missing:/)).toHaveCount(0);
+  await expect(steps).not.toContainText("A complete total needs prices for every holding");
   await expect(steps).toContainText("Review earlier cash differences");
   await expect(steps).toContainText("A later matching balance does not resolve them");
   await steps.getByRole("link", { name: "Review cash evidence" }).focus();
@@ -224,15 +225,15 @@ test("next steps reflect incomplete evidence and historical differences without 
   report.max_drawdown_pct = replay.max_drawdown_pct;
   report.holdings = replay.holdings;
   await page.getByRole("button", { name: "Refresh investment" }).click();
-  await expect(steps).toContainText("Your recorded total is complete for the date shown");
+  await expect(steps).not.toContainText("complete portfolio total is unavailable");
   await expect(steps).toContainText("Return or largest fall is unavailable");
   await expect(steps).not.toContainText("Performance tracking has no starting point yet");
   await expect(steps).not.toContainText("Backup verified");
   expect(mutations).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await steps.getByRole("link", { name: "Backup and recovery guidance" }).click();
+  await page.locator(".record-toolbar").getByRole("link", { name: "Help" }).click();
   await expect(page.getByRole("heading", { name: "Backup and recovery" })).toBeVisible();
-  await expect(page.getByText(/investment-journal\.md/)).toBeVisible();
+  await expect(page.getByText(/GoldScout does not create or check backups/)).toBeVisible();
 });
 
 test("cash evidence overview labels replay history and surfaces correction limits", async ({ page }) => {
@@ -251,20 +252,20 @@ test("cash evidence overview labels replay history and surfaces correction limit
   }
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
-  await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
+  await page.getByText("Cash observations and savings details", { exact: true }).click();
   const overview = page.getByRole("region", { name: "Cash evidence overview" });
   await expect(overview).toContainText("0 differing observations in current replayed history");
   await expect(overview).toContainText(correctionWarning);
 });
 
-test("demo next steps are explicitly illustrative and do not claim backup status", async ({ page }) => {
+test("demo attention panel stays focused while optional details remain accessible", async ({ page }) => {
   await page.goto("/investment");
-  const steps = page.getByRole("region", { name: "Next steps" });
+  const steps = page.getByRole("region", { name: "What needs attention" });
   await expect(steps).toContainText("Synthetic demonstration");
-  await expect(steps).toContainText("Backup status is unknown");
+  await expect(steps).not.toContainText("Backup status is unknown");
   await expect(steps).not.toContainText("Backup verified");
-  await steps.getByText("Adding records, changing accounts and optional roles", { exact: true }).click();
-  await expect(steps.getByText(/Unassigned means no label has been chosen/)).toBeVisible();
+  await page.locator("#investment-roles > summary").click();
+  await expect(page.getByText(/Unassigned means you have not chosen a role/)).toBeVisible();
   const contrast = await steps.evaluate(element => {
     const luminance = value => {
       const channels = value.match(/\d+/g).slice(0, 3).map(channel => {
@@ -422,7 +423,7 @@ test("investment demo separates contributions, GBP valuation and blocked proposa
   await expect(page.getByRole("heading", { name: "Management roles" })).toBeVisible();
   await expect(page.getByText("Example data, not your accounts or an investment recommendation.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
-  await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
+  await page.getByText("Cash observations and savings details", { exact: true }).click();
   await expect(page.getByText(/External savings are not broker buying power/)).toBeVisible();
   await page.getByText("Proposal status and capability limits", { exact: true }).click();
   await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
@@ -432,15 +433,13 @@ test("investment demo separates contributions, GBP valuation and blocked proposa
   expect(errors).toEqual([]);
 });
 
-test("investment guide remains usable when recorded investment data is unavailable", async ({ page }) => {
+test("help remains usable when recorded investment data is unavailable", async ({ page }) => {
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ status: 503, json: { error: "investment_unavailable" } }));
   await page.goto("/investment");
   await expect(page.getByRole("heading", { name: "Investment data unavailable" })).toBeVisible();
-  await page.locator(".record-toolbar").getByRole("link", { name: "Investment guide" }).click();
-  await expect(page.getByRole("heading", { name: "Ownership, not short-term prediction" })).toBeVisible();
-  await expect(page.getByText(/Losses can be large, prolonged or permanent/)).toBeVisible();
-  await expect(page.getByText(/Proposals are blocked until role-aware policy/)).toBeVisible();
-  await expect(page.getByText(/Monitoring review actions do not approve trades or resolve discrepancies/)).toBeVisible();
+  await page.locator(".record-toolbar").getByRole("link", { name: "Help" }).click();
+  await expect(page.getByRole("heading", { name: "About your records" })).toBeVisible();
+  await expect(page.getByText(/Investment values can fall, and no return is guaranteed/)).toBeVisible();
 });
 
 test("investment browser rejects the retired journal report format", async ({ page }) => {
@@ -601,6 +600,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   const totals = page.getByRole("region", { name: "Investment totals" });
   await expect(totals.getByText("Gain since tracking began")).toBeVisible();
   await expect(totals.getByText("£2,000.00")).toBeVisible();
+  await page.locator("#investment-performance > summary").click();
   await expect(page.getByRole("heading", { name: "Recorded growth history" })).toBeVisible();
   await expect(page.getByText("These are recorded values, not live prices. Lines join recorded points; missing information stays as a gap.")).toBeVisible();
   const returnChart = page.getByRole("img", { name: "Time-weighted return since baseline; unavailable returns are gaps" });
@@ -741,7 +741,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(flowHistory.getByRole("row").nth(3)).toContainText("synthetic withdrawal evidence");
   await expect(flowHistory.getByRole("row").nth(3)).toContainText("External destination");
   await expect(page.getByText(/Transfers between included accounts do not change net external contributions/)).toBeVisible();
-  await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
+  await page.getByText("Cash observations and savings details", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Reported savings-account terms" })).toBeVisible();
   await expect(page.getByText(/4.25% AER/)).toBeVisible();
   await expect(page.getByText(/not current provider verification or an interest-accrual input/)).toBeVisible();

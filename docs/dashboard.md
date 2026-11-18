@@ -6,16 +6,31 @@ routes. Investment reads are nonmutating and never fall back to fabricated data.
 
 ## Start and build
 
+For a source checkout on Windows, run these once from the repository folder in
+PowerShell to install dependencies and build the frontend:
+
 ```powershell
-python -m pip install -r requirements-dashboard.txt
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dashboard.txt
 npm --prefix frontend ci
 npm --prefix frontend run build
-python -m dashboard --demo
 ```
 
-Dependency installation needs network and separate approval in restricted
-development. A packaged wheel includes built assets; do not assume stale assets
-represent current source. Use `python -m dashboard --help` for current options.
+Then start the dashboard from that folder:
+
+```powershell
+.\.venv\Scripts\python.exe -m dashboard
+```
+
+To preview with synthetic data instead of a real workspace:
+
+```powershell
+.\.venv\Scripts\python.exe -m dashboard --demo
+```
+
+Dependency installation needs network. A packaged wheel includes built assets;
+do not assume stale assets represent current source. Use
+`.\.venv\Scripts\python.exe -m dashboard --help` for current options.
 
 Normal `python -m dashboard` uses the source checkout's ignored
 `local-investment/` workspace. Installed use needs `--workspace <directory>`.
@@ -30,12 +45,17 @@ revision confirmation. Setup does not grant recording authority.
 Monitoring cache/workflow writes have separate gates; a page refresh never
 collects provider data or updates accounting.
 
-Investment and advisory pages provide section shortcuts for their longer
-evidence views. Recording previews show a human-readable summary with the exact
+The portfolio view leads with recorded balances and holdings; optional checks,
+advisory context and detailed evidence remain available without being required
+for basic use. Recording previews show a human-readable summary with the exact
 event retained in expandable details. Monitoring observation entry uses
 separate holding and explicit mapping fields; comparison results are displayed
 separately from append-only review-inbox actions. Neither workflow status nor a
 reconciliation match establishes current custody or approves a trade.
+Snapshot comparisons use your configured account and investment names. Enter
+source dates in your computer's local timezone; the preview shows the converted
+UTC times while keeping the snapshot, source-availability and match-evidence
+clocks separate.
 
 The server has no user login and must remain loopback-only: host/origin and
 CSRF defenses are not authentication or protection against another local user.

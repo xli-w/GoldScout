@@ -9,7 +9,7 @@ test("synthetic intelligence controls and briefs work without account data",asyn
   const resetStatus=await page.evaluate(async()=>{const snapshot=await(await fetch('/api/v1/intelligence')).json();if(snapshot.source_mode!=='demo')throw new Error('Synthetic intelligence is required');const session=await(await fetch('/api/v1/intelligence/session')).json();const response=await fetch('/api/v1/intelligence/controls',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({request_id:crypto.randomUUID(),database_id:snapshot.database_id,base_revision:snapshot.settings.revision,settings:{enabled:false,calendar_enabled:true,news_enabled:true,ai_enabled:false,mode:'advisory',ai_profile:null}})});return response.status;});
   expect(resetStatus).toBe(202);
   await page.reload();
-  await expect(page.getByRole("heading",{name:"Market intelligence",exact:true})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Market context",exact:true})).toBeVisible();
   await expect(page.getByText("Synthetic intelligence",{exact:true})).toBeVisible();
   await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS.");
   await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("UK/global calendars and issuer coverage are not established");

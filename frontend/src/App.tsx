@@ -53,9 +53,9 @@ export function App() {
   const pages: Record<string, string> = {
     "/investment": "Your portfolio",
     "/investment/record": "Add a record",
-    "/investment/reviews": "Monitoring reviews",
-    "/investment-guide": "Investment guide",
-    "/intelligence": "Market intelligence",
+    "/investment/reviews": "Review checks",
+    "/investment-guide": "Help",
+    "/intelligence": "Market context",
   };
   const pageName = pages[location.pathname];
   const intelligenceMode = intelligence.isError ? undefined : intelligence.data?.source_mode;
@@ -64,23 +64,24 @@ export function App() {
     : intelligence.data ? `Snapshot ${timestamp(intelligence.data.generated_at)}` : "Source unknown";
   return <div className="shell">
     <aside className="sidebar">
-      <NavLink to="/investment" className="brand" aria-label="GoldScout Investment journal">
+      <NavLink to="/investment" className="brand" aria-label="GoldScout portfolio records">
         <span className="brand-mark"><Activity size={24} /></span>
-        <span className="brand-name">GoldScout<small>Investment journal</small></span>
+        <span className="brand-name">GoldScout<small>Portfolio records</small></span>
       </NavLink>
       <div className="nav-groups">
-        <div className="nav-section"><span className="nav-section-label">INVESTMENT</span>
-          <nav aria-label="Investment navigation">
+        <div className="nav-section"><span className="nav-section-label">PORTFOLIO</span>
+          <nav aria-label="Portfolio navigation">
             <NavLink to="/investment" end><Wallet size={18} /><span>Your portfolio</span></NavLink>
-            <NavLink to="/investment/reviews"><ListOrdered size={18} /><span>Monitoring reviews</span></NavLink>
-            <NavLink to="/investment-guide"><CircleHelp size={18} /><span>Investment guide</span></NavLink>
+            <NavLink to="/investment-guide"><CircleHelp size={18} /><span>Help</span></NavLink>
           </nav>
         </div>
-        <div className="nav-section advisory-nav-section"><span className="nav-section-label">ADVISORY</span>
-          <nav aria-label="Advisory navigation"><NavLink to="/intelligence"><Activity size={18} /><span>Intelligence</span></NavLink></nav>
+        <div className="nav-section advisory-nav-section"><span className="nav-section-label">OPTIONAL</span>
+          <nav aria-label="Optional tools navigation">
+            <NavLink to="/investment/reviews"><ListOrdered size={18} /><span>Review checks</span></NavLink>
+            <NavLink to="/intelligence"><Activity size={18} /><span>Market context</span></NavLink>
+          </nav>
         </div>
       </div>
-      <div className="sidebar-bottom"><LockKeyhole size={16} /><span>No trade execution</span><span className="local-label">LOCAL</span></div>
     </aside>
     <div className="workspace">
       <header className="topbar"><div className="breadcrumb">Portfolio <span>/</span> <strong>{pageName || "Page not found"}</strong></div>
@@ -94,7 +95,7 @@ export function App() {
         <div className="page-heading"><div>
           <p className="eyebrow">{intelligencePage ? "INTELLIGENCE WORKSPACE" : workspace.data === "demo" ? "DEMO WORKSPACE" : "INVESTMENT WORKSPACE"}</p>
           <h1>{pageName || "Page not found"}</h1>
-          {intelligencePage && <p className="page-description">Optional calendar, news, and analysis. Advisory only and separate from account records.</p>}
+          {intelligencePage && <p className="page-description">Optional public calendar, news and analysis. Separate from your account records.</p>}
         </div>{intelligencePage && <button className="icon-button refresh" aria-label="Refresh data" title="Refresh data"
           disabled={intelligence.isFetching} onClick={() => {
             void client.invalidateQueries({ queryKey: ["intelligence"] });
@@ -106,8 +107,8 @@ export function App() {
           : location.pathname === "/investment-guide" ? <InvestmentGuide />
           : intelligencePage ? <IntelligenceView data={intelligence} />
           : <div className="error-state" role="alert"><p>This page is not part of GoldScout.</p><NavLink to="/investment">Open investment records</NavLink></div>}
-        <footer><span>GoldScout <span className="footer-separator">/</span> <NavLink to="/investment-guide">Investment guide</NavLink></span>
-          <span><LockKeyhole size={12} />No trade execution</span></footer>
+        <footer><span>GoldScout <span className="footer-separator">/</span> <NavLink to="/investment-guide">Help</NavLink></span>
+          <span><LockKeyhole size={12} />Local records · no trades or money movement</span></footer>
       </main>
     </div>
   </div>;

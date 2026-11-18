@@ -13,8 +13,8 @@ type Holding = { id: string; account: string; product: string; quantity: string;
 const identifier = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const newAccount = (): Account => ({ id: identifier("account"), binding: identifier("local"),
   name: "", kind: "", cash: "" });
-const steps = ["Accounts", "Investments", "Starting balances", "Review and save"];
-const fixedWarning = "Check your choices carefully. You cannot edit these starting records after saving. Some later changes are supported through a separate recording mode.";
+const steps = ["Accounts", "Investments (optional)", "Starting balances", "Review and save"];
+const fixedWarning = "Starting accounts and figures cannot be edited in place. Later changes use a separate, previewed recording process.";
 
 function amount(value: string, label: string, positive = false): string {
   if (!/^(?:0|[1-9]\d{0,14})(?:\.\d{1,8})?$/.test(value) ||
@@ -41,6 +41,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   const [available, setAvailable] = useState("");
   const [evidence, setEvidence] = useState("");
   const [scope, setScope] = useState(false);
+  const [noHoldingsConfirmed, setNoHoldingsConfirmed] = useState(false);
   const [reviewed, setReviewed] = useState(false);
   const [step, setStep] = useState(0);
   const [preview, setPreview] = useState<SetupPreview | null>(null);
@@ -91,7 +92,9 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     catch (failure) { setError(failure instanceof Error ? failure.message : "Setup is unavailable. No further action was taken."); }
     finally { lock.current = false; setBusy(false); }
   };
-  const changed = () => { setDirty(true); setPreview(null); setReviewed(false); setError(""); };
+  const changed = () => {
+    setDirty(true); setPreview(null); setReviewed(false); setNoHoldingsConfirmed(false); setError("");
+  };
   const changeAccount = (id: string, patch: Partial<Account>) => {
     changed(); setAccounts(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
   };
@@ -104,7 +107,8 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   const next = (event: FormEvent) => {
     event.preventDefault();
     if (!scope) { setError("Confirm that you have chosen the GBP accounts you want to track."); return; }
-    setError(""); setStep(value => value + 1);
+    setError("");
+    setStep(value => value === 0 && !accounts.some(account => account.kind === "broker") ? 2 : value + 1);
   };
   const makePreview = (event: FormEvent) => {
     event.preventDefault();
@@ -114,6 +118,8 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       const timestamp = recoveryEntry ? utc(effective, "Balances as of") : new Date().toISOString();
       const availableAt = recoveryEntry ? utc(available, "Source available from") : timestamp;
       if (availableAt < timestamp) throw new Error('"Source available from" cannot be earlier than "Balances as of". Check the dates against your source; do not guess.');
+      if (accounts.some(account => account.kind === "broker") && holdings.length === 0 && !noHoldingsConfirmed)
+        throw new Error("Confirm that the included investment accounts have no shares, funds or bonds, or add the holdings you own.");
       const wireAccounts: SetupProfile["accounts"] = accounts.map(a => {
         if (!a.name.trim() || !a.kind) throw new Error("Give each account a name and choose its type.");
         return { id: a.id, binding: a.binding, name: a.name.trim(), kind: a.kind, currency: "GBP" };
@@ -182,6 +188,9 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   };
   const expired = preview !== null && Date.parse(preview.expires_at) <= now;
   const blocked = session && (!session.enabled || !["empty", "recoverable"].includes(session.state));
+  const progressSteps = steps.map((name, index) => ({ name, index })).filter(({ index }) =>
+    (index !== 1 || accounts.some(account => account.kind === "broker")) &&
+    (session?.state !== "recoverable" || index >= 2));
 
   return <section className="investment-setup" aria-label="Investment setup" aria-busy={busy}>
     <p className="eyebrow">WELCOME TO GOLDSCOUT</p>
@@ -191,16 +200,12 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       ? "Leaving or reloading loses any re-entered figures. Existing setup files may already contain saved records."
       : "Your draft is not saved until you confirm. Leaving or reloading this page loses your progress."}</p>
     <details className="help-disclosure">
-      <summary>Before you start: privacy, storage and later changes</summary>
+      <summary>Before you start</summary>
       <p>Have statements or other dated records ready. Use nicknames, not account numbers, passwords or credentials.</p>
-      <p>{fixedWarning} Account identities, bindings and currencies, and investment classifications and quantity rules stay fixed.
-        Retirement requires zero balances or holdings. Adding a funded account later needs a complete valuation at one time;
-        corrections preserve the original records and make historical performance unavailable.</p>
-      <p>Preview and navigation create no workspace files. Only confirmation can create records, and setup does not enable later recording.
-        For recovery, existing files may already contain committed records.</p>
+      <p>{fixedWarning}</p>
+      <p>Nothing is saved until you confirm. Setup does not enable later recording. If a previous setup was interrupted, use only the recovery options shown.</p>
       {session && <p className="setup-workspace">Saved on this computer in: <strong>{session.workspace}</strong>.</p>}
-      <p>Use a private folder you control. Git ignore is not encryption, access control or a backup.
-        The dashboard has no user login; keep it on this computer's loopback address.</p>
+      <p>Keep this computer private and make separate backups. GoldScout has no sign-in and is intended for use on this computer only.</p>
     </details>
     {error && <div role="alert" tabIndex={-1} ref={errorSummary} className="investment-warnings">{error}</div>}
     {receipt ? <div role="status" className="recording-preview">
@@ -228,9 +233,8 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
             : "Keep existing files unchanged. Check the terminal window used to start the dashboard for error details. No automatic repair, deletion or replacement is available here."}</p>}
     </div> : !session ? <p role="status">Waiting for setup status…</p>
       : <>
-        <ol className="setup-steps" aria-label="Setup progress">{steps.map((name, index) =>
-          (session.state !== "recoverable" || index >= 2) &&
-          <li key={name} aria-current={index === step ? "step" : undefined}>{index + 1}. {name}</li>)}</ol>
+        <ol className="setup-steps" aria-label="Setup progress">{progressSteps.map(({ name, index }, progressIndex) =>
+          <li key={name} aria-current={index === step ? "step" : undefined}>{progressIndex + 1}. {name}</li>)}</ol>
         <h2>{session.state === "recoverable" && !preview && !recoveryEntry ? "Recovery" : steps[step]}</h2>
         {preview ? <div className="recording-preview" role="group" aria-label="Review setup before confirmation">
           <p>{session.state === "recoverable"
@@ -331,22 +335,22 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                 onChange={event => { changed(); setScope(event.target.checked); }} />
                 These are the GBP accounts I want to track in this portfolio.</label>
               <details className="help-disclosure"><summary>Which account type should I choose?</summary>
-                <p>Choose savings / deposit for cash savings. Choose investment / broker for an account that can hold shares or funds,
-                  including its uninvested cash. Account type does not verify ISA/LISA status, tax treatment, eligibility or deposit protection.</p>
+                <p>Choose savings / deposit for bank savings or a Cash LISA. Choose investment / broker for an account that can hold shares or funds,
+                  including its uninvested cash. A Stocks and Shares LISA is an investment / broker account, even if it currently holds only cash.</p>
+                <p>This records the account type only; it does not verify LISA status, tax treatment, eligibility or deposit protection.</p>
               </details>
             </>}
             {step === 1 && <>
-              <p>Add the shares, funds or bonds you want to record. If you only track cash savings, you can continue without adding any.</p>
+              <p>Add each share, fund or bond you already hold in the selected investment accounts. If those accounts hold cash only, continue without adding investments.</p>
               <p className="position-note">Only GBP-priced equity and bond investments are supported. Copy the details from your provider; don't guess.</p>
-              <p className="example-note"><strong>Fictional example:</strong> "Example shares fund" is the investment.
-                If you own 12.5 units in an investment account, that is a holding. Add the investment here;
-                enter its account, 12.5 units and any known price in Starting balances. Do not copy these example figures.</p>
+              <p className="example-note"><strong>Example:</strong> Add each fund once here. Enter the units held in each account on the next step.</p>
               <details className="help-disclosure"><summary>Help with investment types and quantity rules</summary>
                 <p>Equity means shares or share-based funds. Bonds are debt investments, not protected savings.
                   GBP pricing does not remove any underlying foreign-currency risk.</p>
                 <p>The smallest quantity step is the unit increment your provider supports, such as 1 whole unit or 0.001 units.
                   The minimum purchase is the smallest supported purchase value in pounds. Enter 0 only if the provider confirms no minimum.
-                  No provider lookup is performed. If you cannot verify a required detail, pause setup rather than inventing it.</p>
+                  These details help validate recorded quantities; GoldScout cannot place orders. No provider lookup is performed.
+                  If you cannot verify a required detail, pause setup rather than inventing it.</p>
                 <p>Look in your provider's dealing rules or product documents, or ask its support team for the exact investment and account.
                   If the provider prices in pence (GBX), do not enter that number as pounds; verify the GBP equivalent.</p>
               </details>
@@ -407,7 +411,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                 value={a.cash} onChange={event => changeAccount(a.id, { cash: event.target.value })} /></label>)}
               <h3>3. Investments you own</h3>
               <p>Add every investment holding in the accounts you chose. Leave only the unit price blank if unknown; it is not treated as zero.
-                If you add no rows, you are declaring that you hold no investments.</p>
+                If you add no rows, confirm below that these accounts have no investment holdings.</p>
               {holdings.map((h, index) => <div className="setup-row" key={h.id}>
                 <label>Holding {index + 1} account<select required value={h.account} onChange={event => changeHolding(h.id, { account: event.target.value })}>
                   <option value="">Choose broker</option>{accounts.filter(a => a.kind === "broker").map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
@@ -421,6 +425,10 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
               </div>)}
               <button type="button" disabled={!products.length || !accounts.some(a => a.kind === "broker") || holdings.length >= 5000}
                 onClick={() => { changed(); setHoldings(rows => [...rows, { id: identifier("holding"), account: "", product: "", quantity: "", price: "" }]); }}>Add holding</button>
+              {accounts.some(account => account.kind === "broker") && holdings.length === 0 &&
+                <label className="setup-check"><input type="checkbox" checked={noHoldingsConfirmed}
+                  onChange={event => setNoHoldingsConfirmed(event.target.checked)} />
+                  I confirm these investment accounts do not currently hold any shares, funds or bonds.</label>}
               <h3>4. Your source</h3>
               <label>Where did these figures come from?<textarea required maxLength={200} value={evidence}
                 placeholder="e.g. Savings statement and investment statement, 1 November"

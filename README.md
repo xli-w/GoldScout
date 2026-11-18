@@ -5,29 +5,49 @@ savings, a first-home LISA and longer-term investments. It records
 operator-supplied evidence; it does not verify custody, choose investments,
 move money or execute trades.
 
-## Start locally
+## Set up and start on Windows
 
-With the documented dependencies and frontend build available:
+GoldScout is currently distributed as a source checkout, not a desktop installer.
+From the repository folder in PowerShell, install the dashboard dependencies and
+build the frontend once:
 
 ```powershell
-python -m dashboard
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dashboard.txt
+npm --prefix frontend ci
+npm --prefix frontend run build
 ```
 
-In a source checkout this selects the ignored `local-investment/` workspace.
-An absent or empty workspace shows guided setup: review accounts, products and
-dated opening balances, preview, then explicitly confirm creation. Startup and
-preview create no files. Existing valid journals open read-only; invalid or
-conflicting files are never reset. Installed use requires `--workspace <directory>`.
-Subsequent manual recording requires `--investment-recording`.
+Start GoldScout from the same folder whenever you want to use it:
 
-The dashboard has no user login. Keep it on loopback; do not expose or tunnel it.
+```powershell
+.\.venv\Scripts\python.exe -m dashboard
+```
+
+In a source checkout, records are stored in the ignored `local-investment/`
+folder. The first run guides you through choosing accounts and entering starting
+figures. Review the preview before confirming; nothing is saved before that
+confirmation. Cash-only setup skips investment details. If an investment
+account has holdings, include them rather than omitting them.
+
+Existing valid journals open read-only. To record changes, stop the dashboard
+with Ctrl+C and restart with `--investment-recording`, keeping the same folder:
+
+```powershell
+.\.venv\Scripts\python.exe -m dashboard --investment-recording
+```
+
+Installed use requires selecting the same private folder with
+`--workspace <directory>` on each start. The dashboard has no sign-in and must
+stay on this computer; keep the records and backups private.
+
 See [setup and operations](docs/investment.md) and [dashboard development](docs/dashboard.md).
 
 ## Offline preview
 
 ```powershell
-python -m investment demo
-python -m dashboard --demo
+.\.venv\Scripts\python.exe -m investment demo
+.\.venv\Scripts\python.exe -m dashboard --demo
 ```
 
 These use synthetic evidence, not account access.

@@ -672,6 +672,12 @@ class InvestmentDashboardTests(unittest.TestCase):
             session = client.get("/api/investment/v1/monitoring-workflow/session").json()
             self.assertTrue(session["enabled"])
             self.assertNotIn("authenticated", session)
+            self.assertIn({"account_id": "broker", "name": "Broker", "provider": "etoro"},
+                          session["accounts"])
+            self.assertEqual(session["products"], [
+                {"product_id": "equity", "name": "Equity fund"},
+                {"product_id": "bond", "name": "Bond fund"},
+            ])
             headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
             self.assertEqual(client.post(
                 "/api/investment/v1/monitoring-workflow/action", json={},

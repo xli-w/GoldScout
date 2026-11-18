@@ -18,13 +18,15 @@ a wizard; startup, status and preview never write files. Review accounts,
 products, cash and long holdings with explicit opening evidence, then confirm
 the bound preview. No login or hand-written profile is required.
 
-The wizard walks through **Accounts**, **Investments**, **Starting balances**,
-and **Review and save**. Cash-only users can skip adding investments. Expand
-the help panels for privacy/storage, account types and quantity rules; required
-fields remain visible. Missing prices remain unknown, not zero. Enter current
-cash and holdings; the opening is timestamped when you request its preview, and
-the review shows that one time in local and UTC formats before confirmation.
-Leaving or reloading loses an unsaved draft.
+The wizard walks through **Accounts**, optional **Investments**, **Starting
+balances**, and **Review and save**. Cash-only bank accounts go directly to
+starting balances. If an investment account holds shares or funds, include them;
+when no holdings are listed, setup asks you to confirm that the account is cash
+only. Expand the help panels for account types and provider quantity rules.
+Missing prices remain unknown, not zero. Enter current cash and holdings; the
+opening is timestamped when you request its preview, and the review shows that
+one time in local and UTC formats before confirmation. Leaving or reloading
+loses an unsaved draft.
 
 Fictional setup examples distinguish an investment from the units held in an
 account. Quantity steps and minimum purchases must come from the provider's
@@ -68,9 +70,11 @@ profiles or origins (including `localhost` and `127.0.0.1`) or verify the journa
 Monitoring uses "snapshot", "investment match" and "save request reference" in
 its forms; exact payloads, revisions and retry references remain available.
 Required matching/source facts remain visible and are never inferred from names.
-Its date inputs still explicitly require UTC. Monitoring and awareness are
-optional and require separate local configuration; the investment guide links
-to the relevant instructions. Recovery starts with safe actions:
+Its date inputs use your computer's local timezone and are converted to UTC for
+review; snapshot, source-availability and matching-evidence clocks remain
+separate. Monitoring and awareness are optional and require separate local
+configuration; the investment guide links to the relevant instructions.
+Recovery starts with safe actions:
 keep the whole setup folder unchanged, check/re-enter the exact original figures
 when offered, and review before confirmation. Committed or uncertain save outcomes
 must never be treated as permission to recreate records.

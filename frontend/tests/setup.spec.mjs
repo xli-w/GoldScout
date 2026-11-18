@@ -106,7 +106,8 @@ async function evidenceStep(page, recoveryEntry = false) {
 }
 async function depositPreview(page) {
   await accountStep(page);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Starting balances", exact: true })).toBeVisible();
+  await expect(page.locator(".setup-steps")).toContainText("2. Starting balances");
   await evidenceStep(page);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
 }
@@ -126,8 +127,8 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await page.keyboard.press("Enter");
   await expect(disclosure).toHaveAttribute("open", "");
   await expect(disclosure).toContainText("synthetic-temporary-workspace");
-  await expect(disclosure).toContainText("Git ignore is not encryption");
-  await expect(disclosure).toContainText("Account identities, bindings and currencies");
+  await expect(disclosure).toContainText("make separate backups");
+  await expect(disclosure).toContainText("Starting accounts and figures cannot be edited in place");
   await help.click();
   await depositPreview(page);
   const preview = page.getByRole("group", { name: "Review setup before confirmation" });
@@ -158,6 +159,20 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await confirm.click();
   await expect.poll(() => api.calls.filter(call => call.path === "confirm").length).toBe(1);
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+});
+
+test("investment accounts require an explicit no-holdings confirmation when left empty", async ({ page }) => {
+  const api = await setupRoutes(page);
+  await unlock(page);
+  await accountStep(page, true);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await evidenceStep(page);
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Confirm that the included investment accounts have no shares");
+  expect(api.calls.filter(call => call.path === "preview")).toHaveLength(0);
+  await page.getByRole("checkbox", { name: /do not currently hold any shares/ }).check();
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  expect(api.preview().opening.holdings).toEqual([]);
 });
 
 test("broker holdings preserve exact decimal strings and unknown unit prices", async ({ page }) => {
