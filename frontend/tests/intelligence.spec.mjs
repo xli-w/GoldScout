@@ -14,11 +14,12 @@ test("synthetic intelligence controls and briefs work without account data",asyn
   await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS.");
   await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("UK/global calendars and issuer coverage are not established");
   await expect(page.getByText("Last request: applied / Settings applied",{exact:true})).toBeVisible();
+  await page.getByText("Settings revisions",{exact:true}).click();
   const appliedChange=async action=>{
-    const revisions=page.getByLabel("Analysis settings status");
-    const revision=Number((await revisions.locator("> div").nth(1).locator("strong").innerText()).replace("Revision ",""));
+    const revisions=page.locator("#intelligence-controls details").filter({hasText:"Settings revisions"});
+    const revision=Number((await revisions.locator("p").innerText()).match(/Applied revision (\d+)/)[1]);
     await action();
-    await expect(revisions.locator("> div").nth(1)).toContainText(`Revision ${revision+1}`);
+    await expect(revisions).toContainText(`Applied revision ${revision+1}`);
     await expect(page.getByText("Last request: applied / Settings applied",{exact:true})).toBeVisible();
   };
   let accountRequests=0;
@@ -63,7 +64,7 @@ async function mockIntelligence(page,profiles,serviceProfiles=null,controlSessio
 
 test("intelligence header uses its own source instead of cached account status",async({page})=>{
   await page.goto("/investment");
-  await expect(page.getByRole("heading",{name:"Long-term investment",exact:true})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Your portfolio",exact:true})).toBeVisible();
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.source_mode="recorded";
   await page.getByRole("link",{name:"Intelligence",exact:true}).click();
@@ -169,13 +170,14 @@ test("intelligence leads with evidence and separates request from application",a
   snapshot.controls=[{request_id:"request-7",status:"applied",reason:"Settings applied",effective_revision:7}];
   await page.goto(new URL("/intelligence",mockedFrontendURL).href);
 
-  await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("never controls trading");
+  await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("cannot change your records or make trades");
   expect(await page.evaluate(()=>Array.from(document.querySelectorAll(".intelligence-advisory, .position-section, .intelligence-controls")).map(section=>
     section.classList.contains("intelligence-advisory")?"advisory":section.classList.contains("intelligence-controls")?"controls":section.querySelector("h2")?.textContent?.trim()
   ))).toEqual(["advisory","Economic calendar","AI briefs","Source evidence","controls"]);
   const revisions=page.getByLabel("Analysis settings status");
   await expect(revisions).toContainText("Applied / Settings applied");
-  await expect(revisions).toContainText("Revision 7");
+  await page.getByText("Settings revisions",{exact:true}).click();
+  await expect(page.locator("#intelligence-controls details").filter({hasText:"Settings revisions"})).toContainText("Applied revision 7");
   await expect(revisions).not.toContainText("Bot observed");
   await expect(page.getByText("Enabled for this local session",{exact:true})).toBeVisible();
   await expect(page.getByRole("textbox",{name:"Analysis-control password"})).toHaveCount(0);

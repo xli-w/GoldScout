@@ -3,7 +3,7 @@ import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import validate from "./monitoring-validator.js";
-import { timestamp } from "./api";
+import { label, timestamp } from "./api";
 
 type Finding = {
   id: string; rule: string; subject: string; status: "review" | "unavailable";
@@ -36,21 +36,28 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
   const mismatch = data?.enabled && (data.portfolio_id !== portfolioId || data.portfolio_revision !== revision);
   return <section className="history-group portfolio-monitoring" id="investment-monitoring" aria-label="Portfolio monitoring">
     <h2>Portfolio monitoring</h2>
-    <p className="position-note">Local review findings, not orders or guaranteed improvements. Refresh never collects from a provider.</p>
+    <p className="position-note">Checks that may need your attention. Refresh reads saved information; it does not contact a provider or change your accounts.</p>
     <div className="monitoring-actions">
       <button type="button" onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh monitoring</button>
-      <label><input type="checkbox" checked={poll} onChange={event => setPoll(event.target.checked)} /> Poll local monitoring every minute</label>
+      <label><input type="checkbox" checked={poll} onChange={event => setPoll(event.target.checked)} /> Refresh saved checks every minute</label>
     </div>
     {query.isError || mismatch ? <p role="alert">{mismatch && !query.isError
       ? "Investment revision changed. Refresh both views before interpreting findings."
       : "Portfolio monitoring is unavailable. Previous findings are not current."}</p>
       : query.isPending ? <p>Loading monitoring evidence...</p>
-      : data?.enabled === false ? <p>Monitoring is disabled. Select a local monitoring profile for the investment store.</p>
+      : data?.enabled === false ? <p>Optional monitoring is not configured. You can still use your portfolio.
+        {" "}<NavLink to="/investment-guide#monitoring-setup">Learn about monitoring setup</NavLink>.</p>
       : data?.enabled && <>
-        <p>{data.source_mode === "demo" ? "Synthetic monitoring demonstration" : "Recorded local evidence"}; generated {timestamp(data.generated_at)}; journal revision {data.portfolio_revision}; cache revision {data.cache_revision ?? "not selected"}.</p>
-        <p>Dynamic share of eligible non-LISA investment holdings: {data.dynamic_pct === null ? "Unavailable"
-          : `${new Decimal(data.dynamic_pct).toFixed(2)}%`}. Savings, LISA and cash excluded. The illustrative 10-20% range is not a limit.</p>
-        <h3>Provider readiness and evidence</h3>
+        <p>{data.source_mode === "demo" ? "Synthetic monitoring demonstration" : "Recorded local evidence"}; checked {timestamp(data.generated_at)}.</p>
+        <p>Experimental (dynamic) share: {data.dynamic_pct === null ? "Unavailable"
+          : `${new Decimal(data.dynamic_pct).toFixed(2)}%`} of eligible non-LISA investment holdings. Savings, LISA and cash excluded.
+          The illustrative 10-20% range is not a target or limit.</p>
+        <p>Provider connections are not verified. These checks use saved evidence only.</p>
+        {data.providers.length > 0 && <ul aria-label="Provider evidence status">{data.providers.map(item =>
+          <li key={item.account_id}><strong>{item.account_id} / {item.provider}</strong>: {label(item.readiness)};
+            freshness {label(item.freshness)}; coverage {label(item.coverage)}.</li>)}</ul>}
+        <details className="help-disclosure"><summary>Provider status and source details</summary>
+        <p>Journal revision {data.portfolio_revision}; cache revision {data.cache_revision ?? "not selected"}. Readiness is not verified connectivity.</p>
         <ul>{data.providers.map(item => <li key={item.account_id}>
           <strong>{item.account_id} / {item.provider}</strong>: {item.readiness}; {item.freshness}; coverage {item.coverage}; currency {item.currency ?? "unknown"}.
           Last attempt {timestamp(item.last_attempt_at)} ({item.last_attempt_status ?? "none"});
@@ -58,9 +65,10 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
           {item.native_summary && <> Source credit field (USD): {item.native_summary.credit_usd};
             observed positions: {item.native_summary.position_count}. Not verified cash, GBP value or complete holdings.</>}
         </li>)}</ul>
+        </details>
         <h3>Findings for review</h3>
         <p><NavLink className="text-link" to="/investment/reviews">Open the separate review inbox</NavLink>
-          {" "}to synchronize and record an append-only workflow action. Inbox status does not resolve a finding.</p>
+          {" "}to track what you have reviewed. Marking something reviewed does not resolve it or change the journal.</p>
         <ul>{data.findings.map(item => <li key={item.id}>
           <strong>{item.subject}: {item.status}</strong> - {item.explanation}
           {item.calculation !== null && <> Calculation: {item.calculation}.</>}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import validate from "./awareness-validator.js";
 import { label, timestamp } from "./api";
@@ -89,19 +90,21 @@ export function PortfolioAwareness({ portfolioId, revision }: { portfolioId: str
   const changed = data && (data.portfolio_id !== portfolioId || data.portfolio_revision !== revision);
   return <section className="history-group" aria-label="Portfolio awareness">
     <h2>Portfolio awareness</h2>
-    <p>Local exposure matching only. Alerts, research and reminders cannot change accounting, approve policy or trade.</p>
+    <p>Optional: see saved public context matched locally to the investments you selected.
+      Unlike Market intelligence, this view uses your explicit local mappings. It starts no collection or AI,
+      sends no private account data to AI, and cannot change records or trade.</p>
     <button type="button" disabled={query.isFetching} onClick={() => void query.refetch()}>Refresh awareness</button>
     {data && <label><input type="checkbox" checked={polling}
       onChange={event => setPolling(event.target.checked)} /> Refresh awareness every minute (local reads only)</label>}
     {query.isPending ? <p role="status">Loading portfolio awareness</p>
       : query.isError ? <p role="alert">{query.error instanceof Error ? query.error.message : "Awareness unavailable."}</p>
-        : value && !value.enabled ? <p>Not configured. Select an awareness profile and existing investment/intelligence stores at dashboard launch.</p>
+        : value && !value.enabled ? <p>Optional awareness is not configured. The portfolio works without it.
+          {" "}<NavLink to="/investment-guide#monitoring-setup">Learn about optional setup</NavLink>.</p>
           : changed ? <p role="alert">Portfolio revision changed. Refresh investment records and awareness; no matching context is displayed.</p>
             : data && <>
-              <p>As of {timestamp(data.generated_at)}; portfolio revision {data.portfolio_revision};
-                {" "}intelligence settings {data.settings_revision}. Calendar: {label(data.calendar_status)}.
+              <p>As of {timestamp(data.generated_at)}. Calendar: {label(data.calendar_status)}.
                 {" "}Calendar evidence available {timestamp(data.calendar_available_at)}.</p>
-              <p>Mapping observed {timestamp(data.profile_observed_at)}. Public research symbols are declared context proxies, not verified holdings or look-through.</p>
+              <p>Public research symbols are context proxies you selected, not verified holdings or a complete view of a fund's investments.</p>
               <ul>{data.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
               <h3>Calendar watch alerts</h3>
               {!data.alerts.length && <p>No matching dated events in this snapshot. This does not establish complete coverage or absence of events.</p>}
@@ -112,7 +115,7 @@ export function PortfolioAwareness({ portfolioId, revision }: { portfolioId: str
                 <a href={item.source_url} target="_blank" rel="noreferrer">Source: {item.source}</a>
                 <Matches matches={item.matches} />
               </details>)}
-              <h3>Operator calendar watch</h3>
+              <h3>Your calendar notes</h3>
               <p>Manual, unverified notes may be stale; no automatic collection, reminders or source-coverage guarantee.
                 Dates are source-local, not inferred UTC times. Entries are not filtered by date or current holdings.</p>
               {!data.calendar_watch?.length && <p>No operator calendar watch entries.</p>}
@@ -150,7 +153,7 @@ export function PortfolioAwareness({ portfolioId, revision }: { portfolioId: str
                 {" "}last reviewed {timestamp(item.last_reviewed_at, "Never recorded")}; every {item.interval_days} days.
                 {" "}{item.evidence}
               </li>)}</ul>
-              <h3>Operator thesis watch</h3>
+              <h3>Your investment notes</h3>
               <p>Locally maintained notes, not verified evidence, an immutable audit trail, a recommendation or trade approval.
                 Associations do not imply a current holding; entries are never sent to AI.</p>
               {!data.theses?.length && <p>No theses configured.</p>}
@@ -164,7 +167,10 @@ export function PortfolioAwareness({ portfolioId, revision }: { portfolioId: str
                   <p>Operator evidence note: {entry.evidence}</p>
                 </div>)}
               </details>)}
-              <details><summary>Local mapping provenance</summary><p>Profile SHA256: {data.profile_hash}</p></details>
+              <details className="help-disclosure"><summary>How this context was matched (technical details)</summary>
+                <p>Mapping observed {timestamp(data.profile_observed_at)}; portfolio revision {data.portfolio_revision};
+                  intelligence settings {data.settings_revision}. Profile SHA256: {data.profile_hash}</p>
+              </details>
             </>}
   </section>;
 }

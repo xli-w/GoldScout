@@ -18,6 +18,61 @@ a wizard; startup, status and preview never write files. Review accounts,
 products, cash and long holdings with explicit opening evidence, then confirm
 the bound preview. No login or hand-written profile is required.
 
+The wizard walks through **Accounts**, **Investments**, **Starting balances**,
+and **Review and save**. Cash-only users can skip adding investments. Expand
+the help panels for privacy/storage, account types, quantity rules and the
+two dates; required fields remain visible. Missing prices remain unknown, not
+zero. The final review shows the exact figures, source, dates and warnings
+before confirmation. Leaving or reloading loses an unsaved draft.
+
+Fictional setup examples distinguish an investment from the units held in an
+account. Quantity steps and minimum purchases must come from the provider's
+rules for that investment/account; unknown values are not prefilled in the
+manual investment-addition form. Pause if a required fact cannot be verified.
+Setup and recording reviews show local time with its timezone alongside the
+unchanged UTC timestamp. A statement's balance time and publication/availability
+time are different facts, not interchangeable entry-time defaults. Ambiguous
+local times when clocks move back are refused rather than silently choosing an
+occurrence; pause unless an unambiguous supported time can be supplied.
+
+On **Your portfolio**, start with **What needs attention** and the recorded date.
+These are not live bank balances. Optional roles and detailed history are
+collapsed; section shortcuts open the relevant panel. Performance help
+explains the starting point (baseline), cash-flow-neutral return and largest
+fall (drawdown). **Add a record** first asks for a category and then the record
+type; it still requires a reviewed preview. Recording dates and purchase/sale
+fees start blank: enter source-supported values, including zero only when
+verified. Corrections reject a source-availability time earlier than the
+correction clock instead of silently changing it. Monitoring snapshots remain separate comparisons,
+not transactions or repairs. Technical identities and provider details remain
+available in expandable panels; errors and missing-data warnings stay visible.
+
+Read-only recording pages give visible restart instructions: stop the existing
+dashboard and add `--investment-recording` to the original startup command,
+retaining its workspace/journal selection. The page never enables writing.
+Missing-price and cash-review links open the relevant records or guidance.
+Later prices cannot repair earlier performance gaps; historical corrections
+do not automatically establish a replacement baseline.
+If a recording confirmation fails or its response is lost, the record may
+already be committed. Browser-local storage keeps only the pending preview and
+event references and expected revision, blocks new recordings in that browser
+origin and offers the same confirmation retry. A browser lock coordinates
+previews and confirmations across tabs on that origin. If the session or preview
+has expired after an uncertain result, recording remains blocked there; do not
+enter the record again. Check the journal and terminal before further action;
+there is no automatic resolution. This does not coordinate separate browser
+profiles or origins (including `localhost` and `127.0.0.1`) or verify the journal.
+
+Monitoring uses "snapshot", "investment match" and "save request reference" in
+its forms; exact payloads, revisions and retry references remain available.
+Required matching/source facts remain visible and are never inferred from names.
+Its date inputs still explicitly require UTC. Monitoring and awareness are
+optional and require separate local configuration; the investment guide links
+to the relevant instructions. Recovery starts with safe actions:
+keep the whole setup folder unchanged, check/re-enter the exact original figures
+when offered, and review before confirmation. Committed or uncertain save outcomes
+must never be treated as permission to recreate records.
+
 Creation stages and replay-validates the new journal before no-overwrite
 publication. The journal's embedded profile is authoritative; profile export
 and receipts are separate filesystem operations. A later failure must not

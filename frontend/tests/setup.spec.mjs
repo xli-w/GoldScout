@@ -91,16 +91,16 @@ async function unlock(page) {
   await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible();
 }
 async function accountStep(page, broker = false) {
-  await page.getByLabel("Account 1 alias").fill("Synthetic savings");
-  await page.getByLabel("Account 1 kind").selectOption(broker ? "broker" : "deposit");
-  await page.getByRole("checkbox", { name: /deliberately selected GBP accounts/ }).check();
+  await page.getByLabel("Account 1 name").fill("Synthetic savings");
+  await page.getByLabel("Account 1 type").selectOption(broker ? "broker" : "deposit");
+  await page.getByRole("checkbox", { name: /These are the GBP accounts I want to track/ }).check();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 }
 async function evidenceStep(page) {
-  await page.getByLabel("Effective time (local)").fill("2026-01-01T10:00");
-  await page.getByLabel("Evidence available (local)").fill("2026-01-01T11:00");
+  await page.getByLabel("Balances as of (local time)").fill("2026-01-01T10:00");
+  await page.getByLabel("Source available from (local time)").fill("2026-01-01T11:00");
   await page.getByLabel("Cash for Synthetic savings (GBP)").fill("1234.56");
-  await page.getByLabel("Source evidence description").fill("Synthetic dated statement, selected scope only.");
+  await page.getByLabel("Where did these figures come from?").fill("Synthetic dated statement, selected scope only.");
 }
 async function depositPreview(page) {
   await accountStep(page);
@@ -112,11 +112,26 @@ async function depositPreview(page) {
 test("guided deposit setup requires review and creates only on explicit confirmation", async ({ page }) => {
   const api = await setupRoutes(page);
   await unlock(page);
-  await expect(page.getByText(/Accounts and products are fixed after creation/)).toBeVisible();
+  const help = page.getByText("Before you start: privacy, storage and later changes", { exact: true });
+  const disclosure = help.locator("..");
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  await help.focus();
+  await page.keyboard.press("Enter");
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(disclosure).toContainText("synthetic-temporary-workspace");
+  await expect(disclosure).toContainText("Git ignore is not encryption");
+  await expect(disclosure).toContainText("Account identities, bindings and currencies");
+  await help.click();
   await depositPreview(page);
   const preview = page.getByRole("group", { name: "Review setup before confirmation" });
   await expect(preview).toContainText("1234.56");
-  await expect(preview).toContainText("unassigned");
+  await expect(preview.getByRole("heading", { name: "Accounts and cash (GBP)" })).toBeVisible();
+  await expect(preview.getByText(/Where these figures came from/)).toBeVisible();
+  await expect(preview.locator(".review-dates")).toContainText("Europe/London");
+  await expect(preview.locator(".review-dates")).toContainText("UTC: 2026-01-01T10:00:00.000Z");
+  await preview.getByText("How starting values and performance are recorded", { exact: true }).click();
+  await expect(preview.getByText(/All opening roles are unassigned/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect(api.calls.map(call => call.path)).toEqual(["preview"]);
   const request = api.preview();
   expect(request.profile.policy).toBeNull();
@@ -138,19 +153,19 @@ test("broker holdings preserve exact decimal strings and unknown unit prices", a
   const api = await setupRoutes(page);
   await unlock(page);
   await accountStep(page, true);
-  await page.getByRole("button", { name: "Add product", exact: true }).click();
-  await expect(page.getByLabel("Product 1 quantity increment")).toHaveValue("");
-  await expect(page.getByLabel("Product 1 minimum notional (GBP)")).toHaveValue("");
-  await page.getByLabel("Product 1 name").fill("Synthetic equity");
-  await page.getByLabel("Product 1 sleeve").selectOption("equity");
-  await page.getByLabel("Product 1 denomination").selectOption("GBP");
-  await page.getByLabel("Product 1 quantity increment").fill("0.001");
-  await page.getByLabel("Product 1 minimum notional (GBP)").fill("1.00");
+  await page.getByRole("button", { name: "Add investment", exact: true }).click();
+  await expect(page.getByLabel("Investment 1 smallest quantity step")).toHaveValue("");
+  await expect(page.getByLabel("Investment 1 minimum purchase (GBP)")).toHaveValue("");
+  await page.getByLabel("Investment 1 name").fill("Synthetic equity");
+  await page.getByLabel("Investment 1 type").selectOption("equity");
+  await page.getByLabel("Investment 1 pricing currency").selectOption("GBP");
+  await page.getByLabel("Investment 1 smallest quantity step").fill("0.001");
+  await page.getByLabel("Investment 1 minimum purchase (GBP)").fill("1.00");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await evidenceStep(page);
   await page.getByRole("button", { name: "Add holding", exact: true }).click();
   await page.getByLabel("Holding 1 account").selectOption({ label: "Synthetic savings" });
-  await page.getByLabel("Holding 1 product").selectOption({ label: "Synthetic equity" });
+  await page.getByLabel("Holding 1 investment").selectOption({ label: "Synthetic equity" });
   await page.getByLabel("Holding 1 quantity", { exact: true }).fill("2.345");
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByText("Unknown — not zero", { exact: false })).toBeVisible();
@@ -161,7 +176,7 @@ test("broker holdings preserve exact decimal strings and unknown unit prices", a
   await page.getByLabel("Cash for Synthetic savings (GBP)").fill("NaN");
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByRole("alert")).toBeFocused();
-  await expect(page.getByRole("alert")).toContainText("explicit non-negative decimal");
+  await expect(page.getByRole("alert")).toContainText("number of zero or more");
   expect(api.calls.filter(call => call.path === "preview")).toHaveLength(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
@@ -177,7 +192,7 @@ test("malformed preview fails closed without offering confirmation", async ({ pa
 test("reload loses in-memory draft and asks before abandoning it", async ({ page }) => {
   await setupRoutes(page);
   await unlock(page);
-  await page.getByLabel("Account 1 alias").fill("Synthetic unsaved alias");
+  await page.getByLabel("Account 1 name").fill("Synthetic unsaved alias");
   let warned = false;
   page.on("dialog", async dialog => {
     expect(dialog.type()).toBe("beforeunload");
@@ -185,7 +200,7 @@ test("reload loses in-memory draft and asks before abandoning it", async ({ page
     await dialog.accept();
   });
   await page.reload();
-  await expect(page.getByLabel("Account 1 alias")).toHaveValue("");
+  await expect(page.getByLabel("Account 1 name")).toHaveValue("");
   expect(warned).toBe(true);
 });
 
@@ -232,18 +247,18 @@ test("revision-zero recovery prefills only the original locked profile and recon
   await expect(profile).toContainText("original-broker-binding");
   await expect(profile).toContainText("original-fund");
   await expect(profile).toContainText("0.001");
-  await expect(page.getByLabel("Account 1 alias")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Add product", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Account 1 name")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add investment", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Back", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Cash for Synthetic savings (GBP)")).toHaveValue("");
   await expect(page.getByLabel("Cash for Synthetic broker (GBP)")).toHaveValue("");
-  await expect(page.getByLabel("Effective time (local)")).toHaveValue("");
-  await expect(page.getByLabel("Source evidence description")).toHaveValue("");
+  await expect(page.getByLabel("Balances as of (local time)")).toHaveValue("");
+  await expect(page.getByLabel("Where did these figures come from?")).toHaveValue("");
   await evidenceStep(page);
   await page.getByLabel("Cash for Synthetic broker (GBP)").fill("0.00");
   await page.getByRole("button", { name: "Add holding", exact: true }).click();
   await page.getByLabel("Holding 1 account").selectOption("original-broker");
-  await page.getByLabel("Holding 1 product").selectOption("original-fund");
+  await page.getByLabel("Holding 1 investment").selectOption("original-fund");
   await page.getByLabel("Holding 1 quantity", { exact: true }).fill("2.345");
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByRole("group", { name: "Review setup before confirmation" })).toBeVisible();
@@ -281,8 +296,11 @@ test("retained recovery evidence is reviewed without reconstructing or replacing
   await expect(page.getByRole("button", { name: "Re-enter original opening evidence" })).toHaveCount(0);
   await page.getByRole("button", { name: "Preview verified recovery" }).click();
   const preview = page.getByRole("group", { name: "Review setup before confirmation" });
-  await expect(preview).toContainText(originalOpening.id);
-  await expect(preview).toContainText(originalProfile.portfolio_id);
+  await expect(preview.getByText(/Starting records may already be saved/)).toBeVisible();
+  await expect(preview.getByText(/Nothing has been saved yet/)).toHaveCount(0);
+  await preview.getByText("Technical details: exact profile and starting record", { exact: true }).click();
+  await expect(preview.getByText(/Opening record:/)).toContainText(originalOpening.id);
+  await expect(preview.getByText(/Opening record:/)).toContainText(originalProfile.portfolio_id);
   await expect(preview).toContainText("Unknown — not zero");
   await expect(page.getByRole("button", { name: "Confirm and create local records" })).toBeDisabled();
   expect(api.calls.map(call => call.path)).toEqual(["recovery-preview"]);

@@ -340,19 +340,62 @@ tbody tr:hover { background: #182b21; }
 .control-lock-reason, .claim-evidence span { color: var(--amber); }
 .claim-evidence a { color: #78e1b0; }
 
+.help-disclosure { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; line-height: 1.65; }
+.help-disclosure > summary { cursor: pointer; color: var(--ink); font-weight: 500; }
+.help-disclosure[open] > summary { margin-bottom: 10px; }
+.help-disclosure p { margin: 10px 0; }
+.help-disclosure pre { max-width: 100%; overflow: auto; }
+.recording-form > .help-disclosure { grid-column: 1 / -1; margin: 0; }
+.recording-form .form-note, .workflow-action-form .form-note { grid-column: 1 / -1; width: 100%; margin: 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
+.field-help { display: block; font-size: 12px; line-height: 1.6; font-weight: 400; color: var(--muted); }
+.example-note { padding: 12px 14px; border-left: 3px solid var(--green); background: var(--surface); font-size: 13px; line-height: 1.65; }
+.review-dates { display: grid; gap: 12px; margin-block: 16px; }
+.review-dates dt { font-weight: 500; }
+.review-dates dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.65; }
+.command-example { max-width: 100%; padding: 12px; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.recording-access-steps { padding-left: 24px; }
+.recording-access-steps li { padding-left: 4px; margin-block: 14px; line-height: 1.65; }
+.trading-guide section[id] { scroll-margin-top: 20px; }
+.trading-guide a { color: var(--green); }
+.setup-shell main { max-width: 980px; }
+.investment-setup { line-height: 1.6; }
+.investment-setup .setup-intro { max-width: 65ch; font-size: 16px; }
+.investment-setup .position-note { font-size: 13px; }
+.setup-draft-note { color: var(--amber); font-size: 13px; }
+.setup-steps { gap: 12px 20px; padding: 16px 0; border-block: 1px solid var(--line); }
+.setup-steps li { color: var(--muted); }
+.setup-steps li[aria-current="step"] { color: var(--green); font-weight: 600; }
+.setup-form > fieldset { border: 0; padding: 0; min-width: 0; }
+.setup-form > fieldset > h3 { margin: 18px 0 0; }
+.setup-form > fieldset > legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.setup-form .setup-row { padding: 18px; margin: 16px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.setup-row label { font-size: 13px; }
+.setup-row input, .setup-row select { min-height: 42px; }
+.setup-actions { padding-top: 16px; }
+.setup-actions button, .setup-form button { min-height: 40px; }
+.setup-check { padding: 12px 0; font-size: 13px; }
+.investment-next-steps > ul { display: grid; gap: 12px; }
+.investment-detail > summary { line-height: 1.5; }
+@media (max-width: 640px) {
+  .setup-shell main { padding: 24px 18px; }
+  .setup-form .setup-row { padding: 12px; }
+  .help-disclosure { padding: 10px; }
+}
+
 @media (max-width: 1150px) {
   .shell { grid-template-columns: 185px minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
-  .shell { display: grid; grid-template-columns: 84px minmax(0, 1fr); }
-  .sidebar { height: 100vh; min-height: 0; padding: 14px 5px; border-right: 1px solid var(--line); border-bottom: 0; }
-  .brand { justify-content: center; }
-  .brand-name, .nav-section-label, .sidebar-bottom { display: none; }
-  .nav-groups { display: grid; gap: 8px; overflow-x: hidden; overflow-y: auto; margin-top: 24px; }
-  .nav-section { display: grid; padding: 0; }
-  .advisory-nav-section { border: 0; border-top: 1px solid var(--line); padding: 8px 0 0; margin: 0; }
-  .sidebar .nav-section nav { display: grid; gap: 4px; min-width: 0; }
-  .sidebar .nav-section nav a { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-height: 56px; padding: 7px 2px; border: 0; border-radius: 6px; font-size: 10px; line-height: 1.2; text-align: center; white-space: normal; overflow-wrap: anywhere; }
+  .shell { display: block; }
+  .sidebar { height: auto; min-height: 0; padding: 14px 18px 0; border-right: 0; border-bottom: 1px solid var(--line); }
+  .brand { justify-content: flex-start; }
+  .brand-name { display: block; }
+  .nav-section-label, .sidebar-bottom { display: none; }
+  .nav-groups { display: flex; gap: 12px; overflow-x: auto; overflow-y: hidden; margin-top: 12px; }
+  .nav-section { display: flex; flex: 0 0 auto; padding: 0; }
+  .advisory-nav-section { border: 0; padding: 0; margin: 0; }
+  .sidebar .nav-section nav { display: flex; gap: 6px; min-width: 0; }
+  .sidebar .nav-section nav a { display: flex; flex-direction: row; align-items: center; gap: 6px; min-height: 44px; padding: 8px; border: 0; border-radius: 6px; font-size: 12px; line-height: 1.2; white-space: nowrap; }
   .sidebar .nav-section nav a svg { display: block; flex-shrink: 0; }
   .sidebar .nav-section nav a.active { background: #142d21; color: var(--green); }
   .metrics { gap: 8px; }

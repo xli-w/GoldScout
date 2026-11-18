@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { label, timestamp } from "./api";
+import { NavLink } from "react-router-dom";
+import { label, reviewTimestamp, timestamp } from "./api";
 
 type ReviewCase = {
   case_id: string; finding_id: string; finding: {
@@ -84,24 +85,24 @@ function ActionRow({ item, inboxRevision, csrf, enabled, changed }: {
   return <div className="review-case">
     <div><strong>{item.finding.subject}: {item.finding.status}</strong>
       <p>{item.finding.explanation}</p>
-      <small>Finding {item.finding.rule}; first seen {timestamp(item.first_seen_at)};
-        source journal revision {item.source_portfolio_revision};
-        cache revision {item.source_cache_revision ?? "not selected"}.</small>
-      <details><summary>Stored finding summary</summary>
+      <small>First seen {timestamp(item.first_seen_at)}.</small>
+      <details className="help-disclosure"><summary>Source and technical details for this check</summary>
+        <p>Finding {item.finding.rule}; source journal revision {item.source_portfolio_revision};
+          cache revision {item.source_cache_revision ?? "not selected"}.</p>
         <p>Recommendation: {item.finding.recommendation}. Evidence hash: {item.finding.evidence_sha256}.</p>
-        <p>Workflow status is not resolution, accounting correction or trade approval.</p>
       </details>
       {item.reviewed_at && <small>Latest action at {timestamp(item.reviewed_at)}{item.note ? `: ${item.note}` : "."}</small>}
     </div>
-    <span>Workflow: {item.review_status}</span>
+    <span>Review status: {label(item.review_status)}</span>
     {item.lifecycle === "active" && <form className="workflow-action-form" onSubmit={event => void submit(event)}>
       <label>Action<select value={action} onChange={event => setAction(event.target.value as typeof action)}>
-        <option value="reviewed">Reviewed</option><option value="acknowledged">Acknowledged</option>
-        <option value="deferred">Deferred</option>
+        <option value="reviewed">I reviewed this</option><option value="acknowledged">I noted this</option>
+        <option value="deferred">Review later</option>
       </select></label>
       <label>Local note (optional, 500 characters)<input maxLength={500} value={note}
         onChange={event => setNote(event.target.value)} /></label>
-      <button type="submit" disabled={!enabled || busy}>Append action</button>
+      <button type="submit" disabled={!enabled || busy}>Save review status</button>
+      <p className="form-note">This only records your review status, not a resolution, correction or permission to trade.</p>
       {error && <p role="alert">{error}</p>}
     </form>}
   </div>;
@@ -109,19 +110,23 @@ function ActionRow({ item, inboxRevision, csrf, enabled, changed }: {
 
 function ReconciliationSummary({ result }: { result: Reconciliation }) {
   return <section className="reconciliation-summary" aria-label="Reconciliation results">
-    <h4>Comparison with recorded journal evidence</h4>
-    <p>Status: <strong>{result.status === "matched" ? "Matched at the stated clocks" : label(result.status)}</strong>.
-      A match does not establish present custody or settled buying power.</p>
+    <h4>Comparison with your portfolio records</h4>
+    <p>Status: <strong>{result.status === "matched" ? "Matched at the stated dates and times" : label(result.status)}</strong>.
+      A match does not verify today's account balance or money available to spend.</p>
     {result.reason && <p>{label(result.reason)}</p>}
     {result.accounts?.map(account => <article key={account.source_account}>
       <h5>{account.source_account} → {account.account_id ?? "No account mapping"}</h5>
-      <p>Observation {timestamp(account.observed_at)}; available {timestamp(account.available_at)}; {label(account.freshness)}.
-        Cash coverage: {label(account.cash_coverage)}; holdings coverage: {label(account.holdings_coverage)}.</p>
+      <dl className="review-dates">
+        <div><dt>Snapshot applies at</dt><dd>{reviewTimestamp(account.observed_at)}</dd></div>
+        <div><dt>Source available from</dt><dd>{reviewTimestamp(account.available_at)}</dd></div>
+      </dl>
+      <p>Age status: {label(account.freshness)}. Cash coverage: {label(account.cash_coverage)};
+        investment coverage: {label(account.holdings_coverage)}.</p>
       {account.comparison_unavailable_reason && <p>Comparison unavailable: {label(account.comparison_unavailable_reason)}.</p>}
       <dl><div><dt>Cash</dt><dd>{label(account.cash.status)}; observed GBP {account.cash.observed ?? "unknown"},
         {" "}recorded GBP {account.cash.recorded ?? "unavailable"}, difference GBP {account.cash.difference ?? "unavailable"}.</dd></div></dl>
       {account.holdings.length > 0 && <div className="table-scroll"><table>
-        <thead><tr><th>Observed product</th><th>Journal product</th><th>Observed quantity</th>
+        <thead><tr><th>Investment in source</th><th>Recorded investment reference</th><th>Quantity in source</th>
           <th>Recorded quantity</th><th>Difference</th><th>Status</th></tr></thead>
         <tbody>{account.holdings.map((holding, index) => <tr key={`${holding.source_product}:${index}`}>
           <td>{holding.source_product}</td><td>{holding.product_id ?? "Unmapped"}</td>
@@ -221,28 +226,40 @@ export function MonitoringWorkflowPage() {
       setPreview(null);
       setRequestId("");
       await invalidate();
-      setError("Observation staged only to the monitoring cache. The investment journal was not changed.");
+      setError("Snapshot saved only to the separate monitoring store. Your portfolio journal was not changed.");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Confirmation rejected."); }
     finally { setBusy(false); }
   }
   return <article className="investment-view monitoring-workflow">
+    <p>Optional: use this page to track checks you have reviewed or compare a source with your recorded portfolio.
+      It does not update your accounts or fix differences. You can use the journal without it.</p>
     <nav className="monitoring-workflow-nav" aria-label="Monitoring workflow sections">
       <a href="#review-inbox">Review inbox</a>
-      <a href="#observation-staging">Stage an observation</a>
+      <a href="#observation-staging">Compare a snapshot</a>
     </nav>
     <section className="history-group" id="review-inbox">
       <h2>Monitoring review inbox</h2>
-      <p>Read-only summaries from the explicitly selected local review store. Reading never syncs or changes it.</p>
-      {inbox.isError && <p role="alert">The selected review inbox or its exact portfolio/profile/cache binding is unavailable.</p>}
+      <p>Track which saved checks you have reviewed. Opening this page does not update the inbox or change your portfolio.</p>
+      {inbox.isError && <p role="alert">The review inbox could not be opened or verified against these portfolio records.
+        No review status can be saved. Check the terminal window used to start the dashboard for error details.</p>}
       {inbox.isPending && <p role="status">Loading the local inbox…</p>}
-      {data?.enabled === false && <p>No explicitly selected monitoring review store.</p>}
+      {data?.enabled === false && <p>A review inbox has not been selected for this dashboard.
+        This does not mean there are no checks to review. Opening an inbox requires separate startup configuration.
+        {" "}<NavLink to="/investment-guide#monitoring-setup">See optional monitoring setup</NavLink>.</p>}
       {data?.enabled === true && <>
-        <p>Portfolio {data.portfolio_id}; profile {data.profile_hash}; inbox revision {data.revision}.
-          {data.source_available ? data.sync_current
-            ? " Latest sync matches the current monitoring evidence."
-            : " Inbox sync is stale; actions are disabled until an explicit sync."
-            : " Current monitoring sources are unavailable; actions are disabled."}</p>
-        {data.cases.length === 0 ? <p>No synchronized review cases.</p>
+        <p>{data.source_available ? data.sync_current
+            ? "The inbox matches the latest saved checks."
+            : "The inbox is out of date. Update it from the saved checks before recording review statuses."
+            : "The information needed for these checks is unavailable. Review actions are disabled; no result should be treated as current."}</p>
+        {auth?.enabled && !data.sync_current && <button type="button" disabled={busy || !csrf} onClick={() => void sync()}>
+          Update inbox from saved checks
+        </button>}
+        {auth && !auth.enabled && <p>Review actions are read-only. Separate startup permission is needed to save statuses;
+          this page cannot enable it.</p>}
+        <details className="help-disclosure"><summary>Inbox identity and revision</summary>
+          <p>Portfolio {data.portfolio_id}; profile {data.profile_hash}; inbox revision {data.revision}.</p>
+        </details>
+        {data.cases.length === 0 ? <p>No checks have been copied to this inbox.</p>
           : data.cases.map(item => <ActionRow key={item.case_id} item={item}
             inboxRevision={data.revision} csrf={csrf}
             enabled={Boolean(auth?.enabled && current)} changed={() => void invalidate()} />)}
@@ -254,45 +271,72 @@ export function MonitoringWorkflowPage() {
     </section>
 
     <section className="history-group" id="observation-staging">
-      <h2>Operator-normalized observation staging</h2>
-      <p>Local manual entry only; no provider/network access. Preview compares available GBP evidence first.
-        Confirmation appends only to the separate monitoring cache—never the investment journal.</p>
-      {session.isError && <p role="alert">Monitoring workflow configuration is unavailable.</p>}
+      <h2>Compare an account snapshot</h2>
+      <p>Enter balances from a source you checked, then preview the differences. Saving adds a separate monitoring snapshot,
+        not a portfolio transaction. There is no provider or network access.</p>
+      <details className="help-disclosure"><summary>How this differs from recording a transaction</summary>
+        <p>A snapshot compares what a source reported with your journal. It does not repair a difference or change the journal.
+          Required dates and mappings say when the source was available and which account or investment it represents.
+          Use explicit UTC times such as 2026-11-17T12:05:00Z; never guess unknown cash or quantities.</p>
+        <p>The save request reference (attempt ID) identifies this save request. Keep it unchanged when retrying the same snapshot.
+          "Complete" means you declare the source coverage complete; it is not independent verification.</p>
+      </details>
+      {session.isError && <p role="alert">Snapshot permissions could not be checked. Nothing can be saved.
+        Check the terminal window used to start the dashboard for error details.</p>}
+      {auth && !auth.enabled && <p>Snapshot entry is not enabled. It needs a separately configured monitoring store and startup permission;
+        opening this page does not grant access or contact a provider.
+        {" "}<NavLink to="/investment-guide#monitoring-setup">See optional monitoring setup</NavLink>.</p>}
       {auth?.enabled && !auth.cache_enabled &&
-        <p>An explicitly initialized monitoring cache is required for observation staging.</p>}
+        <p>No monitoring snapshot store has been selected. Configure the separate store before saving comparisons;
+          your portfolio journal cannot be used in its place.</p>}
       {auth?.enabled && auth.cache_enabled && <>
         <form className="recording-form" onSubmit={event => void previewObservation(event)}>
-          <label>Configured local account<select required value={accountId || auth.accounts[0]?.account_id || ""}
+          <label>Account to compare<select required value={accountId || auth.accounts[0]?.account_id || ""}
             onChange={event => setAccountId(event.target.value)}>
             {auth.accounts.map(item => <option key={item.account_id} value={item.account_id}>
               {item.account_id} / {item.provider}</option>)}
           </select></label>
-          <label>Source observation ID<input required maxLength={200} value={observationId}
-            onChange={event => setObservationId(event.target.value)} /></label>
-          <label>Cache attempt ID (keep unchanged for retries)<input maxLength={128} value={requestId}
-            onChange={event => setRequestId(event.target.value)} /></label>
-          <label>Observed at (explicit UTC; leave blank if unknown)<input value={observedAt}
+          <label>Snapshot reference (source observation ID)<input required maxLength={200} value={observationId}
+            aria-label="Snapshot reference (source observation ID)" aria-describedby="snapshot-reference-help"
+            onChange={event => setObservationId(event.target.value)} />
+            <small className="field-help" id="snapshot-reference-help">A stable reference for this source snapshot, not an account number.
+              Reuse it for the same snapshot; do not reuse it for different figures.</small></label>
+          <details className="help-disclosure"><summary>Advanced: save request reference and retries</summary>
+            <label>Save request reference (attempt ID)<input maxLength={128} value={requestId}
+              onChange={event => setRequestId(event.target.value)} /></label>
+            <p>Leave blank to generate one on preview. Keep it unchanged when retrying the same snapshot.
+              This identifies the request, not the source statement.</p>
+          </details>
+          <label>Snapshot applies at (UTC, blank if unknown)<input value={observedAt}
             placeholder="2026-11-17T12:00:00Z" onChange={event => setObservedAt(event.target.value)} /></label>
-          <label>Available at (explicit UTC)<input required value={availableAt}
+          <label>Source available from (UTC)<input required value={availableAt}
             placeholder="2026-11-17T12:05:00Z" onChange={event => setAvailableAt(event.target.value)} /></label>
           <label>Cash (GBP decimal; blank if unknown)<input inputMode="decimal" value={cash}
             onChange={event => setCash(event.target.value)} /></label>
-          <label>Coverage<select value={coverage} onChange={event => setCoverage(event.target.value as typeof coverage)}>
-            <option value="complete">Complete (operator-declared)</option>
-            <option value="partial">Partial</option><option value="unknown">Unknown</option>
-          </select></label>
-          <label>Account and product mapping evidence available at (UTC)<input required value={mappingAt}
-            placeholder="2026-11-17T11:00:00Z" onChange={event => setMappingAt(event.target.value)} /></label>
-          <label>Operator evidence description<input required maxLength={2000} value={evidence}
+          <label>How much does the source cover?<select aria-label="How much does the source cover?" aria-describedby="snapshot-coverage-help"
+            value={coverage} onChange={event => setCoverage(event.target.value as typeof coverage)}>
+            <option value="complete">All cash and holdings (declared by you)</option>
+            <option value="partial">Some information only</option><option value="unknown">I cannot establish coverage</option>
+          </select><small className="field-help" id="snapshot-coverage-help">An empty holdings list does not prove that the account has no investments.
+            Unknown cash or quantity is not zero.</small></label>
+          <label>Account/investment match known from (UTC)<input required value={mappingAt}
+            aria-label="Account/investment match known from (UTC)" aria-describedby="snapshot-mapping-help"
+            placeholder="2026-11-17T11:00:00Z" onChange={event => setMappingAt(event.target.value)} />
+            <small className="field-help" id="snapshot-mapping-help">When the source identifying this account and any matched investments was available.
+              Names alone are not proof of a match. If unknown, pause rather than guessing.</small></label>
+          <label>Where did these figures come from?<input required maxLength={2000} value={evidence}
             onChange={event => setEvidence(event.target.value)} /></label>
+          <p className="form-note">These monitoring fields require UTC, ending in Z. For example, 10 am in London on 1 July is
+            09:00:00Z on that date, not 10:00:00Z. Check the source's timezone and date; do not copy this example as evidence.
+            Keep the time the figures describe separate from when the source became available.</p>
           <fieldset className="monitoring-entry-group">
-            <legend>Observed holdings</legend>
+            <legend>Investments listed in the source</legend>
             <p>Enter only source evidence. Do not enter a row for an unknown quantity; coverage remains explicit.</p>
             {holdings.map((holding, index) => <div className="monitoring-entry-row" key={index}>
-              <label>Source product name<input required value={holding.source_product}
+              <label>Investment name in source<input required value={holding.source_product}
                 onChange={event => setHoldings(rows => rows.map((row, i) => i === index
                   ? { ...row, source_product: event.target.value } : row))} /></label>
-              <label>Observed quantity<input required inputMode="decimal" value={holding.quantity}
+              <label>Number of units in source<input required inputMode="decimal" value={holding.quantity}
                 onChange={event => setHoldings(rows => rows.map((row, i) => i === index
                   ? { ...row, quantity: event.target.value } : row))} /></label>
               <button type="button" aria-label={`Remove observed holding ${index + 1}`}
@@ -302,46 +346,48 @@ export function MonitoringWorkflowPage() {
               Add observed holding</button>
           </fieldset>
           <fieldset className="monitoring-entry-group">
-            <legend>Explicit product mappings (optional)</legend>
-            <p>Mappings are operator-supplied evidence. They are never inferred from names.</p>
+            <legend>Match source investments to your records (optional)</legend>
+            <p>Only add matches you can support with a source. They are never guessed from similar names.
+              An unmatched investment cannot be fully compared.</p>
             {productMappings.map((mapping, index) => <div className="monitoring-entry-row" key={index}>
-              <label>Source product<input required value={mapping.source_product}
+              <label>Investment name to match<input required value={mapping.source_product}
                 onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, source_product: event.target.value } : row))} /></label>
-              <label>Journal product ID<input required value={mapping.product_id}
+              <label>Recorded investment reference (ID)<input required value={mapping.product_id}
                 onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, product_id: event.target.value } : row))} /></label>
-              <label>Evidence for this mapping<input required value={mapping.evidence}
+              <label>Source supporting this match<input required value={mapping.evidence}
                 onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, evidence: event.target.value } : row))} /></label>
               <button type="button" aria-label={`Remove product mapping ${index + 1}`}
                 onClick={() => setProductMappings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
             </div>)}
             <button type="button" onClick={() => setProductMappings(rows =>
-              [...rows, { source_product: "", product_id: "", evidence: "" }])}>Add product mapping</button>
+              [...rows, { source_product: "", product_id: "", evidence: "" }])}>Add investment match</button>
           </fieldset>
-          <button type="submit" disabled={busy || !csrf}>Preview and reconcile</button>
+          <button type="submit" disabled={busy || !csrf}>Preview comparison</button>
         </form>
         {preview && <div className="recording-preview observation-preview" role="region" aria-label="Observation reconciliation preview">
-          <h3>Preview only—nothing has been staged</h3>
-          <p>Journal revision {preview.journal_revision}; cache revision {preview.cache_revision};
-            preview expires {timestamp(preview.expires_at)}. Investment journal change: no.</p>
-          <p>Attempt ID: {preview.request_id}{preview.already_staged ? " (identical attempt already present)" : ""}</p>
-          <details><summary>Normalized observation to be staged</summary>
+          <h3>Check this comparison before saving</h3>
+          <p>{preview.already_staged ? "This identical save request is already in the monitoring store."
+            : "This is a preview; it has not saved this request."} Your portfolio journal is not changed.</p>
+          <p>Preview valid until {reviewTimestamp(preview.expires_at)}.</p>
+          <dl className="review-dates">
+            <div><dt>Snapshot applies at</dt><dd>{reviewTimestamp(typeof preview.observation.observed_at === "string" ? preview.observation.observed_at : null)}</dd></div>
+            <div><dt>Source available from</dt><dd>{reviewTimestamp(typeof preview.observation.available_at === "string" ? preview.observation.available_at : null)}</dd></div>
+          </dl>
+          <details className="help-disclosure"><summary>Exact snapshot and technical references</summary>
+            <p>Journal revision {preview.journal_revision}; cache revision {preview.cache_revision}.
+              Attempt ID: {preview.request_id}{preview.already_staged ? " (identical attempt already present)" : ""}.</p>
             <pre>{JSON.stringify(preview.observation, null, 2)}</pre>
           </details>
           <ReconciliationSummary result={preview.reconciliation} />
           <button type="button" disabled={busy} onClick={() => void confirmStage()}>
-            Confirm and stage only to the monitoring cache
+            Confirm and save monitoring snapshot only
           </button>
           <button type="button" disabled={busy} onClick={() => setPreview(null)}>Discard preview</button>
         </div>}
       </>}
-      {auth?.enabled && data?.enabled === true && !data.sync_current && (
-        <button type="button" disabled={busy || !csrf} onClick={() => void sync()}>
-          Sync current findings before actions
-        </button>
-      )}
       {error && <p role="status">{error}</p>}
     </section>
   </article>;

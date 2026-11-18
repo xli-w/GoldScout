@@ -11,6 +11,10 @@ test("monitoring shows synthetic findings and invalidates them on failed refresh
   const section = page.getByRole("region", { name: "Portfolio monitoring", exact: true });
   await expect(section.getByText(/Synthetic monitoring demonstration/)).toBeVisible();
   await expect(section.getByRole("link", { name: "Open the separate review inbox" })).toHaveAttribute("href", "/investment/reviews");
+  await expect(section.getByText("Provider connections are not verified. These checks use saved evidence only.")).toBeVisible();
+  await expect(section.getByRole("list", { name: "Provider evidence status" })).toContainText("freshness");
+  await expect(section.getByRole("list", { name: "Provider evidence status" })).toContainText("coverage");
+  await section.getByText("Provider status and source details", { exact: true }).click();
   await expect(section.getByText(/blocked_unvalidated/)).toBeVisible();
   await expect(section.getByText(/Nonzero replayed cash-observation differences remain/)).toBeVisible();
   await expect(section.getByRole("checkbox")).not.toBeChecked();
@@ -46,7 +50,12 @@ test("investment sections provide grouped shortcuts and a prominent recording pa
   await expect(sections.getByText("Portfolio")).toBeVisible();
   await expect(sections.getByText("Review")).toBeVisible();
   await expect(sections.getByRole("link", { name: "Accounts and cash" })).toHaveAttribute("href", "#investment-accounts");
-  await expect(page.getByRole("link", { name: "Record evidence", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
+  await expect(page.locator("#investment-roles")).not.toHaveAttribute("open", "");
+  await sections.getByRole("link", { name: "Roles (optional)" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#investment-roles")).toHaveAttribute("open", "");
+  await expect(page.getByRole("heading", { name: "Management roles" })).toBeVisible();
   await sections.getByRole("link", { name: "Monitoring" }).click();
   await expect(page).toHaveURL(/#investment-monitoring$/);
   await sections.getByRole("link", { name: "Accounts and cash" }).click();
@@ -57,7 +66,7 @@ test("investment sections provide grouped shortcuts and a prominent recording pa
   await expect(page.locator("#investment-policy")).toHaveAttribute("open", "");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
-  await expect(page.getByRole("link", { name: "Record evidence", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
 });
 
 test("monitoring observation staging uses structured fields and readable reconciliation", async ({ page }) => {
@@ -80,18 +89,18 @@ test("monitoring observation staging uses structured fields and readable reconci
   await page.goto("/investment/reviews");
   await expect(page.getByRole("navigation", { name: "Monitoring workflow sections" })).toBeVisible();
   await expect(page.getByLabel("Holdings JSON list (source_product and quantity)")).toHaveCount(0);
-  await page.getByLabel("Source observation ID").fill("observation-1");
-  await page.getByLabel("Available at (explicit UTC)").fill("2026-01-03T12:05:00Z");
-  await page.getByLabel("Operator evidence description").fill("Synthetic operator statement");
+  await page.getByLabel("Snapshot reference (source observation ID)", { exact: true }).fill("observation-1");
+  await page.getByLabel("Source available from (UTC)").fill("2026-01-03T12:05:00Z");
+  await page.getByLabel("Where did these figures come from?").fill("Synthetic operator statement");
   await page.getByRole("button", { name: "Add observed holding" }).click();
-  await page.getByLabel("Source product name").fill("Synthetic fund");
-  await page.getByLabel("Observed quantity").fill("2");
-  await page.getByRole("button", { name: "Add product mapping" }).click();
-  await page.getByLabel("Source product", { exact: true }).fill("Synthetic fund");
-  await page.getByLabel("Journal product ID").fill("fund");
-  await page.getByLabel("Evidence for this mapping").fill("Synthetic mapping note");
-  await page.getByLabel("Account and product mapping evidence available at (UTC)").fill("2026-01-03T11:00:00Z");
-  await page.getByRole("button", { name: "Preview and reconcile" }).click();
+  await page.getByLabel("Investment name in source").fill("Synthetic fund");
+  await page.getByLabel("Number of units in source").fill("2");
+  await page.getByRole("button", { name: "Add investment match" }).click();
+  await page.getByLabel("Investment name to match").fill("Synthetic fund");
+  await page.getByLabel("Recorded investment reference (ID)").fill("fund");
+  await page.getByLabel("Source supporting this match").fill("Synthetic mapping note");
+  await page.getByLabel("Account/investment match known from (UTC)", { exact: true }).fill("2026-01-03T11:00:00Z");
+  await page.getByRole("button", { name: "Preview comparison" }).click();
   await expect.poll(() => submitted?.observation?.holdings?.length).toBe(1);
   expect(submitted.observation.holdings).toEqual([{ source_product: "Synthetic fund", quantity: "2" }]);
   expect(submitted.observation.product_mappings).toEqual([{
@@ -112,7 +121,7 @@ test("investment workspace opens the portfolio without trading requests", async 
   });
   await page.goto("/");
   await expect(page).toHaveURL(/\/investment$/);
-  await expect(page.getByRole("heading", { name: "Long-term investment", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your portfolio", level: 1 })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Account navigation" })).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "Records navigation" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Trading demo", exact: true })).toHaveCount(0);
@@ -123,6 +132,7 @@ test("investment workspace opens the portfolio without trading requests", async 
 test("demo defaults to investment without a second trading product", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/investment$/);
+  await page.getByText("Optional roles: core, dynamic and unassigned", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Management roles" })).toBeVisible();
   await expect(page.getByText(/Synthetic role attribution is shown only to demonstrate accounting/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
@@ -132,11 +142,15 @@ test("demo defaults to investment without a second trading product", async ({ pa
 
 test("recording route clearly reports when local opt-in is disabled", async ({ page }) => {
   await page.goto("/investment/record");
-  await expect(page.getByRole("heading", { name: "Record evidence" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add a record", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recording is disabled" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "How to enable manual recording" })).toBeVisible();
+  await expect(page.getByText(/Run your original startup command again/)).toBeVisible();
+  await expect(page.getByText(/Retain your original/)).toBeVisible();
+  await page.getByText("Why a restart is required", { exact: true }).click();
   await expect(page.getByText(/explicitly selected journal and local opt-in/)).toBeVisible();
   await expect(page.getByText(/--investment-recording/, { exact: false }).first()).toBeVisible();
-  await expect(page.getByText(/--workspace or --investment-database/)).toBeVisible();
+  await expect(page.getByText(/Retain your original/)).toContainText("--workspace or --investment-database");
   await expect(page.getByRole("button", { name: "Preview record" })).toHaveCount(0);
 });
 
@@ -167,12 +181,18 @@ test("next steps reflect incomplete evidence and historical differences without 
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
   const steps = page.getByRole("region", { name: "Next steps" });
-  await expect(steps).toContainText("A complete common-clock valuation is unavailable");
-  await expect(steps).toContainText(`No recorded mark: ${originalHolding.name}`);
-  await expect(steps).toContainText("The performance baseline is unavailable");
+  await expect(steps).toContainText("Your total is unavailable");
+  await expect(steps).toContainText(`Price missing: ${originalHolding.name}`);
+  await expect(steps.getByRole("link", { name: "Review this holding" })).toHaveAttribute("href", "#investment-holdings");
+  await expect(steps.getByRole("link", { name: "record an investment price" })).toHaveAttribute("href", "/investment/record");
+  await expect(steps).toContainText("A later price does not repair an earlier gap");
+  await expect(steps).toContainText("Performance tracking has no starting point yet");
   await expect(steps).toContainText("No cash observations have been recorded");
   await expect(steps).toContainText("Backup status is unknown");
-  await expect(steps).toContainText("A funded account addition needs a complete, contemporaneous snapshot");
+  const extraHelp = steps.getByText("Adding records, changing accounts and optional roles", { exact: true });
+  await expect(extraHelp.locator("..")).not.toHaveAttribute("open", "");
+  await extraHelp.click();
+  await expect(steps.getByText(/Adding a funded account needs complete balances/)).toBeVisible();
 
   report.holdings[0] = { ...originalHolding, mark_available_at: report.generated_at };
   report.cash_observations = [
@@ -186,10 +206,10 @@ test("next steps reflect incomplete evidence and historical differences without 
   report.accounts[0].cash_observation = { ...report.cash_observations[1] };
   delete report.accounts[0].cash_observation.account_id;
   await page.getByRole("button", { name: "Refresh investment" }).click();
-  await expect(steps).toContainText("A complete common-clock valuation is unavailable");
-  await expect(steps.getByText(/No recorded mark:/)).toHaveCount(0);
-  await expect(steps).toContainText("Earlier recorded cash differences");
-  await expect(steps).toContainText("Later matching observations do not resolve");
+  await expect(steps).toContainText("Your total is unavailable");
+  await expect(steps.getByText(/Price missing:/)).toHaveCount(0);
+  await expect(steps).toContainText("Review earlier cash differences");
+  await expect(steps).toContainText("A later matching balance does not resolve them");
   await steps.getByRole("link", { name: "Review cash evidence" }).focus();
   await page.keyboard.press("Enter");
   await expect(page.locator("#investment-accounts")).toHaveAttribute("open", "");
@@ -204,9 +224,9 @@ test("next steps reflect incomplete evidence and historical differences without 
   report.max_drawdown_pct = replay.max_drawdown_pct;
   report.holdings = replay.holdings;
   await page.getByRole("button", { name: "Refresh investment" }).click();
-  await expect(steps).toContainText("Recorded valuation is complete at its recorded clock");
-  await expect(steps).toContainText("Time-weighted return or drawdown is unavailable");
-  await expect(steps).not.toContainText("The performance baseline is unavailable");
+  await expect(steps).toContainText("Your recorded total is complete for the date shown");
+  await expect(steps).toContainText("Return or largest fall is unavailable");
+  await expect(steps).not.toContainText("Performance tracking has no starting point yet");
   await expect(steps).not.toContainText("Backup verified");
   expect(mutations).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
@@ -243,7 +263,8 @@ test("demo next steps are explicitly illustrative and do not claim backup status
   await expect(steps).toContainText("Synthetic demonstration");
   await expect(steps).toContainText("Backup status is unknown");
   await expect(steps).not.toContainText("Backup verified");
-  await expect(steps).toContainText("Unassigned roles are not policy or targets");
+  await steps.getByText("Adding records, changing accounts and optional roles", { exact: true }).click();
+  await expect(steps.getByText(/Unassigned means no label has been chosen/)).toBeVisible();
   const contrast = await steps.evaluate(element => {
     const luminance = value => {
       const channels = value.match(/\d+/g).slice(0, 3).map(channel => {
@@ -317,7 +338,7 @@ test("portfolio awareness keeps matching local, shows evidence and fails closed 
     return route.fulfill(unavailable ? { status: 503, json: { error: "unavailable" } } : { json: awareness });
   });
   await page.goto("/investment");
-  await page.getByText("Optional local portfolio awareness", { exact: true }).click();
+  await page.getByText("Optional context: news, calendar and reminders", { exact: true }).click();
   const section = page.getByRole("region", { name: "Portfolio awareness", exact: true });
   await expect(section.getByText("Synthetic inflation release", { exact: false })).toBeVisible();
   await expect(section.getByText(/Time unknown/)).toBeVisible();
@@ -394,11 +415,12 @@ test("investment demo separates contributions, GBP valuation and blocked proposa
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
   await expect(page).toHaveURL(/\/investment$/);
-  await expect(page.getByRole("heading", { name: "Long-term investment", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your portfolio", level: 1 })).toBeVisible();
   await expect(page.getByText("SYNTHETIC INVESTMENT DEMO")).toBeVisible();
   await expect(page.getByText("Deposits are not profit")).toBeVisible();
+  await page.getByText("Optional roles: core, dynamic and unassigned", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Management roles" })).toBeVisible();
-  await expect(page.getByText(/no targets, policy, or investment recommendation/)).toBeVisible();
+  await expect(page.getByText("Example data, not your accounts or an investment recommendation.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
   await page.getByText("Cash accounts, holdings and reconciliation evidence", { exact: true }).click();
   await expect(page.getByText(/External savings are not broker buying power/)).toBeVisible();
@@ -562,7 +584,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
     await route.fulfill({ json: {
       preview_id: `preview-${request.event.id}`, revision: report.revision,
       event: request.event, before: { equity_gbp: "2000" },
-      after: { equity_gbp: "2000" }, expires_at: "2026-01-01T12:05:00Z",
+      after: { equity_gbp: "2000" }, expires_at: "2026-01-05T12:05:00Z",
     } });
   });
   await page.route("**/api/investment/v1/recording/confirm", async route => {
@@ -577,16 +599,19 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
   const totals = page.getByRole("region", { name: "Investment totals" });
-  await expect(totals.getByText("Gain since baseline")).toBeVisible();
+  await expect(totals.getByText("Gain since tracking began")).toBeVisible();
   await expect(totals.getByText("£2,000.00")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recorded growth history" })).toBeVisible();
-  await expect(page.getByText("Gap: Incomplete synthetic valuation.")).toBeVisible();
-  await expect(page.getByText("Only recorded valuation event clocks are shown. Lines connect observations; no intermediate values are inferred. Incomplete clocks remain gaps.")).toBeVisible();
+  await expect(page.getByText("These are recorded values, not live prices. Lines join recorded points; missing information stays as a gap.")).toBeVisible();
   const returnChart = page.getByRole("img", { name: "Time-weighted return since baseline; unavailable returns are gaps" });
   await expect(returnChart).toBeVisible();
   await expect(returnChart.locator("circle")).toHaveCount(3);
   await expect(returnChart.locator("polyline")).toHaveCount(1);
   await expect(returnChart.locator(".return-chart-gap")).toHaveCount(2);
+  const historyDisclosure = page.getByText("Detailed history and calculation notes", { exact: true });
+  await expect(historyDisclosure.locator("..")).not.toHaveAttribute("open", "");
+  await historyDisclosure.click();
+  await expect(page.getByText("Gap: Incomplete synthetic valuation.")).toBeVisible();
   await expect(page.getByLabel("Recorded growth history").getByRole("columnheader", { name: "Maximum drawdown" })).toBeVisible();
   await expect(page.getByLabel("Recorded growth history").getByRole("row").nth(2)).toContainText("8.57%");
   const historyTable = page.getByLabel("Recorded growth history");
@@ -781,20 +806,39 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Age unavailable (future or invalid clock)");
   await page.clock.setFixedTime(new Date("2026-01-05T12:00:00Z"));
   await expect(page.locator("#investment-accounts")).toHaveAttribute("open", "");
-  await expect(page.getByRole("columnheader", { name: "Mark as of" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Price date" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
   await page.getByText("Proposal status and capability limits", { exact: true }).click();
   await expect(page.getByText(/No order approval or execution is available here/)).toBeVisible();
-  await page.getByRole("link", { name: "Record evidence", exact: true }).click();
+  await page.getByRole("link", { name: "Add a record", exact: true }).click();
   await expect(page).toHaveURL(/\/investment\/record$/);
-  await expect(page.getByLabel("What are you recording?")).toBeVisible();
-  await page.getByLabel("What are you recording?").selectOption("contribution");
+  await expect(page.getByLabel("What do you want to record?")).toBeVisible();
+  await page.getByLabel("What do you want to record?").selectOption("investment");
+  await page.getByLabel("Choose a record").selectOption("buy");
+  await expect(page.getByLabel("Recorded fee in GBP")).toHaveValue("");
+  await expect(page.getByLabel("Applies at (local time)")).toHaveValue("");
+  await expect(page.getByLabel("Source available from (local time)")).toHaveValue("");
+  await page.getByLabel("Choose a record").selectOption("split");
+  await page.getByLabel("Account", { exact: true }).selectOption("broker");
+  await page.getByLabel("Investment", { exact: true }).selectOption("fund");
+  await page.getByLabel("Split ratio").fill("2");
+  await page.getByLabel("Applies at (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic split notice");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  expect(previewEvent).toMatchObject({ type: "split", account_id: "broker", product_id: "fund", ratio: "2" });
+  await page.getByRole("button", { name: "Cancel preview" }).click();
+  await page.getByLabel("What do you want to record?").selectOption("money");
+  await page.getByLabel("Choose a record").selectOption("contribution");
   await page.getByLabel("GBP amount").fill("25");
-  await page.getByLabel("Source evidence / correction reason").fill("Synthetic contribution receipt");
+  await page.getByLabel("Applies at (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic contribution receipt");
   await page.getByRole("button", { name: "Preview record" }).click();
   expect(previewEvent).not.toHaveProperty("role");
+  await expect(page.getByRole("region", { name: "Record summary" })).toContainText("Unassigned — no role chosen");
   await page.getByRole("button", { name: "Cancel preview" }).click();
-  await page.getByRole("region", { name: "Manual recording" }).getByLabel("Management role").selectOption("dynamic");
+  await page.getByRole("region", { name: "Manual recording" }).getByLabel("Optional role", { exact: true }).selectOption("dynamic");
   await page.getByRole("button", { name: "Preview record" }).click();
   await expect(page.getByRole("heading", { name: "Review before recording" })).toBeVisible();
   const confirmationEvent = page.locator(".recording-preview details.recording-event");
@@ -807,9 +851,13 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(confirmationEvent).toContainText("Synthetic contribution receipt");
   await page.getByRole("button", { name: "Confirm and append record" }).click();
   await expect.poll(() => previewEvent?.type).toBe("contribution");
-  await page.getByLabel("What are you recording?").selectOption("correction");
+  await page.getByLabel("What do you want to record?").selectOption("other");
+  await page.getByLabel("Choose a record").selectOption("correction");
+  await page.getByLabel("Event to correct").selectOption({ index: 1 });
   await page.getByLabel("Corrected GBP amount").fill("20");
-  await page.getByLabel("Source evidence / correction reason").fill("Synthetic corrected receipt");
+  await page.getByLabel("Correction recorded at (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic corrected receipt");
   await expect(page.getByText(/Correcting Contribution/)).toBeVisible();
   await page.getByRole("button", { name: "Preview record" }).click();
   await expect(confirmationEvent).toContainText('"replacement_event"');
@@ -820,40 +868,39 @@ test("opening records show since-baseline value without inventing lifetime gain"
   expect(previewEvent.replacement_event.amount_gbp).toBe("20");
   expect(previewEvent.replacement_event.currency).toBe("GBP");
   expect(previewEvent.replacement_event.role).toBe("dynamic");
-  await page.getByLabel("What are you recording?").selectOption("profile_change");
-  await page.getByRole("region", { name: "Manual recording" })
-    .getByRole("combobox").nth(1).selectOption("rename");
-  await page.getByLabel("Identity type").selectOption("product");
-  await page.getByRole("region", { name: "Manual recording" })
-    .getByRole("combobox").nth(3).selectOption("fund");
+  await page.getByLabel("What do you want to record?").selectOption("other");
+  await page.getByLabel("Choose a record").selectOption("profile_change");
+  await page.getByLabel("What do you want to change?").selectOption("rename");
+  await page.getByLabel("Account or investment?", { exact: true }).selectOption("product");
+  await page.getByLabel("Which account or investment?").selectOption("fund");
   await page.getByLabel("New name").fill("Renamed fund");
-  await page.getByLabel("Evidence clock (effective and available at, your local timezone)")
+  await page.getByLabel("Applies and available at (local time)")
     .fill("2026-01-02T12:00");
-  await page.getByLabel("Source evidence / correction reason").fill("Synthetic product documentation");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic product documentation");
   await page.getByRole("button", { name: "Preview record" }).click();
   await expect(confirmationEvent).toContainText('"action": "rename"');
   await expect(confirmationEvent).toContainText('"entity_id": "fund"');
   await expect(confirmationEvent).toContainText('"name": "Renamed fund"');
   await page.getByRole("button", { name: "Cancel preview" }).click();
-  await page.getByLabel("What are you recording?").selectOption("scope_addition");
-  await page.getByLabel("New account ID").fill("scope");
+  await page.getByLabel("Choose a record").selectOption("scope_addition");
+  await page.getByLabel("Account reference (unique ID)", { exact: true }).fill("scope");
   await page.getByLabel("Account name").fill("Additional broker");
-  await page.getByLabel("Account binding alias").fill("synthetic-binding");
-  const scopeBalances = page.getByRole("group", { name: "Complete contemporaneous GBP balances" });
+  await page.getByLabel("Account link nickname", { exact: true }).fill("synthetic-binding");
+  const scopeBalances = page.getByRole("group", { name: "Cash in every account at the same date and time (GBP)" });
   await scopeBalances.getByRole("textbox").nth(0).fill("1000");
   await scopeBalances.getByRole("textbox").nth(1).fill("500");
   await scopeBalances.getByRole("textbox").nth(2).fill("10");
   await page.getByRole("button", { name: "Add new-account holding" }).click();
   const scopeHoldings = page.getByRole("group", {
-    name: "All existing and new long holdings with prices at the same clock",
+    name: "All existing and new holdings with prices at the same time",
   });
   await scopeHoldings.getByLabel("Account").selectOption("scope");
-  await scopeHoldings.getByLabel("Fund").selectOption("fund");
+  await scopeHoldings.getByLabel("Investment").selectOption("fund");
   await scopeHoldings.getByLabel("Quantity").fill("2");
   await scopeHoldings.getByLabel("GBP price per unit").fill("5");
-  await page.getByLabel("Evidence clock (effective and available at, your local timezone)")
+  await page.getByLabel("Applies and available at (local time)")
     .fill("2026-01-03T12:00");
-  await page.getByLabel("Source evidence / correction reason").fill("Synthetic common-clock statement");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic common-clock statement");
   await page.getByRole("button", { name: "Preview record" }).click();
   expect(previewEvent.type).toBe("scope_addition");
   expect(previewEvent.account).toMatchObject({
@@ -870,28 +917,34 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(recordSummary).toContainText("£10.00");
   await expect(recordSummary).toContainText("Holdings included");
   await page.getByRole("button", { name: "Cancel preview" }).click();
-  await expect(page.getByLabel("What are you recording?")).toBeVisible();
-  await page.getByLabel("What are you recording?").selectOption("role_assignment");
-  await page.getByRole("region", { name: "Manual recording" }).getByLabel("Management role").selectOption("core");
+  await expect(page.getByLabel("What do you want to record?")).toBeVisible();
+  await page.getByLabel("Choose a record").selectOption("role_assignment");
+  await page.getByRole("region", { name: "Manual recording" }).getByLabel("Optional role", { exact: true }).selectOption("core");
   await page.getByLabel("GBP amount").fill("100");
-  await page.getByLabel("Source evidence / correction reason").fill("Synthetic attribution evidence");
+  await page.getByLabel("Applies at (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic attribution evidence");
   await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("region", { name: "Record summary" })).toContainText("£100.00");
+  await expect(page.getByRole("region", { name: "Record summary" })).toContainText("Cash");
   await expect(confirmationEvent).toContainText('"role": "core"');
   await expect(confirmationEvent).toContainText('"product_id": null');
   await page.getByRole("button", { name: "Cancel preview" }).click();
   opened = false;
   await page.reload();
-  await expect(page.getByText("Opening cash balance at the same evidence clock")).toBeVisible();
+  await expect(page.getByText("Starting cash balances at the same date and time")).toBeVisible();
   await expect(page.getByRole("button", { name: "Add existing holding" })).toBeVisible();
-  const openingCash = page.getByRole("group", { name: "Opening cash balance at the same evidence clock" });
+  const openingCash = page.getByRole("group", { name: "Starting cash balances at the same date and time" });
   await openingCash.getByRole("textbox").nth(0).fill("1000");
   await openingCash.getByRole("textbox").nth(1).fill("0");
   await page.getByRole("button", { name: "Add existing holding" }).click();
-  const holdingInput = page.getByRole("group", { name: "Existing long fund holdings (optional)" });
+  const holdingInput = page.getByRole("group", { name: "Investments you already own (add every holding)" });
   await holdingInput.getByLabel("Account").selectOption("broker");
-  await holdingInput.getByLabel("Fund").selectOption("fund");
+  await holdingInput.getByLabel("Investment").selectOption("fund");
   await page.getByLabel("Quantity").fill("1");
-  await page.getByLabel("Source evidence / correction reason").fill("Synthetic existing holding evidence");
+  await page.getByLabel("Applies at (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic existing holding evidence");
   await page.getByRole("button", { name: "Preview record" }).click();
   await expect(page.getByRole("heading", { name: "Review before recording" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Record summary" })).toContainText("unknown — not zero");

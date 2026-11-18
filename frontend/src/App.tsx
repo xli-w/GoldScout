@@ -51,8 +51,8 @@ export function App() {
   if (location.pathname === "/") return <Navigate to="/investment" replace />;
 
   const pages: Record<string, string> = {
-    "/investment": "Long-term investment",
-    "/investment/record": "Record evidence",
+    "/investment": "Your portfolio",
+    "/investment/record": "Add a record",
     "/investment/reviews": "Monitoring reviews",
     "/investment-guide": "Investment guide",
     "/intelligence": "Market intelligence",
@@ -71,7 +71,7 @@ export function App() {
       <div className="nav-groups">
         <div className="nav-section"><span className="nav-section-label">INVESTMENT</span>
           <nav aria-label="Investment navigation">
-            <NavLink to="/investment" end><Wallet size={18} /><span>Investment</span></NavLink>
+            <NavLink to="/investment" end><Wallet size={18} /><span>Your portfolio</span></NavLink>
             <NavLink to="/investment/reviews"><ListOrdered size={18} /><span>Monitoring reviews</span></NavLink>
             <NavLink to="/investment-guide"><CircleHelp size={18} /><span>Investment guide</span></NavLink>
           </nav>

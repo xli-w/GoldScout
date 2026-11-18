@@ -65,7 +65,8 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
     {snapshot.source_mode==="demo"&&<div className="demo-band">Synthetic intelligence</div>}
     <section className="intelligence-advisory" aria-label="Advisory-only boundary">
       <ShieldAlert size={20}/>
-      <div><h2>Advisory only — never controls trading</h2><p>Calendar and AI information may be incomplete or unverified. It does not change orders, stops, risk limits, or trading decisions.</p></div>
+      <div><h2>Optional public information — not investment advice</h2><p>Calendar, news and AI information may be incomplete or unverified. It cannot change your records or make trades.
+        Portfolio awareness is a separate local view that matches saved public information to your selected investments. Private account evidence must not be sent to hosted AI.</p></div>
     </section>
     <section className="intelligence-coverage" aria-label="Current source coverage">
       <h2>Current source coverage</h2>
@@ -106,10 +107,13 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
     <section className="intelligence-controls" id="intelligence-controls">
       <div className="section-heading"><div><h2>Analysis controls</h2><span className="subtle">Optional settings for collection and analysis</span></div><span className="status caution">No trading authority</span></div>
       <div className="intelligence-revisions" aria-label="Analysis settings status">
-        <div><span>Latest request</span><strong>{requested?`Revision ${requested.settings.revision}: awaiting application`:latestControl?`${label(latestControl.status)} / ${latestControl.reason}`:"No recorded request"}</strong></div>
-        <div><span>Applied settings</span><strong>Revision {snapshot.settings.revision}</strong></div>
+        <div><span>Latest request</span><strong>{requested?"Waiting for the service":latestControl?`${label(latestControl.status)} / ${latestControl.reason}`:"No recorded request"}</strong></div>
+        <div><span>Applied settings</span><strong>{snapshot.settings.enabled?"Market intelligence enabled":"Market intelligence off"}</strong></div>
       </div>
       <p className="subtle">A request is not applied until the service confirms it. Applied settings do not prove that collection or analysis is running.</p>
+      <details className="help-disclosure"><summary>Settings revisions</summary>
+        <p>Applied revision {snapshot.settings.revision}.{requested && ` Requested revision ${requested.settings.revision}.`}</p>
+      </details>
       <div className="intelligence-toggle-row">{([['enabled','Market intelligence'],['calendar_enabled','Calendar collection'],['news_enabled','News collection'],['ai_enabled','AI summaries']] as const).map(([key,label])=><label key={key}><input type="checkbox" aria-label={label} aria-describedby={displayed.ai_enabled&&(key==='enabled'||key==='ai_enabled')?'ai-shutdown-note':undefined} checked={displayed[key]} disabled={locked||(key==='ai_enabled'&&!displayed.ai_enabled&&!profileForEnable)} onChange={event=>change(key,event.target.checked)}/>{label}</label>)}</div>
       {displayed.ai_enabled&&<p className="subtle" id="ai-shutdown-note">Turning off AI summaries clears the saved AI profile. Turning off Market intelligence also turns off AI summaries.</p>}
       {!displayed.ai_enabled&&!profileForEnable&&<p className="subtle">AI summaries are unavailable. Configure one dashboard AI profile or register the saved profile.</p>}
