@@ -5,9 +5,60 @@ import { CalendarDays, Newspaper, ShieldAlert, RefreshCw } from "lucide-react";
 import "./intelligence.css";
 
 type Settings={enabled:boolean;calendar_enabled:boolean;news_enabled:boolean;ai_enabled:boolean;mode:string;ai_profile:string|null;revision:number};
-type Data={source_mode:string;database_id:string;generated_at:string;settings:Settings;profiles:string[];controls_enabled:boolean;source_status:{status:string;available_at:string;error_code:string|null}|null;calendar:{event_id:string;title:string;scheduled_at:string|null;symbols:string[]}[];news:{evidence_id:string;title:string;snippet:string;source_url:string;published_at:string|null}[];briefs:{brief_id:string;available_at:string;interpretation:string;uncertainties:string[];claims:{text:string;evidence_ids:string[]}[];recommendation:string;verification:string;expires_at:string;provider:string;model:string}[];controls:{request_id:string;status:string;reason:string;effective_revision:number|null}[];budget:{calls:number;input_bytes:number;output_allowance:number}|null};
+type ServiceState="unknown"|"unsupported"|"future"|"superseded"|"stale"|"recent";
+type ServiceStatus={settings_revision:number;observed_at:string;network_permitted:boolean;calendar_sources:string[];news_permitted:boolean;ai_permitted:boolean;failures:{source:string;error_code:string;observed_at:string}[]};
+type Data={source_mode:string;database_id:string;generated_at:string;settings:Settings;profiles:string[];controls_enabled:boolean;
+  service_status_capable:boolean;service_status_state:ServiceState;service_status:ServiceStatus|null;
+  source_status:{status:string;available_at:string;error_code:string|null}|null;
+  calendar_sources:{source:string;checked_at:string|null}[];calendar:{event_id:string;title:string;scheduled_at:string|null;symbols:string[]}[];
+  news_last_success_at:string|null;news:{evidence_id:string;title:string;snippet:string;source_url:string;published_at:string|null}[];
+  briefs:{brief_id:string;available_at:string;interpretation:string;uncertainties:string[];claims:{text:string;evidence_ids:string[]}[];recommendation:string;verification:string;expires_at:string;provider:string;model:string}[];
+  controls:{request_id:string;status:string;reason:string;effective_revision:number|null}[];budget:{calls:number;input_bytes:number;output_allowance:number}|null};
 type Session={enabled:boolean;csrf:string|null};
-async function read<T>(path:string):Promise<T>{const response=await fetch(path,{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw new Error("Intelligence unavailable");const value=await response.json();if(!value||typeof value!=='object')throw new Error('Invalid response');if(path.endsWith('/session')){if(typeof value.enabled!=='boolean'||(value.csrf!==null&&typeof value.csrf!=='string'))throw new Error('Invalid session');}else{if(typeof value.database_id!=='string'||!value.settings||!Number.isInteger(value.settings.revision)||!['calendar','news','briefs','controls','profiles'].every(key=>Array.isArray(value[key])))throw new Error('Invalid intelligence');for(const flag of ['enabled','calendar_enabled','news_enabled','ai_enabled'])if(typeof value.settings[flag]!=='boolean')throw new Error('Invalid settings');}return value;}
+function validTimestamp(value:unknown):value is string{return typeof value==='string'&&Number.isFinite(Date.parse(value));}
+async function read<T>(path:string):Promise<T>{
+  const response=await fetch(path,{credentials:"same-origin",cache:"no-store"});
+  if(!response.ok)throw new Error("Intelligence unavailable");
+  const value=await response.json();
+  if(!value||typeof value!=='object')throw new Error('Invalid response');
+  if(path.endsWith('/session')){
+    if(typeof value.enabled!=='boolean'||(value.csrf!==null&&typeof value.csrf!=='string'))throw new Error('Invalid session');
+  }else{
+    if(typeof value.database_id!=='string'||!validTimestamp(value.generated_at)||!value.settings||!Number.isInteger(value.settings.revision)
+      ||!['calendar','calendar_sources','news','briefs','controls','profiles'].every(key=>Array.isArray(value[key])))throw new Error('Invalid intelligence');
+    for(const flag of ['enabled','calendar_enabled','news_enabled','ai_enabled'])if(typeof value.settings[flag]!=='boolean')throw new Error('Invalid settings');
+    if(typeof value.service_status_capable!=='boolean'||!['unknown','unsupported','future','superseded','stale','recent'].includes(value.service_status_state)
+      ||(value.news_last_success_at!==null&&!validTimestamp(value.news_last_success_at))
+      ||(value.service_status_capable?value.service_status_state==='unsupported':value.service_status_state!=='unsupported'))throw new Error('Invalid service status');
+    if(value.service_status===null){
+      if(!['unknown','unsupported'].includes(value.service_status_state))throw new Error('Missing service observation');
+    }else{
+      const observed=value.service_status;
+      if(!observed||['unknown','unsupported'].includes(value.service_status_state)||!Number.isInteger(observed.settings_revision)||!validTimestamp(observed.observed_at)
+        ||!['network_permitted','news_permitted','ai_permitted'].every(key=>typeof observed[key]==='boolean')
+        ||!Array.isArray(observed.calendar_sources)||!observed.calendar_sources.every((source:unknown)=>typeof source==='string')
+        ||!Array.isArray(observed.failures)
+        ||observed.failures.some((item:{source:unknown;error_code:unknown;observed_at:unknown})=>!item||typeof item.source!=='string'||typeof item.error_code!=='string'||!validTimestamp(item.observed_at))
+        ||(value.service_status_state==='recent'&&(observed.settings_revision!==value.settings.revision
+          ||Date.parse(observed.observed_at)>Date.parse(value.generated_at))))throw new Error('Invalid service observation');
+    }
+    if(value.calendar_sources.some((item:{source:unknown;checked_at:unknown})=>!item||typeof item.source!=='string'||(item.checked_at!==null&&!validTimestamp(item.checked_at))))throw new Error('Invalid calendar sources');
+  }
+  return value;
+}
+const serviceStateText:Record<ServiceState,string>={
+  unknown:"No service observation is recorded; service activity is unknown.",
+  unsupported:"Service observations require an explicit intelligence database upgrade.",
+  future:"The observation has a future timestamp; service activity is unknown.",
+  superseded:"The observation predates the applied settings; service activity is unknown.",
+  stale:"The last service observation is stale; service activity is unknown.",
+  recent:"A recent service observation is recorded.",
+};
+function sourceName(source:string){
+  if(source==="analysis")return "AI summaries";
+  if(source==="fed_monetary")return "Federal Reserve news";
+  return source.toUpperCase();
+}
 export function useIntelligence(enabled:boolean){
   return useQuery({queryKey:["intelligence"],queryFn:()=>read<Data>("/api/v1/intelligence"),refetchInterval:5000,enabled});
 }
@@ -72,6 +123,21 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       <h2>Current source coverage</h2>
       <p>U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS. UK/global calendars and issuer coverage are not established; coverage remains incomplete and unverified.</p>
     </section>
+    <section className="intelligence-coverage" aria-label="Service observation">
+      <h2>Service observation</h2>
+      <p>{snapshot.source_mode==="demo"&&snapshot.service_status_state==="unknown"
+        ?"The synthetic demo has no separate service observation.":serviceStateText[snapshot.service_status_state]}</p>
+      {snapshot.service_status&&<>
+        <p>Observed {timestamp(snapshot.service_status.observed_at)} · Applied settings revision {snapshot.service_status.settings_revision}.</p>
+        <p>Reported capabilities: network {snapshot.service_status.network_permitted?"permitted":"not permitted"};
+          news {snapshot.service_status.news_permitted?"permitted":"not permitted"};
+          AI {snapshot.service_status.ai_permitted?"permitted":"not permitted"}.
+          Calendar sources: {snapshot.service_status.calendar_sources.map(sourceName).join(", ")}.</p>
+        {snapshot.service_status.failures.length>0&&<ul aria-label="Last reported failures">{snapshot.service_status.failures.map(failure=>
+          <li key={failure.source}>{sourceName(failure.source)}: {label(failure.error_code)}; reported {timestamp(failure.observed_at)}. This may be historical.</li>)}</ul>}
+      </>}
+      <p>An observation does not prove that the service is currently running or a provider is connected.</p>
+    </section>
     <nav className="intelligence-sections" aria-label="Intelligence sections">
       <div><span>Evidence</span><a href="#intelligence-calendar">Calendar</a><a href="#intelligence-briefs">AI briefs</a>
         <a href="#intelligence-news">Source evidence</a></div>
@@ -79,6 +145,10 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
     </nav>
     <section className="position-section" id="intelligence-calendar">
       <div className="section-heading"><h2><CalendarDays size={18}/> Economic calendar</h2><span className="status caution">Coverage unverified</span></div>
+      {snapshot.calendar_sources.length>0&&<div className="snapshot-strip" aria-label="Calendar source observations">
+        {snapshot.calendar_sources.map(source=><span key={source.source}>{sourceName(source.source)} last saved source check: {timestamp(source.checked_at)}</span>)}
+        <span>A later failed attempt may be shown in the service observation.</span>
+      </div>}
       <div className="table-scroll" tabIndex={0} aria-label="Economic calendar" aria-describedby="table-scroll-instructions"><table><thead><tr><th>Event</th><th>Scheduled (UTC)</th><th>Instruments</th></tr></thead><tbody>{snapshot.calendar.map(event=><tr key={event.event_id}><td>{event.title}</td><td>{timestamp(event.scheduled_at,"Unknown")}</td><td>{event.symbols.join(', ')}</td></tr>)}</tbody></table>{snapshot.calendar.length===0&&<div className="intelligence-empty"><h3>No calendar events recorded</h3><p>{calendarCollectionActive?"No events are recorded in this snapshot. Calendar coverage remains unverified; this does not establish that no events are scheduled.":"Calendar collection is off in the applied settings. This empty view does not establish that no events are scheduled."}</p></div>}</div>
     </section>
     <section className="position-section" id="intelligence-briefs">
@@ -100,7 +170,9 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
     </section>
     <section className="position-section" id="intelligence-news">
       <div className="section-heading"><h2><Newspaper size={18}/> Source evidence</h2></div>
-      <div className="snapshot-strip" role="status"><span>Last news-source observation: {snapshot.source_status?label(snapshot.source_status.status):"Unknown"}</span><span>{timestamp(snapshot.source_status?.available_at||null)}</span></div>
+      <div className="snapshot-strip" role="status"><span>Last news-source observation: {snapshot.source_status?label(snapshot.source_status.status):"Unknown"}</span><span>{timestamp(snapshot.source_status?.available_at||null)}</span>
+        {snapshot.source_status?.error_code&&<span>Last error: {label(snapshot.source_status.error_code)}</span>}
+        <span>Last saved news evidence: {timestamp(snapshot.news_last_success_at)}</span></div>
       {snapshot.news.map(item=><article id={`evidence-${item.evidence_id}`} className="intelligence-news" key={item.evidence_id}><a href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a><time>Published {timestamp(item.published_at,"Unknown")}</time><p>{item.snippet}</p></article>)}
       {snapshot.news.length===0&&<div className="intelligence-empty"><h3>No news evidence recorded</h3><p>{newsCollectionActive?`No news items are recorded in this snapshot. ${sourceObservation} News coverage may be incomplete.`:"News collection is off in the applied settings. No evidence here does not establish that no relevant news exists."}</p></div>}
     </section>

@@ -8,7 +8,8 @@ import threading
 
 from market_intelligence.service import IntelligenceService
 from market_intelligence.providers import CALENDAR_SOURCES
-from market_intelligence.store import IntelligenceStore, StoreError, encode, initialize, upgrade
+from market_intelligence.contracts import service_status_state
+from market_intelligence.store import IntelligenceStore, StoreError, connection, encode, initialize, upgrade
 from proxy_config import ProxyConfigurationError
 from market_intelligence.runtime import load_profiles
 
@@ -51,10 +52,18 @@ def main(argv=None):
                     service.run(threading.Event())
                 else:
                     processed = service.step()
-        observation = store.news_status() if args.action == "status" and store.schema_version >= 3 else None
-        print(json.dumps({"database_id": store.database_id, "schema_version": store.schema_version,
-                  "settings": json.loads(encode(store.settings())),
+        with connection(store.path, expected_id=store.database_id) as handle:
+            version = handle.execute("PRAGMA user_version").fetchone()[0]
+            observation = store._news_status(handle) if args.action == "status" and version >= 3 else None
+            settings, _ = store._settings(handle)
+            service_status = store._latest_service_observation(handle) if version >= 5 else None
+            status_state = service_status_state(service_status, settings, datetime.now(timezone.utc)) if version >= 5 else "unsupported"
+        print(json.dumps({"database_id": store.database_id, "schema_version": version,
+                  "settings": json.loads(encode(settings)),
                   "last_news_observation": json.loads(encode(observation)) if observation is not None else None,
+                  "service_status_capable": version >= 5,
+                  "service_status_state": status_state,
+                  "service_status": json.loads(encode(service_status)) if service_status is not None else None,
                           "processed": [json.loads(encode(receipt)) for receipt in processed],
                           "trading_authority": False, "providers_connected": None if args.action == "status" else False,
                           "network_permitted": args.allow_network}, sort_keys=True))
@@ -65,7 +74,10 @@ def main(argv=None):
         print(str(exc))
         return 1
     except (StoreError, ValueError):
-        print("Intelligence command refused: storage, ownership or settings validation failed.")
+        if args.action in ("once", "run"):
+            print("Intelligence service stopped: settings or evidence may already be committed. Check recorded state.")
+        else:
+            print("Intelligence command refused: storage, ownership or settings validation failed.")
         return 1
 
 

@@ -619,9 +619,11 @@ class IntelligenceCalendarServiceTests(IntelligenceStoreFixture, unittest.TestCa
             batch = parse_bls_calendar(calendar(), received)
             service.results.get_nowait()
             service.results.put_nowait((batch, None, 1, service.generation, "bls"))
-            service.clock = Mock(side_effect=[self.now, received + timedelta(seconds=1)])
+            service.clock = Mock(side_effect=[self.now, received + timedelta(seconds=1),
+                                              received + timedelta(seconds=1)])
             service.step()
             self.assertGreaterEqual(self.store.calendar().available_at, received)
+            self.assertGreaterEqual(self.store.service_status().observed_at, self.store.calendar().available_at)
 
     def test_older_event_sequence_cannot_resurrect_a_cancellation(self):
         self.transport.fetch.return_value = calendar(extra="SEQUENCE:2\r\nSTATUS:CANCELLED\r\n")

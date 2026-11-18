@@ -93,7 +93,19 @@ class DurableCompletionTests(IntelligenceStoreFixture,unittest.TestCase):
         unquoted=replace(brief,claims=(EvidenceClaim("The central bank increased rates.",(self.batch.items[0].evidence_id,)),),brief_id="brief-unquoted")
         with self.assertRaises(StoreError):self.store.publish_brief(unquoted,self.now)
 
-    def test_schema_three_news_status_migrates_to_schema_four(self):
+    def test_cached_brief_retry_rejects_a_clock_before_its_commit(self):
+        status = self.enable_ai()
+        context = self.context(status, 2)
+        _, size, _ = analysis_input(self.store.news_acquisition(status.acquisition_id), context["cluster_id"])
+        reservation = self.store.reserve_analysis(self.now, size, AnalysisLimits(), context)
+        brief = self.brief_for(reservation, context)
+        committed = self.store.publish_brief(brief, self.now + timedelta(seconds=10))
+        with self.assertRaises(StoreError) as result:
+            self.store.publish_brief(brief, self.now + timedelta(seconds=5))
+        self.assertEqual(result.exception.code, "clock_invalid")
+        self.assertEqual(self.store.recent_briefs(), (committed,))
+
+    def test_schema_three_news_status_migrates_to_schema_five(self):
         path=Path(self.directory.name)/"v3.sqlite3"
         old=initialize(path,self.now,schema_version=3)
         old.enqueue(ControlRequest("enable",old.database_id,0,self.now,self.now+timedelta(minutes=5),IntelligenceSettings(enabled=True,revision=1)),self.now)
@@ -103,7 +115,7 @@ class DurableCompletionTests(IntelligenceStoreFixture,unittest.TestCase):
         self.assertIsNone(old.analysis_usage(self.now))
         upgrade(path)
         migrated=IntelligenceStore(path)
-        self.assertEqual(migrated.schema_version,4)
+        self.assertEqual(migrated.schema_version,5)
         self.assertEqual(migrated.news_status(),status)
         self.assertEqual(migrated.analysis_usage(self.now),{"day":self.now.date().isoformat(),"calls":0,"input_bytes":0,"output_allowance":0})
 
@@ -128,3 +140,18 @@ class RuntimeProviderTests(unittest.TestCase):
             with self.assertRaises(AnalysisError):
                 ProviderProfile("hosted","openai","model","TRADER_AI_TEST").complete(SummaryRequest("system","{}",64),cancelled)
         factory.assert_not_called()
+
+    def test_cancelled_local_connection_setup_does_not_dispatch(self):
+        cancelled = threading.Event()
+        connection = Mock(sock=None)
+
+        def create(*args, **kwargs):
+            cancelled.set()
+            return connection
+
+        with patch("market_intelligence.runtime.http.client.HTTPConnection", side_effect=create):
+            with self.assertRaises(AnalysisError) as result:
+                ProviderProfile("local", "local", "model").complete(SummaryRequest("system", "{}", 64), cancelled)
+        self.assertEqual(result.exception.code, "analysis_cancelled")
+        connection.request.assert_not_called()
+        connection.close.assert_called_once()

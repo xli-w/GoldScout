@@ -9,7 +9,8 @@
     {"$ref": "#/$defs/ai_brief"},
     {"$ref": "#/$defs/control_request"},
     {"$ref": "#/$defs/control_receipt"},
-    {"$ref": "#/$defs/news_observation"}
+    {"$ref": "#/$defs/news_observation"},
+    {"$ref": "#/$defs/service_observation"}
   ],
   "$defs": {
     "id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$", "not": {"pattern": "[^A-Za-z0-9_.:-]"}},
@@ -112,6 +113,41 @@
       "if": {"properties": {"status": {"const": "successful"}}, "required": ["status"]},
       "then": {"properties": {"error_code": {"type": "null"}, "acquisition_id": {"$ref": "#/$defs/id"}, "last_success_id": {"$ref": "#/$defs/id"}}},
       "else": {"properties": {"error_code": {"type": "string"}, "acquisition_id": {"type": "null"}}}
+    },
+    "service_failure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "error_code", "observed_at"],
+      "properties": {
+        "source": {"enum": ["bls", "bea", "fed_monetary", "analysis"]},
+        "error_code": {"type": "string"},
+        "observed_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "allOf": [
+        {"if": {"properties": {"source": {"enum": ["bls", "bea"]}}},
+         "then": {"properties": {"error_code": {"enum": ["endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable", "encoding_refused", "content_refused", "response_too_large", "response_incomplete", "source_unavailable", "invalid_calendar", "unsupported_calendar", "parser_unavailable", "revision_conflict", "calendar_capacity"]}}}},
+        {"if": {"properties": {"source": {"const": "fed_monetary"}}},
+         "then": {"properties": {"error_code": {"enum": ["endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable", "encoding_refused", "content_refused", "response_too_large", "response_incomplete", "source_unavailable", "invalid_news", "parser_unavailable", "article_refused"]}}}},
+        {"if": {"properties": {"source": {"const": "analysis"}}},
+         "then": {"properties": {"error_code": {"enum": ["analysis_failed", "analysis_in_progress", "profile_unavailable", "analysis_cancelled", "settings_changed", "profile_changed", "source_unavailable", "evidence_unavailable", "input_too_large", "budget_exhausted", "clock_invalid", "provider_unavailable", "analysis_expired", "output_invalid", "storage_unavailable", "storage_invalid", "reservation_invalid", "upgrade_required"]}}}}
+      ]
+    },
+    "service_observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observation_id", "service_id", "revision", "settings_revision", "observed_at", "network_permitted", "calendar_sources", "news_permitted", "ai_permitted", "failures"],
+      "properties": {
+        "observation_id": {"$ref": "#/$defs/id"}, "service_id": {"$ref": "#/$defs/id"},
+        "revision": {"type": "integer", "minimum": 1}, "settings_revision": {"$ref": "#/$defs/revision"},
+        "observed_at": {"$ref": "#/$defs/timestamp"}, "network_permitted": {"type": "boolean"},
+        "calendar_sources": {"type": "array", "items": {"enum": ["bls", "bea"]}, "minItems": 1, "maxItems": 2, "uniqueItems": true},
+        "news_permitted": {"type": "boolean"}, "ai_permitted": {"type": "boolean"},
+        "failures": {"type": "array", "items": {"$ref": "#/$defs/service_failure"}, "maxItems": 4}
+      },
+      "allOf": [
+        {"if": {"properties": {"network_permitted": {"const": false}}},
+         "then": {"properties": {"failures": {"maxItems": 0}}}},
+        {"if": {"properties": {"ai_permitted": {"const": true}}},
+         "then": {"properties": {"network_permitted": {"const": true}, "news_permitted": {"const": true}}}}
+      ]
     },
     "claim": {
       "type": "object", "additionalProperties": false, "required": ["text", "evidence_ids"],

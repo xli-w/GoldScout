@@ -19,6 +19,9 @@ exists. See [operations](../intelligence.md).
 - Requests, service-applied receipts and active collection capabilities differ.
   Settings require exact revision/expiry/identity, append-only evidence and
   transactional application. Missing/foreign stores are never repaired by reads.
+- Append-only service observations report sanitized capabilities and failures
+  for a settings revision. A recent observation is not liveness, connectivity
+  or coverage proof; stale, future and superseded observations remain uncertain.
 - Explicit service/provider capabilities, endpoint allowlists, address
   validation/pinning, TLS, configured proxy with no direct fallback and bounded
   requests remain mandatory. Local AI is explicit loopback, not a remote fallback.

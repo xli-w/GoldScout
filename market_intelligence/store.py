@@ -13,21 +13,23 @@ from typing import TypeVar
 
 from market_intelligence.contracts import (
     CalendarEvent, CalendarSnapshot, ControlReceipt, ControlRequest,
-    IntelligenceSettings, NewsEvidence, SourceCoverage, identifier, nonnegative_integer, utc_time,
+    IntelligenceSettings, NewsEvidence, ServiceFailure, ServiceObservation, SourceCoverage,
+    identifier, nonnegative_integer, utc_time,
 )
 from market_intelligence.news import ArchivedNews, NewsBatch, NewsObservation, ProviderError, parse_fed_news
 from market_intelligence.analysis import AnalysisBrief, AnalysisLimits, EvidenceClaim, SYSTEM_PROMPT, analysis_input
 
 
 APPLICATION_ID = 0x4D494E54
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MAX_PAYLOAD = 524288
 MAX_RAW_NEWS = 1048576
+MAX_SERVICE_PAYLOAD = 8192
 _Record = TypeVar("_Record")
 
 
 def storage_schema(version=SCHEMA_VERSION):
-    if version not in (1, 2, 3, 4):
+    if version not in (1, 2, 3, 4, 5):
         raise StoreError("schema_unsupported")
     definitions = {
         ("table", "identity"): "CREATE TABLE identity(id INTEGER PRIMARY KEY CHECK(id=1), database_id TEXT NOT NULL CHECK(length(database_id) BETWEEN 1 AND 128))",
@@ -66,6 +68,23 @@ def storage_schema(version=SCHEMA_VERSION):
         definitions.update(news_status_schema())
     if version >= 4:
         definitions.update(analysis_storage_schema())
+    if version >= 5:
+        definitions.update(service_status_schema())
+    return definitions
+
+
+def service_status_schema():
+    definitions = {
+        ("table", "service_observations"): "CREATE TABLE service_observations(revision INTEGER PRIMARY KEY CHECK(revision>0), observation_id TEXT UNIQUE NOT NULL CHECK(length(observation_id) BETWEEN 1 AND 128), service_id TEXT NOT NULL CHECK(length(service_id) BETWEEN 1 AND 128), settings_revision INTEGER NOT NULL REFERENCES settings_history(revision), observed_at TEXT NOT NULL CHECK(length(observed_at)<=32), payload TEXT NOT NULL CHECK(length(payload)<=8192), payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64))",
+    }
+    for operation in ("UPDATE", "DELETE"):
+        name = f"immutable_service_observations_{operation.lower()}"
+        definitions[("trigger", name)] = (f"CREATE TRIGGER {name} BEFORE {operation} ON service_observations "
+                                          "BEGIN SELECT RAISE(ABORT, 'Service observations are append-only'); END")
+    definitions[("trigger", "immutable_service_observations_replace")] = (
+        "CREATE TRIGGER immutable_service_observations_replace BEFORE INSERT ON service_observations "
+        "WHEN EXISTS(SELECT 1 FROM service_observations WHERE revision=NEW.revision OR observation_id=NEW.observation_id) "
+        "BEGIN SELECT RAISE(ABORT, 'Service observations are append-only'); END")
     return definitions
 
 
@@ -134,6 +153,11 @@ class StoreError(RuntimeError):
         super().__init__(code)
 
 
+class StoreBusy(StoreError):
+    def __init__(self):
+        super().__init__("storage_unavailable")
+
+
 def encode(record):
     if isinstance(record, CalendarSnapshot) and (len(record.sources) > 50 or len(record.events) > 1000):
         raise ValueError("Calendar collections exceed storage limits")
@@ -160,7 +184,7 @@ def construct(record_type: type[_Record], payload: object) -> _Record:
     if type(payload) is not dict or set(payload) - expected or expected - set(payload) - optional:
         raise ValueError("Stored record fields do not match the contract")
     values = dict(payload)
-    for name in ("requested_at", "expires_at", "applied_at", "available_at", "scheduled_at",
+    for name in ("requested_at", "expires_at", "applied_at", "available_at", "observed_at", "scheduled_at",
                  "published_at", "received_at", "started_at", "completed_at", "checked_at", "coverage_start", "coverage_end"):
         if name in values and values[name] is not None:
             values[name] = parse_time(values[name])
@@ -184,6 +208,11 @@ def construct(record_type: type[_Record], payload: object) -> _Record:
         if type(values["evidence_ids"]) is not list:
             raise ValueError("Invalid stored claim references")
         values["evidence_ids"] = tuple(values["evidence_ids"])
+    if record_type is ServiceObservation:
+        if type(values["calendar_sources"]) is not list or type(values["failures"]) is not list:
+            raise ValueError("Invalid service observation collections")
+        values["calendar_sources"] = tuple(values["calendar_sources"])
+        values["failures"] = tuple(construct(ServiceFailure, item) for item in values["failures"])
     for name in ("symbols", "categories"):
         if name in values:
             if type(values[name]) is not list:
@@ -256,7 +285,7 @@ def connection(path, writable=False, expected_id=None):
         if handle.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID:
             raise StoreError("foreign_database")
         version = handle.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (1, 2, 3, SCHEMA_VERSION):
+        if version not in (1, 2, 3, 4, SCHEMA_VERSION):
             raise StoreError("schema_unsupported")
         if handle.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             raise StoreError("schema_unsupported")
@@ -274,6 +303,12 @@ def connection(path, writable=False, expected_id=None):
             raise StoreError("identity_mismatch")
         yield handle
         handle.commit()
+    except sqlite3.OperationalError as exc:
+        code = getattr(exc, "sqlite_errorcode", None)
+        # SQLite's primary SQLITE_BUSY code; Python 3.10 lacks exception error codes.
+        if (type(code) is int and code & 0xff == 5) or (code is None and str(exc) == "database is locked"):
+            raise StoreBusy() from exc
+        raise StoreError("storage_unavailable") from exc
     except (sqlite3.Error, OSError, ValueError) as exc:
         raise StoreError("storage_unavailable") from exc
     finally:
@@ -329,10 +364,13 @@ def upgrade(path):
             if version < 3:
                 for statement in news_status_schema().values():
                     handle.execute(statement)
-                handle.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             if version < 4:
                 for statement in analysis_storage_schema().values():
                     handle.execute(statement)
+            if version < 5:
+                for statement in service_status_schema().values():
+                    handle.execute(statement)
+            if version != SCHEMA_VERSION:
                 handle.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     finally:
         lock.close()
@@ -378,6 +416,98 @@ class IntelligenceStore:
     def settings(self) -> IntelligenceSettings:
         with connection(self.path, expected_id=self.database_id) as handle:
             return self._settings(handle)[0]
+
+    def _service_observation(self, handle, observation_id):
+        row = handle.execute(f"""SELECT revision, settings_revision,
+            {bounded_column('service_id', 128)}, {bounded_column('observed_at', 32)},
+            {bounded_column('payload', MAX_SERVICE_PAYLOAD)}, {bounded_column('payload_hash', 64)}
+            FROM service_observations WHERE observation_id=?""", (observation_id,)).fetchone()
+        if row is None:
+            return None
+        observation = decode(ServiceObservation, row["payload"], row["payload_hash"])
+        try:
+            recorded_at = parse_time(row["observed_at"])
+            history = handle.execute(f"SELECT {bounded_column('payload', MAX_PAYLOAD)}, "
+                                     f"{bounded_column('payload_hash', 64)}, {bounded_column('observed_at', 32)} "
+                                     "FROM settings_history WHERE revision=?", (observation.settings_revision,)).fetchone()
+            if history is None:
+                raise StoreError("storage_invalid")
+            settings = decode(IntelligenceSettings, history["payload"], history["payload_hash"])
+            settings_at = parse_time(history["observed_at"])
+            previous = handle.execute(f"SELECT {bounded_column('observed_at', 32)} FROM service_observations "
+                                      "WHERE revision<? ORDER BY revision DESC LIMIT 1", (observation.revision,)).fetchone()
+            previous_at = parse_time(previous[0]) if previous else None
+        except ValueError as exc:
+            raise StoreError("storage_invalid") from exc
+        if (observation.observation_id != observation_id or observation.revision != row["revision"]
+                or observation.service_id != row["service_id"] or observation.settings_revision != row["settings_revision"]
+                or observation.observed_at != recorded_at or observation.observed_at < settings_at
+                or settings.revision != observation.settings_revision
+                or previous_at is not None and previous_at > observation.observed_at):
+            raise StoreError("storage_invalid")
+        if settings.revision == 0:
+            if settings != IntelligenceSettings():
+                raise StoreError("storage_invalid")
+        else:
+            applied = handle.execute(f"SELECT {bounded_column('request_id', 128)} FROM commands WHERE applied_revision=?",
+                                     (settings.revision,)).fetchone()
+            record = self._command(handle, applied[0]) if applied and applied[0] else None
+            if (record is None or record[0].settings != settings or record[1].status != "applied"
+                    or record[1].applied_at != settings_at):
+                raise StoreError("storage_invalid")
+        for failure in observation.failures:
+            if (failure.observed_at < settings_at or not settings.enabled
+                    or failure.source in ("bls", "bea") and not settings.calendar_enabled
+                    or failure.source == "fed_monetary" and not settings.news_enabled
+                    or failure.source == "analysis" and not (settings.news_enabled and settings.ai_enabled)):
+                raise StoreError("storage_invalid")
+        return observation
+
+    def service_status(self) -> ServiceObservation | None:
+        with connection(self.path, expected_id=self.database_id) as handle:
+            if handle.execute("PRAGMA user_version").fetchone()[0] < 5:
+                raise StoreError("upgrade_required")
+            return self._latest_service_observation(handle)
+
+    def _latest_service_observation(self, handle):
+        row = handle.execute(f"SELECT {bounded_column('observation_id', 128)} FROM service_observations "
+                             "ORDER BY revision DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        try:
+            identifier(row[0])
+        except ValueError as exc:
+            raise StoreError("storage_invalid") from exc
+        observation = self._service_observation(handle, row[0])
+        settings, _ = self._settings(handle)
+        if observation is None or observation.settings_revision > settings.revision:
+            raise StoreError("storage_invalid")
+        return observation
+
+    def observe_service(self, observation_id, service_id, settings_revision, now, network_permitted,
+                        calendar_sources, news_permitted, ai_permitted, failures):
+        candidate = ServiceObservation(observation_id, service_id, 1, settings_revision, now, network_permitted,
+                                       calendar_sources, news_permitted, ai_permitted, failures)
+        with connection(self.path, writable=True, expected_id=self.database_id) as handle:
+            if handle.execute("PRAGMA user_version").fetchone()[0] < 5:
+                raise StoreError("upgrade_required")
+            existing = self._service_observation(handle, observation_id)
+            if existing is not None:
+                if replace(candidate, revision=existing.revision) != existing:
+                    raise StoreError("observation_conflict")
+                return existing
+            settings, settings_at = self._settings(handle)
+            if settings.revision != settings_revision:
+                raise StoreError("settings_changed")
+            previous = self._latest_service_observation(handle)
+            if now < settings_at or previous is not None and now < previous.observed_at:
+                raise StoreError("clock_invalid")
+            observation = replace(candidate, revision=previous.revision + 1 if previous else 1)
+            payload = encode(observation)
+            handle.execute("INSERT INTO service_observations VALUES(?,?,?,?,?,?,?)",
+                           (observation.revision, observation_id, service_id, settings_revision,
+                            now.isoformat().replace("+00:00", "Z"), payload, digest(payload)))
+            return self._service_observation(handle, observation_id)
 
     def _command(self, handle, request_id):
         row = handle.execute(f"""SELECT sequence, applied_revision, {bounded_column('status', 8)},
@@ -477,6 +607,10 @@ class IntelligenceStore:
             settings, observed_at = self._settings(handle)
             if now < observed_at:
                 raise StoreError("clock_invalid")
+            if handle.execute("PRAGMA user_version").fetchone()[0] >= 5:
+                latest_observation = self._latest_service_observation(handle)
+                if latest_observation is not None and now < latest_observation.observed_at:
+                    raise StoreError("clock_invalid")
             pending = handle.execute(f"SELECT {bounded_column('request_id', 128)} FROM commands WHERE status='pending' "
                                      "ORDER BY sequence LIMIT ?", (limit,)).fetchall()
             for row in pending:
@@ -619,6 +753,25 @@ class IntelligenceStore:
             self._require_news_schema(handle)
             return self._news(handle, acquisition_id)
 
+    def latest_news(self):
+        with connection(self.path, expected_id=self.database_id) as handle:
+            return self._latest_news(handle)
+
+    def _latest_news(self, handle):
+        self._require_news_schema(handle)
+        row = handle.execute(f"SELECT {bounded_column('acquisition_id', 128)} FROM news_acquisitions "
+                             "ORDER BY revision DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        try:
+            identifier(row[0])
+        except ValueError as exc:
+            raise StoreError("storage_invalid") from exc
+        record = self._news(handle, row[0])
+        if record is None:
+            raise StoreError("storage_invalid")
+        return record
+
     def news_body(self, acquisition_id):
         identifier(acquisition_id)
         with connection(self.path, expected_id=self.database_id) as handle:
@@ -729,10 +882,13 @@ class IntelligenceStore:
 
     def news_status(self) -> NewsObservation | None:
         with connection(self.path, expected_id=self.database_id) as handle:
-            self._require_status_schema(handle)
-            row = handle.execute(f"SELECT {bounded_column('attempt_id', 128)} FROM news_observations "
-                                 "WHERE source='fed_monetary' ORDER BY revision DESC LIMIT 1").fetchone()
-            return self._news_observation(handle, row[0]) if row else None
+            return self._news_status(handle)
+
+    def _news_status(self, handle):
+        self._require_status_schema(handle)
+        row = handle.execute(f"SELECT {bounded_column('attempt_id', 128)} FROM news_observations "
+                             "WHERE source='fed_monetary' ORDER BY revision DESC LIMIT 1").fetchone()
+        return self._news_observation(handle, row[0]) if row else None
 
     def complete_news_attempt(self, attempt_id, settings_revision, started_at, completed_at, now,
                               batch=None, raw=None, error_code=None):
@@ -835,10 +991,14 @@ class IntelligenceStore:
     def analysis_usage(self, now):
         utc_time(now)
         with connection(self.path, expected_id=self.database_id) as handle:
-            if handle.execute("PRAGMA user_version").fetchone()[0] < 4:
-                return None
-            row = handle.execute("SELECT COUNT(*),COALESCE(SUM(input_bytes),0),COALESCE(SUM(output_allowance),0) FROM analysis_reservations WHERE day=? AND accepted=1", (now.date().isoformat(),)).fetchone()
-            return {"day": now.date().isoformat(), "calls": row[0], "input_bytes": row[1], "output_allowance": row[2]}
+            return self._analysis_usage(handle, now)
+
+    def _analysis_usage(self, handle, now):
+        utc_time(now)
+        if handle.execute("PRAGMA user_version").fetchone()[0] < 4:
+            return None
+        row = handle.execute("SELECT COUNT(*),COALESCE(SUM(input_bytes),0),COALESCE(SUM(output_allowance),0) FROM analysis_reservations WHERE day=? AND accepted=1", (now.date().isoformat(),)).fetchone()
+        return {"day": now.date().isoformat(), "calls": row[0], "input_bytes": row[1], "output_allowance": row[2]}
 
     def publish_brief(self, brief, now):
         if not isinstance(brief, AnalysisBrief) or brief.reservation_id is None:
@@ -858,9 +1018,6 @@ class IntelligenceStore:
             status = self._news_observation(handle, context["source_attempt_id"])
             if archive is None or status is None or status.status != "successful":
                 raise StoreError("source_unavailable")
-            latest=handle.execute(f"SELECT {bounded_column('attempt_id',128)} FROM news_observations ORDER BY revision DESC LIMIT 1").fetchone()
-            if not latest or latest[0]!=status.attempt_id or not 0<=(now-status.available_at).total_seconds()<=900:
-                raise StoreError("source_unavailable")
             if analysis_input(archive,brief.cluster_id)[2]!=brief.input_hash:
                 raise StoreError("brief_invalid")
             evidence = {item.evidence_id: item for item in archive.batch.items if item.cluster_id == brief.cluster_id}
@@ -874,7 +1031,12 @@ class IntelligenceStore:
                 prior=decode(AnalysisBrief,old[0],old[1])
                 if replace(prior,available_at=brief.available_at)!=brief:
                     raise StoreError("brief_conflict")
+                if prior.available_at > now:
+                    raise StoreError("clock_invalid")
                 return prior
+            latest=handle.execute(f"SELECT {bounded_column('attempt_id',128)} FROM news_observations ORDER BY revision DESC LIMIT 1").fetchone()
+            if not latest or latest[0]!=status.attempt_id or not 0<=(now-status.available_at).total_seconds()<=900:
+                raise StoreError("source_unavailable")
             committed = replace(brief, available_at=now)
             payload = encode(committed)
             handle.execute("INSERT INTO analysis_briefs VALUES(?,?,?,?)", (brief.brief_id, brief.reservation_id, payload, digest(payload)))

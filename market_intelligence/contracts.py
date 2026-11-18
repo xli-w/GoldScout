@@ -9,6 +9,30 @@ from urllib.parse import urlsplit
 
 SYMBOLS = ("SPY", "QQQ", "BTC/USD", "GLD", "USO")
 CATEGORIES = ("monetary_policy", "inflation", "employment", "growth", "energy")
+NEWS_ERROR_CODES = frozenset({
+    "endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable",
+    "encoding_refused", "content_refused", "response_too_large", "response_incomplete",
+    "source_unavailable", "invalid_news", "parser_unavailable", "article_refused",
+})
+CALENDAR_ERROR_CODES = frozenset({
+    "endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable",
+    "encoding_refused", "content_refused", "response_too_large", "response_incomplete",
+    "source_unavailable", "invalid_calendar", "unsupported_calendar", "parser_unavailable",
+    "revision_conflict", "calendar_capacity",
+})
+ANALYSIS_ERROR_CODES = frozenset({
+    "analysis_failed", "analysis_in_progress", "profile_unavailable", "analysis_cancelled",
+    "settings_changed", "profile_changed", "source_unavailable", "evidence_unavailable",
+    "input_too_large", "budget_exhausted", "clock_invalid", "provider_unavailable",
+    "analysis_expired", "output_invalid", "storage_unavailable", "storage_invalid",
+    "reservation_invalid", "upgrade_required",
+})
+SERVICE_ERROR_CODES = {
+    "bls": CALENDAR_ERROR_CODES, "bea": CALENDAR_ERROR_CODES,
+    "fed_monetary": NEWS_ERROR_CODES, "analysis": ANALYSIS_ERROR_CODES,
+}
+SERVICE_HEARTBEAT_SECONDS = 300
+SERVICE_OBSERVATION_MAX_AGE_SECONDS = 600
 
 
 def utc_time(value: datetime) -> datetime:
@@ -50,6 +74,78 @@ class IntelligenceSettings:
         if self.ai_enabled and self.ai_profile is None:
             raise ValueError("AI requires an operator-configured profile")
         nonnegative_integer(self.revision)
+
+
+@dataclass(frozen=True)
+class ServiceFailure:
+    source: str
+    error_code: str
+    observed_at: datetime
+
+    def __post_init__(self):
+        if (not isinstance(self.source, str) or self.source not in SERVICE_ERROR_CODES
+                or not isinstance(self.error_code, str)
+                or self.error_code not in SERVICE_ERROR_CODES[self.source]):
+            raise ValueError("Service failures require registered public error codes")
+        utc_time(self.observed_at)
+
+
+@dataclass(frozen=True)
+class ServiceObservation:
+    observation_id: str
+    service_id: str
+    revision: int
+    settings_revision: int
+    observed_at: datetime
+    network_permitted: bool
+    calendar_sources: Tuple[str, ...]
+    news_permitted: bool
+    ai_permitted: bool
+    failures: Tuple[ServiceFailure, ...]
+
+    def __post_init__(self):
+        identifier(self.observation_id)
+        identifier(self.service_id)
+        nonnegative_integer(self.revision)
+        nonnegative_integer(self.settings_revision)
+        utc_time(self.observed_at)
+        if self.revision == 0:
+            raise ValueError("Service observations require a positive revision")
+        if any(type(value) is not bool for value in (self.network_permitted, self.news_permitted, self.ai_permitted)):
+            raise ValueError("Service capabilities must be booleans")
+        if (type(self.calendar_sources) is not tuple or not 1 <= len(self.calendar_sources) <= 2
+                or any(source not in ("bls", "bea") for source in self.calendar_sources)
+                or len(set(self.calendar_sources)) != len(self.calendar_sources)):
+            raise ValueError("Service calendars must be registered and unique")
+        if self.ai_permitted and (not self.network_permitted or not self.news_permitted):
+            raise ValueError("AI capability requires network and news capabilities")
+        if (type(self.failures) is not tuple or len(self.failures) > 4
+                or any(not isinstance(failure, ServiceFailure) for failure in self.failures)
+                or len({failure.source for failure in self.failures}) != len(self.failures)):
+            raise ValueError("Service failures must be bounded and unique by source")
+        for failure in self.failures:
+            if (failure.observed_at > self.observed_at or not self.network_permitted
+                    or failure.source in ("bls", "bea") and failure.source not in self.calendar_sources
+                    or failure.source == "fed_monetary" and not self.news_permitted
+                    or failure.source == "analysis" and not self.ai_permitted):
+                raise ValueError("Service failure does not match the observed capabilities or clock")
+
+
+def service_status_state(observation, settings, now):
+    utc_time(now)
+    if not isinstance(settings, IntelligenceSettings):
+        raise ValueError("Validated settings are required")
+    if observation is None:
+        return "unknown"
+    if not isinstance(observation, ServiceObservation):
+        raise ValueError("Validated service observation is required")
+    if observation.observed_at > now:
+        return "future"
+    if observation.settings_revision != settings.revision:
+        return "superseded"
+    if now - observation.observed_at > timedelta(seconds=SERVICE_OBSERVATION_MAX_AGE_SECONDS):
+        return "stale"
+    return "recent"
 
 
 @dataclass(frozen=True)

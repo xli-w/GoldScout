@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from contextlib import closing
 from contextlib import redirect_stdout
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -10,8 +11,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from market_intelligence.contracts import CalendarSnapshot, ControlReceipt, ControlRequest, IntelligenceSettings, SourceCoverage
-from market_intelligence.store import IntelligenceStore, StoreError, digest, encode, initialize
+from market_intelligence.contracts import (
+    CalendarSnapshot, ControlReceipt, ControlRequest, IntelligenceSettings, ServiceFailure,
+    SourceCoverage, service_status_state,
+)
+from market_intelligence.store import IntelligenceStore, StoreError, digest, encode, initialize, storage_schema
 from market_intelligence.service import IntelligenceService
 from market_intelligence.__main__ import main
 
@@ -169,7 +173,7 @@ class IntelligenceStoreTests(IntelligenceStoreFixture, unittest.TestCase):
 
     def test_future_schema_is_refused_without_resetting_settings(self):
         with closing(sqlite3.connect(self.path)) as handle:
-            handle.execute("PRAGMA user_version=5")
+            handle.execute("PRAGMA user_version=6")
         with self.assertRaises(StoreError) as result:
             IntelligenceStore(self.path)
         self.assertEqual(result.exception.code, "schema_unsupported")
@@ -333,6 +337,153 @@ class IntelligenceStoreTests(IntelligenceStoreFixture, unittest.TestCase):
         with self.assertRaises(StoreError) as result:
             self.store.receipt("request-1")
         self.assertEqual(result.exception.code, "storage_invalid")
+
+
+class IntelligenceServiceStatusTests(IntelligenceStoreFixture, unittest.TestCase):
+    def observe(self, observation_id="observation-1", now=None):
+        return self.store.observe_service(observation_id, "service-1", 0, now or self.now,
+                                          False, ("bls", "bea"), False, False, ())
+
+    def test_observations_are_append_only_idempotent_and_revision_bound(self):
+        original = self.observe()
+        self.assertEqual(self.observe(), original)
+        with self.assertRaises(StoreError) as result:
+            self.observe(now=self.now + timedelta(seconds=1))
+        self.assertEqual(result.exception.code, "observation_conflict")
+        with closing(sqlite3.connect(self.path)) as handle:
+            for statement in ("UPDATE service_observations SET payload='{}'",
+                              "DELETE FROM service_observations",
+                              "INSERT OR REPLACE INTO service_observations SELECT * FROM service_observations"):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    handle.execute(statement)
+                handle.rollback()
+        before = self.path.read_bytes()
+        self.assertEqual(IntelligenceStore(self.path).service_status(), original)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.store.enqueue(self.request(enabled=True), self.now)
+        self.store.apply_pending(self.now)
+        self.assertEqual(service_status_state(original, self.store.settings(), self.now), "superseded")
+        with self.assertRaises(StoreError) as result:
+            self.observe("old-revision")
+        self.assertEqual(result.exception.code, "settings_changed")
+
+    def test_freshness_and_unregistered_failures_remain_explicit(self):
+        status = self.observe()
+        settings = self.store.settings()
+        self.assertEqual(service_status_state(None, settings, self.now), "unknown")
+        self.assertEqual(service_status_state(status, settings, self.now - timedelta(microseconds=1)), "future")
+        self.assertEqual(service_status_state(status, settings, self.now + timedelta(seconds=600)), "recent")
+        self.assertEqual(service_status_state(status, settings, self.now + timedelta(seconds=600, microseconds=1)), "stale")
+        with self.assertRaises(ValueError):
+            ServiceFailure("analysis", "private-debug-detail", self.now)
+
+    def test_failure_cannot_be_recorded_for_disabled_settings(self):
+        self.store.enqueue(self.request(enabled=True, calendar_enabled=False), self.now)
+        self.store.apply_pending(self.now)
+        failure = ServiceFailure("analysis", "provider_unavailable", self.now)
+        with self.assertRaises(StoreError):
+            self.store.observe_service("invalid", "service-1", 1, self.now, True, ("bls",),
+                                       True, True, (failure,))
+        self.assertIsNone(self.store.service_status())
+
+    def test_control_cannot_be_revived_before_a_later_service_observation(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        later = self.now + timedelta(minutes=6)
+        self.observe(now=later)
+        with self.assertRaises(StoreError) as result:
+            self.store.apply_pending(self.now + timedelta(minutes=1))
+        self.assertEqual(result.exception.code, "clock_invalid")
+        self.assertEqual(self.store.receipt("request-1").status, "pending")
+        self.assertFalse(self.store.settings().enabled)
+        self.assertEqual(self.store.apply_pending(later)[0].status, "expired")
+
+    def test_failed_observation_commit_is_rolled_back(self):
+        original_connect = sqlite3.connect
+
+        class FailingCommit(sqlite3.Connection):
+            def commit(self):
+                raise sqlite3.OperationalError("injected failure")
+
+        with patch("market_intelligence.store.sqlite3.connect",
+                   side_effect=lambda *args, **kwargs: original_connect(*args, **kwargs, factory=FailingCommit)):
+            with self.assertRaises(StoreError):
+                self.observe()
+        self.assertIsNone(self.store.service_status())
+
+    def test_corrupted_observation_id_is_an_error_not_an_unknown_status(self):
+        self.observe()
+        with closing(sqlite3.connect(self.path)) as handle:
+            handle.execute("DROP TRIGGER immutable_service_observations_update")
+            handle.execute("PRAGMA ignore_check_constraints=ON")
+            handle.execute("UPDATE service_observations SET observation_id=?", ("x" * 129,))
+            handle.execute(storage_schema()[("trigger", "immutable_service_observations_update")])
+            handle.commit()
+        before = self.path.read_bytes()
+        with self.assertRaises(StoreError) as result:
+            self.store.service_status()
+        self.assertEqual(result.exception.code, "storage_invalid")
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_status_failure_does_not_claim_committed_settings_rolled_back(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        service = IntelligenceService(self.store, clock=lambda: self.now)
+        with self.assertLogs("market_intelligence.service", level="ERROR") as logs:
+            with patch.object(self.store, "observe_service", side_effect=StoreError("private-debug-detail")):
+                with self.assertRaises(StoreError):
+                    with service:
+                        service.step()
+        self.assertTrue(self.store.settings().enabled)
+        self.assertEqual(self.store.receipt("request-1").status, "applied")
+        self.assertIsNone(self.store.service_status())
+        self.assertIn("may already be committed", logs.output[0])
+        self.assertNotIn("private-debug-detail", logs.output[0])
+
+    def test_status_read_failure_warns_about_previously_committed_settings(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        service = IntelligenceService(self.store, clock=lambda: self.now)
+        with self.assertLogs("market_intelligence.service", level="ERROR") as logs:
+            with patch.object(self.store, "service_status", side_effect=StoreError("private-debug-detail")):
+                with self.assertRaises(StoreError):
+                    with service:
+                        service.step()
+        self.assertTrue(self.store.settings().enabled)
+        self.assertEqual(self.store.receipt("request-1").status, "applied")
+        self.assertIn("may already be committed", logs.output[0])
+        self.assertNotIn("private-debug-detail", logs.output[0])
+        output = io.StringIO()
+        with patch.object(IntelligenceService, "step", side_effect=StoreError("private-debug-detail")):
+            with redirect_stdout(output):
+                self.assertEqual(main(["once", "--database", str(self.path)]), 1)
+        self.assertIn("may already be committed", output.getvalue())
+        self.assertNotIn("private-debug-detail", output.getvalue())
+
+    def test_idle_service_observations_are_rate_limited(self):
+        self.elapsed = 0.0
+        with IntelligenceService(self.store, clock=lambda: self.now, monotonic=lambda: self.elapsed) as service:
+            service.step()
+            first = self.store.service_status()
+            self.now += timedelta(seconds=299)
+            self.elapsed = 299.0
+            service.step()
+            self.assertEqual(self.store.service_status(), first)
+            self.now += timedelta(seconds=1)
+            self.elapsed = 300.0
+            service.step()
+            second = self.store.service_status()
+        self.assertEqual(second.revision, first.revision + 1)
+        self.assertEqual(second.service_id, first.service_id)
+        self.assertFalse(second.network_permitted)
+
+    @unittest.skipIf(importlib.util.find_spec("jsonschema") is None, "Install dashboard development dependencies")
+    def test_service_observation_matches_wire_schema(self):
+        from jsonschema import Draft202012Validator, FormatChecker
+        schema = json.loads((Path(__file__).resolve().parents[1] / "market_intelligence" / "schema.json").read_text())
+        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+        payload = json.loads(encode(self.observe()))
+        validator.validate(payload)
+        payload["failures"] = [{"source": "analysis", "error_code": "provider_unavailable",
+                                "observed_at": payload["observed_at"]}]
+        self.assertFalse(validator.is_valid(payload))
 
 
 class IntelligenceServiceTests(IntelligenceStoreFixture, unittest.TestCase):

@@ -9,15 +9,8 @@ import json
 from typing import Tuple
 from urllib.parse import urlsplit, urlunsplit
 
-from market_intelligence.contracts import NewsEvidence, identifier, nonnegative_integer, utc_time
+from market_intelligence.contracts import NEWS_ERROR_CODES, NewsEvidence, identifier, nonnegative_integer, utc_time
 from market_intelligence.providers import FED_NEWS_URL, MAX_DOWNLOAD_BYTES, ProviderError
-
-
-NEWS_ERROR_CODES = {
-    "endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable",
-    "encoding_refused", "content_refused", "response_too_large", "response_incomplete",
-    "source_unavailable", "invalid_news", "parser_unavailable", "article_refused",
-}
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,9 @@ import threading
 from pathlib import Path
 
 from market_intelligence.analysis import AdvisoryAnalyzer, AnalysisLimits, JSONSummaryProvider, ProviderResponse
-from market_intelligence.contracts import CalendarEvent, CalendarSnapshot, ControlRequest, IntelligenceSettings, SourceCoverage
+from market_intelligence.contracts import (
+    CalendarEvent, CalendarSnapshot, ControlRequest, IntelligenceSettings, SourceCoverage, service_status_state,
+)
 from market_intelligence.news import parse_fed_news
 from market_intelligence.runtime import PersistentAnalysisBudget
 from market_intelligence.store import IntelligenceStore, StoreError, connection, bounded_column, encode, initialize
@@ -84,35 +86,52 @@ class IntelligenceWorkspace:
             now=datetime.now(timezone.utc)
             if self.demo:
                 self.store.apply_pending(now,profiles=self.profiles)
-            settings=self.store.settings()
-            status=self.store.news_status() if self.store.schema_version>=3 else None
-            if self.demo and settings.enabled and settings.news_enabled and status and (now-status.available_at).total_seconds()>=300:
-                attempt="demo-news-"+secrets.token_hex(12)
-                self.store.complete_news_attempt(attempt,settings.revision,now,now,now,
-                                                  batch=parse_fed_news(self.demo_raw,now),raw=self.demo_raw)
+                settings=self.store.settings()
                 status=self.store.news_status()
-            if self.demo and settings.enabled and settings.ai_enabled and settings.news_enabled and status:
-                archive=self.store.news_acquisition(status.acquisition_id)
-                for cluster in {item.cluster_id for item in archive.batch.items}:
-                    brief=self.demo_analyzer.analyze(archive,settings,cluster,self.store.settings,self.store.news_status)
-                    if brief:
-                        self.store.publish_brief(brief,datetime.now(timezone.utc))
-            calendar=self.store.calendar()
-            archive=self.store.news_acquisition(status.last_success_id) if status and status.last_success_id else None
-            briefs=self.store.recent_briefs()
+                if settings.enabled and settings.news_enabled and status and (now-status.available_at).total_seconds()>=300:
+                    attempt="demo-news-"+secrets.token_hex(12)
+                    self.store.complete_news_attempt(attempt,settings.revision,now,now,now,
+                                                      batch=parse_fed_news(self.demo_raw,now),raw=self.demo_raw)
+                    status=self.store.news_status()
+                if settings.enabled and settings.ai_enabled and settings.news_enabled and status:
+                    archive=self.store.news_acquisition(status.acquisition_id)
+                    for cluster in {item.cluster_id for item in archive.batch.items}:
+                        brief=self.demo_analyzer.analyze(archive,settings,cluster,self.store.settings,self.store.news_status)
+                        if brief:
+                            self.store.publish_brief(brief,datetime.now(timezone.utc))
             with connection(self.store.path,expected_id=self.store.database_id) as handle:
+                settings,settings_at=self.store._settings(handle)
+                status=self.store._news_status(handle) if self.store.schema_version>=3 else None
+                service_status=self.store._latest_service_observation(handle) if self.store.schema_version>=5 else None
+                calendar=self.store._calendar(handle)
+                archive=None
+                if status and status.last_success_id:
+                    archive=self.store._news(handle,status.last_success_id)
+                elif status is None and self.store.schema_version>=2:
+                    archive=self.store._latest_news(handle)
+                briefs=tuple(record[0] for record in self.store._brief_records(handle,20))
                 rows=handle.execute(f"SELECT {bounded_column('request_id',128)} FROM commands ORDER BY sequence DESC LIMIT 20").fetchall()
                 controls=[self.store._command(handle,row[0])[1] for row in rows]
-            if self.store.settings()!=settings:
-                raise StoreError("snapshot_changed")
-            return {"source_mode":"demo" if self.demo else "recorded","database_id":self.store.database_id,"generated_at":now.isoformat().replace("+00:00","Z"),
+                generated_at=datetime.now(timezone.utc)
+                if (settings_at>generated_at or calendar is not None and calendar.available_at>generated_at
+                        or status is not None and status.available_at>generated_at
+                        or archive is not None and archive.available_at>generated_at
+                        or any(brief.available_at>generated_at for brief in briefs)):
+                    raise StoreError("clock_invalid")
+                budget=self.store._analysis_usage(handle,generated_at)
+            return {"source_mode":"demo" if self.demo else "recorded","database_id":self.store.database_id,"generated_at":generated_at.isoformat().replace("+00:00","Z"),
                     "settings":json.loads(encode(settings)),"profiles":list(self.profiles),"controls_enabled":self.controls_enabled,
                     "news_capable":self.store.schema_version>=3,"ai_capable":self.store.schema_version>=4 and bool(self.profiles),
+                    "service_status_capable":self.store.schema_version>=5,
+                    "service_status_state":service_status_state(service_status,settings,generated_at) if self.store.schema_version>=5 else "unsupported",
+                    "service_status":json.loads(encode(service_status)) if service_status else None,
                     "source_status":json.loads(encode(status)) if status else None,
+                    "calendar_sources":[json.loads(encode(item)) for item in calendar.sources] if calendar else [],
                     "calendar":[json.loads(encode(item)) for item in calendar.events[:100]] if calendar else [],
                     "news":[json.loads(encode(item)) for item in archive.batch.items[:50]] if archive else [],
+                    "news_last_success_at":archive.available_at.isoformat().replace("+00:00","Z") if archive else None,
                     "briefs":[json.loads(encode(item)) for item in briefs],"controls":[json.loads(encode(item)) for item in controls],
-                    "budget":self.store.analysis_usage(now)}
+                    "budget":budget}
 
     def enqueue(self,payload,now):
         if type(payload) is not dict or set(payload)!={"request_id","database_id","base_revision","settings"}:

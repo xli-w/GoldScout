@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from dashboard.intelligence import IntelligenceWorkspace
+from market_intelligence.analysis import AnalysisLimits, analysis_input
 from market_intelligence.contracts import CalendarSnapshot, ControlRequest, IntelligenceSettings
 from market_intelligence.store import IntelligenceStore, StoreError, digest, encode, initialize, storage_schema, upgrade
 from market_intelligence.news import parse_fed_news
@@ -45,7 +47,8 @@ class IntelligenceArchiveMigrationTests(unittest.TestCase):
     def test_legacy_schema_manifests_are_frozen(self):
         expected = {1: "0e99b0e316365c156feac990ed2db0c370327e520a89dc0d002d89b6b3137ddf",
                     2: "36425afe9032cc32262844ffcdf4290a54105da5bbb74263f0b4111dbfe1143f",
-                    3: "48747f05f2794e6d30b090dfa6772fcc5faa53e8f052a0eace4df0f1814ca87e"}
+                    3: "48747f05f2794e6d30b090dfa6772fcc5faa53e8f052a0eace4df0f1814ca87e",
+                    4: "f87d0146ff210fba0725a9b713630fbdcb9e1de357b5fee5a1f73dcabf0331b0"}
         for version, checksum in expected.items():
             payload = json.dumps(sorted((kind, name, sql) for (kind, name), sql in storage_schema(version).items()), separators=(",", ":"))
             self.assertEqual(hashlib.sha256(payload.encode()).hexdigest(), checksum)
@@ -80,7 +83,7 @@ class IntelligenceArchiveMigrationTests(unittest.TestCase):
 
     def test_unknown_or_foreign_storage_is_not_upgraded(self):
         with closing(sqlite3.connect(self.path)) as handle:
-            handle.execute("PRAGMA user_version=5")
+            handle.execute("PRAGMA user_version=6")
         before = self.path.read_bytes()
         with self.assertRaises(StoreError):
             upgrade(self.path)
@@ -95,7 +98,7 @@ class IntelligenceArchiveMigrationTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())["schema_version"], 1)
         with redirect_stdout(io.StringIO()) as output:
             self.assertEqual(main(["upgrade", "--database", str(self.path)]), 0)
-        self.assertEqual(json.loads(output.getvalue())["schema_version"], 4)
+        self.assertEqual(json.loads(output.getvalue())["schema_version"], 5)
         self.assertEqual(IntelligenceStore(self.path).database_id, self.store.database_id)
 
     def test_old_schema_news_access_refuses_without_implicit_upgrade(self):
@@ -137,10 +140,19 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
             before = {table: handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
                       for table in ("news_payloads", "news_items", "news_acquisitions")}
         migrated = upgrade(path)
-        self.assertEqual(migrated.schema_version, 4)
+        self.assertEqual(migrated.schema_version, 5)
         self.assertEqual(migrated.news_acquisition("fetch-1"), record)
         self.assertEqual(migrated.news_body("fetch-1"), self.raw)
         self.assertIsNone(migrated.news_status())
+        before_read = path.read_bytes()
+        with patch("dashboard.intelligence.datetime") as clock:
+            clock.now.return_value = self.now
+            snapshot = IntelligenceWorkspace(path).snapshot()
+        self.assertIsNone(snapshot["source_status"])
+        self.assertEqual([item["evidence_id"] for item in snapshot["news"]],
+                         [item.evidence_id for item in self.batch.items])
+        self.assertEqual(snapshot["news_last_success_at"], self.now.isoformat().replace("+00:00", "Z"))
+        self.assertEqual(path.read_bytes(), before_read)
         with closing(sqlite3.connect(path)) as handle:
             self.assertEqual({table: handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in before}, before)
 
@@ -157,11 +169,48 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
             before={table:handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
                     for table in ("news_payloads","news_acquisitions","news_items","news_observations")}
         upgraded=upgrade(path)
-        self.assertEqual(upgraded.schema_version,4)
+        self.assertEqual(upgraded.schema_version,5)
         self.assertEqual(upgraded.news_status(),status)
         self.assertEqual(upgraded.news_body("attempt-1"),self.raw)
         with closing(sqlite3.connect(path)) as handle:
             self.assertEqual({table:handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in before},before)
+
+    def test_version_four_requires_explicit_upgrade_and_preserves_analysis_reservations(self):
+        path = Path(self.directory.name) / "version-four.sqlite3"
+        old = initialize(path, self.now, schema_version=4)
+        settings = IntelligenceSettings(enabled=True, ai_enabled=True, ai_profile="fixture", revision=1)
+        old.enqueue(ControlRequest("enable", old.database_id, 0, self.now,
+                                   self.now + timedelta(minutes=5), settings), self.now)
+        old.apply_pending(self.now, profiles=("fixture",))
+        status = old.complete_news_attempt("attempt-v4", 1, self.now, self.now, self.now,
+                                           batch=self.batch, raw=self.raw)
+        archive = old.news_acquisition(status.acquisition_id)
+        cluster_id = self.batch.items[0].cluster_id
+        _, size, input_hash = analysis_input(archive, cluster_id)
+        context = {"acquisition_id": status.acquisition_id, "source_attempt_id": status.attempt_id,
+                   "settings_revision": 1, "profile": "fixture", "model": "synthetic",
+                   "cluster_id": cluster_id, "input_hash": input_hash, "prompt_version": "news-extractive-v1"}
+        old.reserve_analysis(self.now, size, AnalysisLimits(), context)
+        before = path.read_bytes()
+        with self.assertRaises(StoreError) as result:
+            old.service_status()
+        self.assertEqual(result.exception.code, "upgrade_required")
+        with patch("dashboard.intelligence.datetime") as clock:
+            clock.now.return_value = self.now
+            snapshot = IntelligenceWorkspace(path, profiles=("fixture",)).snapshot()
+        self.assertFalse(snapshot["service_status_capable"])
+        self.assertEqual(snapshot["service_status_state"], "unsupported")
+        self.assertIsNone(snapshot["service_status"])
+        self.assertEqual(snapshot["news_last_success_at"], self.now.isoformat().replace("+00:00", "Z"))
+        self.assertEqual(path.read_bytes(), before)
+
+        upgraded = upgrade(path)
+        self.assertEqual(upgraded.schema_version, 5)
+        self.assertEqual(upgraded.database_id, old.database_id)
+        self.assertEqual(upgraded.news_status(), status)
+        self.assertEqual(upgraded.news_body(status.acquisition_id), self.raw)
+        self.assertEqual(upgraded.analysis_usage(self.now)["calls"], 1)
+        self.assertIsNone(upgraded.service_status())
 
     def test_identical_retry_is_idempotent_and_conflicting_id_is_refused(self):
         original = self.store.publish_news("fetch-1", self.batch, self.raw, 1, self.now)

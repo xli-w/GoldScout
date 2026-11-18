@@ -45,7 +45,7 @@ test("synthetic intelligence controls and briefs work without account data",asyn
 });
 
 async function mockIntelligence(page,profiles,serviceProfiles=null,controlSessionEnabled=true){
-  const snapshot={source_mode:"demo",database_id:"test",generated_at:"2026-03-08T09:30:00Z",settings:{enabled:false,calendar_enabled:true,news_enabled:true,ai_enabled:false,mode:"advisory",ai_profile:null,revision:0},profiles,controls_enabled:true,source_status:null,calendar:[],news:[],briefs:[],controls:[],budget:null};
+  const snapshot={source_mode:"demo",database_id:"test",generated_at:"2026-03-08T09:30:00Z",settings:{enabled:false,calendar_enabled:true,news_enabled:true,ai_enabled:false,mode:"advisory",ai_profile:null,revision:0},profiles,controls_enabled:true,service_status_capable:true,service_status_state:"unknown",service_status:null,source_status:null,calendar_sources:[],calendar:[],news_last_success_at:null,news:[],briefs:[],controls:[],budget:null};
   const requests=[];
   await page.route("**/api/**",route=>route.abort());
   await page.route("**/api/v1/settings",route=>route.fulfill({json:{mode:"demo",workspace:"demo"}}));
@@ -103,6 +103,45 @@ test("intelligence empty states distinguish disabled collection from missing evi
   await expect(briefs).toContainText("Enabled settings do not guarantee a completed analysis");
   await expect(news).toContainText("Last source observation: Unavailable");
   await expect(news).toContainText("News coverage may be incomplete");
+});
+
+test("service observations distinguish recorded failures from current connectivity",async({page})=>{
+  const {snapshot}=await mockIntelligence(page,["demo"]);
+  snapshot.source_mode="recorded";
+  snapshot.settings={...snapshot.settings,enabled:true,ai_enabled:true,ai_profile:"demo",revision:1};
+  snapshot.service_status_state="recent";
+  snapshot.service_status={observation_id:"observation-1",service_id:"service-1",revision:1,
+    settings_revision:1,observed_at:"2026-03-08T09:30:00Z",network_permitted:true,
+    calendar_sources:["bls","bea"],news_permitted:true,ai_permitted:true,
+    failures:[{source:"analysis",error_code:"provider_unavailable",observed_at:"2026-03-08T09:29:00Z"}]};
+  snapshot.calendar_sources=[{source:"bls",checked_at:"2026-03-08T09:28:00Z"}];
+  snapshot.source_status={status:"unavailable",available_at:"2026-03-08T09:30:00Z",error_code:"source_unavailable"};
+  snapshot.news_last_success_at="2026-03-08T09:20:00Z";
+  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  const service=page.getByRole("region",{name:"Service observation"});
+  await expect(service).toContainText("A recent service observation is recorded");
+  await expect(service).toContainText("AI summaries: Provider Unavailable");
+  await expect(service).toContainText("This may be historical");
+  await expect(service).toContainText("does not prove that the service is currently running");
+  await expect(page.getByLabel("Calendar source observations")).toContainText("BLS last saved source check");
+  await expect(page.getByLabel("Calendar source observations")).toContainText("A later failed attempt may be shown");
+  await expect(page.getByText("Last error: Source Unavailable")).toBeVisible();
+  await expect(page.getByText("Last saved news evidence:",{exact:false})).toBeVisible();
+
+  snapshot.service_status_state="stale";
+  snapshot.service_status.observed_at="2026-03-08T09:18:00Z";
+  snapshot.service_status.failures[0].observed_at="2026-03-08T09:17:00Z";
+  await page.reload();
+  await expect(service).toContainText("last service observation is stale");
+  snapshot.service_status_state="superseded";
+  snapshot.settings.revision=2;
+  await page.reload();
+  await expect(service).toContainText("predates the applied settings");
+  snapshot.service_status_state="unsupported";
+  snapshot.service_status_capable=false;
+  snapshot.service_status=null;
+  await page.reload();
+  await expect(service).toContainText("require an explicit intelligence database upgrade");
 });
 
 test("intelligence dates include the year and are explicitly UTC",async({page})=>{

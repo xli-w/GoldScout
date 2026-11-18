@@ -68,18 +68,28 @@ python -m pip install -r requirements-intelligence.txt
 python -m market_intelligence initialize --database intelligence.sqlite3
 ```
 
-Existing version-1/2/3 intelligence databases require explicit upgrade with the
-service stopped. Foreign or investment stores must never be used as this database:
+Existing version-1/2/3/4 intelligence databases require an explicit upgrade for
+the latest capabilities, with the service stopped. Older supported databases
+remain readable and are never upgraded by a read. Foreign or investment stores
+must never be used as this database:
 
 ```powershell
 python -m market_intelligence upgrade --database intelligence.sqlite3
 ```
+
+Restart any running intelligence dashboard after the upgrade so it reloads the
+database schema.
 
 Version 4 adds append-only AI reservations and briefs. Spending reservations commit
 before provider dispatch, persist across restart, and are not refunded on failure.
 Daily caps cover calls, projected input bytes and output-token allowance, not a
 guaranteed dollar bill or provider-token audit. Failed budget checks retain clock
 observations; risk limits and account settings are unrelated and cannot be edited.
+Version 5 adds append-only service observations. A version-4 service can still
+collect and analyze as before, but its service observations are unavailable until
+the operator explicitly upgrades the separate intelligence database.
+Saved version-2 news remains visible after upgrade even when no later source
+observation exists; the source status stays unknown rather than being invented.
 
 ## Providers
 
@@ -99,8 +109,9 @@ the browser or included in evidence. Hosted traffic uses the fixed OpenAI HTTPS
 endpoint, DNS/address checks, TLS verification and the configured `TRADER_PROXY_URL`
 without a direct fallback. Local loopback operation is an explicit profile kind,
 not a fallback for a failed remote request. Provider calls are bounded and have no
-automatic retries or tools. Actual provider compatibility still requires separate
-operator-approved validation, and cannot be established by offline mocks.
+automatic retries or tools. Cancellation is cooperative; a request already being
+dispatched cannot be retracted. Actual provider compatibility still requires
+separate operator-approved validation, and cannot be established by offline mocks.
 
 ## Run And Controls
 
@@ -147,6 +158,42 @@ AI interpretations are always unverified, factual claims are source quotations,
 and recommendations are only watch/review/wait. Analysis considers recent dated
 articles; unknown publication times are not silently treated as new events. Model
 output, budget exhaustion or intelligence outages cannot affect broker mutations.
+
+### Service observations
+
+The dashboard and `status` command show the latest recorded service observation,
+its settings revision, reported network/news/AI capabilities and sanitized source
+or AI failure codes. Calendar checks and the last saved news acquisition have
+separate timestamps. A calendar's saved check may precede a later failed attempt,
+whose time is reported separately when available. No secrets, provider response
+text or private account data are recorded in service observations.
+The dashboard refuses a snapshot if recorded settings, calendar, news or brief
+availability is later than its generation time; check the system clock if this
+occurs. Each dashboard snapshot and command-line status is read from one pinned
+database view.
+
+The service records an observation after settings changes and completed jobs,
+and at most every five minutes while otherwise idle. An observation older than
+ten minutes is stale; a future timestamp or an observation for a prior settings
+revision is not current. A recent observation is **not** proof that the service
+is still running, that a provider is connected or that coverage is complete:
+even `once` or a stopped service can leave a recent observation. There is no
+independent liveness monitor. Old-schema stores and the synthetic dashboard demo
+do not provide a service observation.
+
+Reported failures remain visible across service restarts with the same settings
+revision and capabilities, and clear from the latest observation after a later
+successful result for that source is reported in a new observation. Their original
+timestamps remain visible and the append-only history is retained; a displayed
+failure may be historical. Reusing an older cached AI brief does not establish
+recovery from a reported failure, even if its wall-clock timestamp is later.
+Status records accumulate over time and are not automatically pruned. The
+long-running service logs and retries transient database lock contention. Other
+status-reading or persistence failures stop it with a sanitized error; settings or
+source evidence committed earlier may already have succeeded. Check their receipts
+rather than assuming a rollback. A fatal failure can also leave only a stale
+observation. Analysis retries local storage operations without repeating a provider
+call, and cancellation interrupts those waits.
 
 ## Synthetic Preview
 

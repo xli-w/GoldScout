@@ -2,18 +2,25 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 import os
 import queue
 import threading
 import time
 import uuid
 
-from market_intelligence.contracts import CalendarSnapshot, SourceCoverage, identifier
+from market_intelligence.contracts import (
+    SERVICE_ERROR_CODES, SERVICE_HEARTBEAT_SECONDS, CalendarSnapshot, ServiceFailure,
+    SourceCoverage, identifier,
+)
 from market_intelligence.providers import CALENDAR_SOURCES, CalendarTransport, ProviderError
 from market_intelligence.news import FED_NEWS_URL, NEWS_ERROR_CODES, parse_fed_news
 from market_intelligence.analysis import AdvisoryAnalyzer, AnalysisLimits, AnalysisError
 from market_intelligence.runtime import PersistentAnalysisBudget
-from market_intelligence.store import IntelligenceStore, StoreError
+from market_intelligence.store import IntelligenceStore, StoreBusy, StoreError
+
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceLock:
@@ -94,11 +101,16 @@ class IntelligenceService:
         self.monotonic = monotonic or time.monotonic
         self.worker = None
         self.results = queue.Queue(maxsize=1)
+        self.pending_result = None
         self.generation = 0
         self.last_settings_revision = None
         self.next_fetch_at = {name: 0.0 for name in self.fetch_sources}
         self.provider_errors: dict[str, str | None] = {name: None for name in self.fetch_sources}
         self.job_cancel = None
+        self.service_id = None
+        self.reported_failures: dict[str, ServiceFailure] = {}
+        self.status_dirty = True
+        self.next_heartbeat_at = 0.0
 
     @property
     def last_provider_error(self):
@@ -109,6 +121,11 @@ class IntelligenceService:
             raise StoreError("service_already_owned")
         self.lock = ServiceLock(self.store.path.with_suffix(".service.lock"))
         self.generation += 1
+        self.service_id = "service-" + uuid.uuid4().hex
+        self.last_settings_revision = None
+        self.reported_failures = {}
+        self.status_dirty = True
+        self.next_heartbeat_at = 0.0
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -123,47 +140,139 @@ class IntelligenceService:
                 lock.close()
             self.lock = None
 
+    def _restore_reported_failures(self, settings, now):
+        self.reported_failures = {}
+        if self.store.schema_version < 5:
+            return
+        previous = self.store.service_status()
+        if previous is not None and previous.observed_at > now:
+            raise StoreError("clock_invalid")
+        allowed = set(self.calendar_sources) if self.allow_network else set()
+        if self.allow_network and self.collect_news:
+            allowed.add("fed_monetary")
+        if self.analyzer is not None:
+            allowed.add("analysis")
+        if previous is not None and previous.settings_revision == settings.revision:
+            self.reported_failures = {item.source: item for item in previous.failures if item.source in allowed}
+        self.status_dirty = True
+
+    def _record_result(self, source, error, now):
+        if error is None:
+            self.reported_failures.pop(source, None)
+        else:
+            fallback = "analysis_failed" if source == "analysis" else "source_unavailable"
+            code = error if isinstance(error, str) and error in SERVICE_ERROR_CODES[source] else fallback
+            self.reported_failures[source] = ServiceFailure(source, code, now)
+        self.status_dirty = True
+
+    def _cancel_job(self):
+        if self.job_cancel is not None:
+            self.job_cancel.set()
+        self.calendar_transport.cancel()
+
+    @staticmethod
+    def _retry_analysis_storage(operation, cancelled):
+        while True:
+            if cancelled.is_set():
+                raise AnalysisError("analysis_cancelled")
+            try:
+                return operation()
+            except StoreBusy:
+                logger.warning("Intelligence storage is busy; retrying analysis storage.")
+                if cancelled.wait(1.0):
+                    raise AnalysisError("analysis_cancelled")
+
+    def _observe_service(self, settings):
+        if self.store.schema_version < 5:
+            return
+        elapsed = self.monotonic()
+        if not self.status_dirty and elapsed < self.next_heartbeat_at:
+            return
+        try:
+            self.store.observe_service(
+                "observation-" + uuid.uuid4().hex, self.service_id, settings.revision, self.clock(),
+                self.allow_network, self.calendar_sources, self.collect_news, self.analyzer is not None,
+                tuple(self.reported_failures[key] for key in sorted(self.reported_failures)))
+        except (StoreError, ValueError):
+            logger.error("Service status could not be recorded; earlier settings or evidence may already be committed.")
+            raise
+        self.status_dirty = False
+        self.next_heartbeat_at = elapsed + SERVICE_HEARTBEAT_SECONDS
+
     def step(self):
         if self.lock is None:
             raise StoreError("service_not_owned")
         now = self.clock()
         receipts = self.store.apply_pending(now, profiles=self.profiles)
-        if not self.allow_network:
-            return receipts
-        settings = self.store.settings()
+        controls_applied = any(receipt.status == "applied" for receipt in receipts)
+        if controls_applied:
+            self._cancel_job()
+        try:
+            settings = self.store.settings()
+        except StoreError:
+            logger.error("Service settings could not be read; earlier settings or evidence may already be committed.")
+            raise
         if settings.revision != self.last_settings_revision:
+            try:
+                if not controls_applied:
+                    self._cancel_job()
+                self._restore_reported_failures(settings, now)
+                self.next_fetch_at = {name: 0.0 for name in self.fetch_sources}
+                if self.allow_network and self.collect_news:
+                    previous_status = self.store.news_status()
+                    if previous_status is not None:
+                        self.provider_errors["fed_monetary"] = previous_status.error_code
+                        if previous_status.settings_revision == settings.revision:
+                            age = (now - previous_status.available_at).total_seconds()
+                            if age < 0:
+                                raise StoreError("clock_invalid")
+                            self.next_fetch_at["fed_monetary"] = self.monotonic() + max(0.0, 300.0 - age)
+                            if settings.enabled and settings.news_enabled:
+                                if previous_status.error_code is None:
+                                    self.reported_failures.pop("fed_monetary", None)
+                                else:
+                                    self.reported_failures["fed_monetary"] = ServiceFailure(
+                                        "fed_monetary", previous_status.error_code, previous_status.available_at)
+            except (StoreError, ValueError):
+                logger.error("Service status could not be restored; earlier settings or evidence may already be committed.")
+                raise
             self.last_settings_revision = settings.revision
-            self.next_fetch_at = {name: 0.0 for name in self.fetch_sources}
-            if self.collect_news:
-                previous_status = self.store.news_status()
-                if previous_status is not None:
-                    self.provider_errors["fed_monetary"] = previous_status.error_code
-                    if previous_status.settings_revision == settings.revision:
-                        age = (now - previous_status.available_at).total_seconds()
-                        if age < 0:
-                            raise StoreError("clock_invalid")
-                        self.next_fetch_at["fed_monetary"] = self.monotonic() + max(0.0, 300.0 - age)
-            if self.job_cancel is not None:
-                self.job_cancel.set()
-            self.calendar_transport.cancel()
+        if not self.allow_network:
+            self._observe_service(settings)
+            return receipts
         if self.worker is not None and not self.worker.is_alive():
-            batch, error, revision, generation, source_name = self.results.get_nowait()
-            self.worker = None
+            if self.pending_result is None:
+                self.pending_result = self.results.get_nowait()
+            batch, error, revision, generation, source_name = self.pending_result
             permitted = settings.ai_enabled and settings.news_enabled if source_name == "analysis" else settings.news_enabled if source_name == "fed_monetary" else settings.calendar_enabled
             if settings.revision == revision and self.generation == generation and settings.enabled and permitted:
                 now = self.clock()
+                record_result = True
                 if source_name == "analysis":
-                    if error is None and batch is not None:
-                        self.store.publish_brief(batch, now)
+                    brief, generated = batch
+                    if error is None and brief is not None:
+                        self.store.publish_brief(brief, now)
+                        previous_failure = self.reported_failures.get("analysis")
+                        # A cache hit is not a new provider success.
+                        if previous_failure is not None and not generated:
+                            record_result = False
+                    elif error is None:
+                        error = "analysis_failed"
                     self.ai_error = error
                 elif source_name == "fed_monetary":
                     self.store.complete_news_attempt(batch.attempt_id, revision, batch.started_at, batch.completed_at, now,
                                                      batch=batch.batch, raw=batch.raw, error_code=error)
                 else:
                     error = self._publish_calendar_result(batch, error, revision, source_name, now)
+                if record_result:
+                    self._record_result(source_name, error, now)
                 if source_name != "analysis":
                     self.provider_errors[source_name] = error
                     self.next_fetch_at[source_name] = self.monotonic() + (300.0 if error or source_name == "fed_monetary" else 3600.0)
+            self.pending_result = None
+            self.worker = None
+        if self.worker is None or self.status_dirty:
+            self._observe_service(settings)
         elapsed = self.monotonic()
         due = [name for name in self.fetch_sources if elapsed >= self.next_fetch_at[name]
                and (settings.news_enabled if name == "fed_monetary" else settings.calendar_enabled)]
@@ -219,15 +328,26 @@ class IntelligenceService:
                         self.job_cancel = cancelled
                         revision, generation = settings.revision, self.generation
                         def analyze():
-                            brief, error = None, None
+                            brief, generated, error = None, False, None
                             try:
-                                brief = analyzer.analyze(archive, settings, cluster_id, self.store.settings,
-                                                         self.store.news_status, cancelled)
+                                def reserve(requested_at, input_bytes, context):
+                                    def commit_reservation():
+                                        current = self.clock()
+                                        if current < requested_at:
+                                            raise AnalysisError("clock_invalid")
+                                        return analyzer.budget.reserve_request(current, input_bytes, context)
+                                    return self._retry_analysis_storage(commit_reservation, cancelled)
+
+                                brief, generated = analyzer._analyze_with_freshness(
+                                    archive, settings, cluster_id,
+                                    lambda: self._retry_analysis_storage(self.store.settings, cancelled),
+                                    lambda: self._retry_analysis_storage(self.store.news_status, cancelled),
+                                    cancelled, reserve)
                             except (AnalysisError, StoreError) as exc:
                                 error = exc.code
                             except Exception:
                                 error = "analysis_failed"
-                            self.results.put_nowait((brief, error, revision, generation, "analysis"))
+                            self.results.put_nowait(((brief, generated), error, revision, generation, "analysis"))
                         self.worker = threading.Thread(target=analyze, name="intelligence-analysis", daemon=True)
                         self.worker.start()
                         break
@@ -270,5 +390,8 @@ class IntelligenceService:
 
     def run(self, stop_event):
         while not stop_event.is_set():
-            self.step()
+            try:
+                self.step()
+            except StoreBusy:
+                logger.warning("Intelligence storage is busy; retrying. Earlier settings or evidence may already be committed.")
             stop_event.wait(1.0)

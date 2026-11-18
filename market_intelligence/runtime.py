@@ -93,6 +93,8 @@ class ProviderProfile:
             encoded = json.dumps(body, ensure_ascii=True).encode()
             if len(encoded) > 131072:
                 raise AnalysisError("input_too_large")
+            if cancelled.is_set():
+                raise AnalysisError("analysis_cancelled")
             connection.request("POST", "/v1/chat/completions", encoded, headers)
             active_socket = connection.sock
             response = connection.getresponse()

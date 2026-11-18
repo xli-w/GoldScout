@@ -229,19 +229,25 @@ class AdvisoryAnalyzer:
         self.cache = {}
 
     def analyze(self, archive, settings, cluster_id, current_settings, current_status, cancel_event=None):
+        return self._analyze_with_freshness(
+            archive, settings, cluster_id, current_settings, current_status, cancel_event)[0]
+
+    def _analyze_with_freshness(self, archive, settings, cluster_id, current_settings, current_status,
+                                cancel_event=None, reserve_request=None):
         if not isinstance(settings, IntelligenceSettings):
             raise ValueError("Validated settings are required")
         if not settings.enabled or not settings.news_enabled or not settings.ai_enabled:
-            return None
+            return None, False
         if not self.active.acquire(blocking=False):
             raise AnalysisError("analysis_in_progress")
         try:
+            reserve = self.budget.reserve_request if reserve_request is None else reserve_request
             return self._analyze(archive, settings, cluster_id, current_settings, current_status,
-                                 cancel_event or threading.Event())
+                                 cancel_event or threading.Event(), reserve)
         finally:
             self.active.release()
 
-    def _analyze(self, archive, settings, cluster_id, current_settings, current_status, cancelled):
+    def _analyze(self, archive, settings, cluster_id, current_settings, current_status, cancelled, reserve_request):
         identifier(cluster_id)
         if not isinstance(archive, ArchivedNews) or not callable(current_settings) or not callable(current_status):
             raise ValueError("Validated archive and current-state readers are required")
@@ -259,15 +265,24 @@ class AdvisoryAnalyzer:
             if self.providers.get(settings.ai_profile) is not provider:
                 raise AnalysisError("profile_changed")
             if (not isinstance(observed, NewsObservation) or observed.status != "successful"
-                    or observed.acquisition_id != archive.acquisition_id or current_status() != observed
+                    or observed.acquisition_id != archive.acquisition_id):
+                raise AnalysisError("source_unavailable")
+            latest_status = current_status()
+            checked_at = self.clock()
+            utc_time(checked_at)
+            if checked_at < now:
+                raise AnalysisError("clock_invalid")
+            if cancelled.is_set():
+                raise AnalysisError("analysis_cancelled")
+            if (latest_status != observed
                     or observed.settings_revision != archive.settings_revision or observed.available_at != archive.available_at
                     or not observed.started_at <= archive.batch.received_at <= observed.completed_at
-                    or archive.available_at > now or observed.available_at > now
-                    or not 0 <= (now - observed.available_at).total_seconds() <= self.limits.max_source_age_seconds):
+                    or archive.available_at > checked_at or observed.available_at > checked_at
+                    or not 0 <= (checked_at - observed.available_at).total_seconds() <= self.limits.max_source_age_seconds):
                 raise AnalysisError("source_unavailable")
+            return checked_at
 
-        now = self.clock()
-        guard(now)
+        now = guard(self.clock())
         items = tuple(sorted((item for item in archive.batch.items if item.cluster_id == cluster_id), key=lambda item: item.evidence_id))
         if not 1 <= len(items) <= 20:
             raise AnalysisError("evidence_unavailable")
@@ -277,15 +292,13 @@ class AdvisoryAnalyzer:
         key = (provider.profile, provider.model, PROMPT_VERSION, settings.revision, cluster_id, input_hash)
         cached = self.cache.get(key)
         if cached is not None and cached.available_at <= now < cached.expires_at:
-            cache_at = self.clock()
-            guard(cache_at)
+            cache_at = guard(self.clock())
             if cached.available_at <= cache_at < cached.expires_at:
-                return cached
+                return cached, False
             now = cache_at
         request = SummaryRequest(SYSTEM_PROMPT, evidence_json, self.limits.max_output_tokens)
-        now = self.clock()
-        guard(now)
-        reservation_id = self.budget.reserve_request(now, input_bytes, {
+        now = guard(self.clock())
+        reservation_id = reserve_request(now, input_bytes, {
             "acquisition_id": archive.acquisition_id, "source_attempt_id": observed.attempt_id,
             "settings_revision": settings.revision, "profile": provider.profile, "model": provider.model,
             "cluster_id": cluster_id, "input_hash": input_hash, "prompt_version": PROMPT_VERSION,
@@ -328,8 +341,7 @@ class AdvisoryAnalyzer:
                                   PROMPT_VERSION, "1", settings.revision, input_hash, response.tokens_used, reservation_id)
         except (ValueError, TypeError, KeyError, RecursionError, OverflowError) as exc:
             raise AnalysisError("output_invalid") from exc
-        validated_at = self.clock()
-        guard(validated_at)
+        validated_at = guard(self.clock())
         if validated_at < completed or not 0 <= self.monotonic() - started <= self.limits.max_latency_seconds:
             raise AnalysisError("analysis_expired")
         identity = json.dumps((key, output, validated_at.isoformat()), sort_keys=True, separators=(",", ":"))
@@ -338,7 +350,7 @@ class AdvisoryAnalyzer:
         if len(self.cache) >= 256 and key not in self.cache:
             self.cache.pop(next(iter(self.cache)))
         self.cache[key] = brief
-        return brief
+        return brief, True
 
 
 def analysis_input(archive, cluster_id):
