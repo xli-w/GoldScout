@@ -5,9 +5,11 @@ import io
 import os
 import socket
 import ssl
+import tempfile
 import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import proxy_config
@@ -102,24 +104,95 @@ class IntelligenceCalendarTransportTests(unittest.TestCase):
         for line in ("TRADER_PROXY_URL=\"http://sample:secret@proxy.invalid:8080\n",
                      "export TRADER_PROXY_URL='http://sample:secret@proxy.invalid:8080\n",
                      "TRADER_PROXY_URL\n", "OTHER_SETTING=\"unterminated\n"):
-            with self.subTest(line=line), patch.dict(os.environ, {"TRADER_PROXY_URL": ""}), \
+            with self.subTest(line=line), patch.dict(os.environ, {"TRADER_PROXY_URL": "http://environment.invalid:8080"}), \
                     patch("proxy_config._dotenv_loading_disabled", return_value=False), \
                     patch("proxy_config._read_proxy_dotenv",
-                          side_effect=lambda: proxy_config._parse_proxy_dotenv(io.StringIO(line))):
-                os.environ.pop("TRADER_PROXY_URL")
+                          side_effect=lambda names: proxy_config._parse_proxy_dotenv(io.StringIO(line), names)):
                 with self.assertRaises(ProxyConfigurationError) as error:
                     CalendarTransport(self.resolver)
                 self.assertNotIn("secret", str(error.exception))
         self.resolver.assert_not_called()
 
-    def test_dotenv_parser_returns_only_the_last_literal_proxy_value(self):
+    def test_dotenv_parser_returns_only_requested_last_literal_values(self):
         contents = ("ALPACA_SECRET_KEY=unused-sentinel\n"
                     "TRADER_PROXY_URL=http://first.invalid:8080\n"
-                    "TRADER_PROXY_URL='http://sample:p%40ss@proxy.invalid:8080'\n")
-        proxy = proxy_config._parse_proxy_dotenv(io.StringIO(contents))
-        self.assertEqual(proxy, "http://sample:p%40ss@proxy.invalid:8080")
-        self.assertEqual(proxy_config._parse_proxy_dotenv(io.StringIO("TRADER_PROXY_URL=\n")), "")
+                    "TRADER_PROXY_URL='http://sample:p%40ss@proxy.invalid:8080'\n"
+                    "TRADER_AI_TEST=synthetic-key\n")
+        values = proxy_config._parse_proxy_dotenv(
+            io.StringIO(contents), ("TRADER_PROXY_URL", "TRADER_AI_TEST"))
+        self.assertEqual(values, {"TRADER_PROXY_URL": "http://sample:p%40ss@proxy.invalid:8080",
+                                  "TRADER_AI_TEST": "synthetic-key"})
+        self.assertEqual(proxy_config._parse_proxy_dotenv(
+            io.StringIO("TRADER_PROXY_URL=\n"), ("TRADER_PROXY_URL",)), {"TRADER_PROXY_URL": ""})
+        self.assertEqual(proxy_config._parse_proxy_dotenv(
+            io.StringIO("OTHER=value\n"), ("TRADER_PROXY_URL",)), {})
         self.assertEqual(os.environ["ALPACA_SECRET_KEY"], "")
+
+    def test_synthetic_connection_file_overrides_environment_and_missing_uses_environment(self):
+        names = ("TRADER_PROXY_URL", "TRADER_AI_TEST", "GOLDSCOUT_ETORO_API_KEY")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.txt"
+            path.write_text("TRADER_PROXY_URL=http://file.invalid:8080\n"
+                            "TRADER_AI_TEST=\n", encoding="utf-8")
+            environment = {"TRADER_PROXY_URL": "http://environment.invalid:8080",
+                           "TRADER_AI_TEST": "environment-key",
+                           "GOLDSCOUT_ETORO_API_KEY": "environment-api"}
+            with patch.dict(os.environ, environment), \
+                    patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+                    patch("proxy_config._read_proxy_dotenv",
+                          side_effect=lambda requested: proxy_config._read_connection_file(path, requested)):
+                self.assertEqual(proxy_config.configured_connection_values(*names), {
+                    "TRADER_PROXY_URL": "http://file.invalid:8080",
+                    "TRADER_AI_TEST": "", "GOLDSCOUT_ETORO_API_KEY": "environment-api"})
+                self.assertEqual(os.environ["TRADER_AI_TEST"], "environment-key")
+                path.write_bytes(b"TRADER_PROXY_URL=\xff")
+                with self.assertRaises(ProxyConfigurationError):
+                    proxy_config.configured_proxy_url()
+
+    def test_existing_but_unreadable_connection_file_never_falls_back(self):
+        names = ("TRADER_PROXY_URL",)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.txt"
+            self.assertEqual(proxy_config._read_connection_file(path, names), {})
+            path.write_text("TRADER_PROXY_URL=http://fixture.invalid:8080\n", encoding="utf-8")
+
+            class BrokenFile(io.StringIO):
+                def read(self, *args, **kwargs):
+                    raise FileNotFoundError("synthetic-private-value")
+
+            for operation in ("open", "read"):
+                with self.subTest(operation=operation), \
+                        patch.object(Path, "open") as opener, \
+                        patch.dict(os.environ, {"TRADER_PROXY_URL": "http://environment.invalid:8080"}), \
+                        patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+                        patch("proxy_config._read_proxy_dotenv",
+                              side_effect=lambda requested: proxy_config._read_connection_file(path, requested)):
+                    if operation == "open":
+                        opener.side_effect = FileNotFoundError("synthetic-private-value")
+                    else:
+                        opener.return_value = BrokenFile()
+                    with self.assertRaises(ProxyConfigurationError) as error:
+                        CalendarTransport(self.resolver)
+                    self.assertNotIn("synthetic-private-value", str(error.exception))
+            self.resolver.assert_not_called()
+
+    def test_dotenv_key_matching_follows_environment_case_rules(self):
+        text = "trader_proxy_url=http://file.invalid:8080\nTRADER_AI_TEST=\n"
+        names = ("TRADER_PROXY_URL", "TRADER_AI_test")
+        for system, expected in (("nt", {"TRADER_PROXY_URL": "http://file.invalid:8080",
+                                        "TRADER_AI_test": ""}),
+                                 ("posix", {})):
+            with self.subTest(system=system), patch.object(proxy_config.os, "name", system):
+                self.assertEqual(proxy_config._parse_proxy_dotenv(io.StringIO(text), names), expected)
+
+    def test_disabled_file_loading_keeps_environment_credentials(self):
+        environment = {"PYTHON_DOTENV_DISABLED": "1", "TRADER_AI_TEST": "environment-ai",
+                       "GOLDSCOUT_ETORO_USER_KEY": "environment-user"}
+        with patch.dict(os.environ, environment), \
+                patch("proxy_config._read_proxy_dotenv", side_effect=AssertionError("file must not be read")):
+            self.assertEqual(proxy_config.configured_connection_values(
+                "TRADER_AI_TEST", "GOLDSCOUT_ETORO_USER_KEY"),
+                {"TRADER_AI_TEST": "environment-ai", "GOLDSCOUT_ETORO_USER_KEY": "environment-user"})
 
     def test_proxy_wire_debug_does_not_print_authentication(self):
         proxy = "http://sample:secret@proxy.invalid:8080"
@@ -183,7 +256,7 @@ class IntelligenceCalendarTransportTests(unittest.TestCase):
         self.connection.getresponse.return_value = response
         with patch.dict(os.environ, {"TRADER_PROXY_URL": ""}), \
                 patch("proxy_config._dotenv_loading_disabled", return_value=False), \
-                patch("proxy_config._read_proxy_dotenv", return_value=proxy) as load:
+                patch("proxy_config._read_proxy_dotenv", return_value={"TRADER_PROXY_URL": proxy}) as load:
             os.environ.pop("TRADER_PROXY_URL")
             transport = CalendarTransport(self.resolver, self.factory, monotonic=lambda: 0.0)
             self.assertEqual(transport.fetch(FED_NEWS_URL), b"calendar")
@@ -193,13 +266,31 @@ class IntelligenceCalendarTransportTests(unittest.TestCase):
         self.assertEqual(self.factory.call_args.args[3].url, proxy)
         load.assert_called_once()
 
-    def test_empty_environment_setting_overrides_dotenv_proxy(self):
+    def test_dotenv_proxy_overrides_empty_environment_setting(self):
         with patch.dict(os.environ, {"TRADER_PROXY_URL": ""}), \
-                patch("proxy_config._read_proxy_dotenv", return_value="http://proxy.invalid") as load:
+                patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+                patch("proxy_config._read_proxy_dotenv",
+                      return_value={"TRADER_PROXY_URL": "http://proxy.invalid:8080"}) as load:
+            transport = CalendarTransport(self.resolver, self.factory, monotonic=lambda: 0.0)
+            self.assertEqual(transport.fetch(BLS_CALENDAR_URL), b"calendar")
+        self.assertEqual(self.factory.call_args.args[3].host, "proxy.invalid")
+        load.assert_called_once()
+
+    def test_empty_dotenv_proxy_explicitly_disables_environment_proxy(self):
+        with patch.dict(os.environ, {"TRADER_PROXY_URL": "http://environment.invalid:8080"}), \
+                patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+                patch("proxy_config._read_proxy_dotenv", return_value={"TRADER_PROXY_URL": ""}):
             transport = CalendarTransport(self.resolver, self.factory, monotonic=lambda: 0.0)
             self.assertEqual(transport.fetch(BLS_CALENDAR_URL), b"calendar")
         self.factory.assert_called_once_with("www.bls.gov", "93.184.216.34", 3.0)
-        load.assert_not_called()
+
+    def test_missing_dotenv_proxy_falls_back_to_environment(self):
+        with patch.dict(os.environ, {"TRADER_PROXY_URL": "http://environment.invalid:8080"}), \
+                patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+                patch("proxy_config._read_proxy_dotenv", return_value={}):
+            transport = CalendarTransport(self.resolver, self.factory, monotonic=lambda: 0.0)
+            self.assertEqual(transport.fetch(BLS_CALENDAR_URL), b"calendar")
+        self.assertEqual(self.factory.call_args.args[3].host, "environment.invalid")
 
     def test_disabled_dotenv_never_reads_proxy_file(self):
         with patch.dict(os.environ, {"TRADER_PROXY_URL": "", "PYTHON_DOTENV_DISABLED": "1"}), \
@@ -653,7 +744,7 @@ class IntelligenceCalendarServiceTests(IntelligenceStoreFixture, unittest.TestCa
         proxy = "http://sample:secret@proxy.invalid:8080"
         with patch.dict(os.environ, {"TRADER_PROXY_URL": ""}), \
                 patch("proxy_config._dotenv_loading_disabled", return_value=False), \
-                patch("proxy_config._read_proxy_dotenv", return_value=proxy) as load, \
+                patch("proxy_config._read_proxy_dotenv", return_value={"TRADER_PROXY_URL": proxy}) as load, \
                 patch.object(IntelligenceService, "run", autospec=True) as run, \
                 redirect_stdout(io.StringIO()):
             os.environ.pop("TRADER_PROXY_URL")

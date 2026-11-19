@@ -1,9 +1,13 @@
 from copy import deepcopy
 from datetime import timedelta
-from io import StringIO
+from io import BytesIO, StringIO
+import builtins
+import importlib
 import json
 from pathlib import Path
+import socket
 import tempfile
+import traceback
 import unittest
 from unittest.mock import Mock, patch
 
@@ -39,14 +43,29 @@ class MonitoringRuntimeTests(unittest.TestCase):
         }
 
     def collect(self, **kwargs):
+        kwargs.setdefault("completion_clock", lambda: NOW)
         return collect_once(self.database, self.profile, self.cache, "broker", self.approval,
                             now=NOW, **kwargs)
+
+    def test_import_does_not_require_connection_dependencies(self):
+        from investment import monitoring_runtime
+
+        original_import = builtins.__import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name == "proxy_config":
+                raise ModuleNotFoundError("synthetic optional dependency unavailable")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=guarded_import):
+            importlib.reload(monitoring_runtime)
 
     def test_collection_requires_all_gates_before_transport_or_secrets(self):
         collector, credentials = Mock(), Mock()
         with self.assertRaises(InvestmentError):
             self.collect(collector=collector, credential_accessor=credentials)
-        for key in ("read_scope_verified", "retention_rights_verified", "account_binding_verified"):
+        for key in ("read_scope_verified", "eligibility_verified", "retention_rights_verified",
+                    "account_binding_verified", "supervised_read_approved"):
             self.approval[key] = False
             with self.assertRaises(InvestmentError):
                 self.collect(allow_network=True, collector=collector, credential_accessor=credentials)
@@ -56,6 +75,234 @@ class MonitoringRuntimeTests(unittest.TestCase):
             self.collect(allow_network=True, collector=collector, credential_accessor=credentials)
         collector.assert_not_called()
         credentials.assert_not_called()
+
+    def test_default_credentials_use_file_values_only_after_collection_gates(self):
+        payload = (b'{"clientPortfolio":{"credit":42,"positions":[],"mirrors":[],'
+                   b'"orders":[],"ordersForOpen":[]}}')
+        transport = Mock(return_value=payload)
+        values = {"GOLDSCOUT_ETORO_API_KEY": "file-api",
+                  "GOLDSCOUT_ETORO_USER_KEY": "file-user"}
+        with patch.dict("os.environ", {"GOLDSCOUT_ETORO_API_KEY": "environment-api",
+                                      "GOLDSCOUT_ETORO_USER_KEY": "environment-user"}), \
+             patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+             patch("proxy_config._read_proxy_dotenv", return_value=values) as read:
+            with self.assertRaises(InvestmentError):
+                self.collect(transport=transport)
+            read.assert_not_called()
+            result = self.collect(allow_network=True, transport=transport)
+        self.assertEqual(result["status"], "partial_observation")
+        headers = transport.call_args.args[1]
+        self.assertEqual((headers["x-api-key"], headers["x-user-key"]), ("file-api", "file-user"))
+        read.assert_called_once_with(("GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY"))
+
+    def test_blank_file_credentials_do_not_fall_back_or_contact_provider(self):
+        transport = Mock()
+        with patch.dict("os.environ", {"GOLDSCOUT_ETORO_API_KEY": "environment-api",
+                                      "GOLDSCOUT_ETORO_USER_KEY": "environment-user"}), \
+             patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+             patch("proxy_config._read_proxy_dotenv",
+                   return_value={"GOLDSCOUT_ETORO_API_KEY": "",
+                                 "GOLDSCOUT_ETORO_USER_KEY": "file-user"}):
+            with self.assertRaisesRegex(InvestmentError, "provider_unavailable"):
+                self.collect(allow_network=True, transport=transport)
+        transport.assert_not_called()
+
+    def test_approval_expiring_during_credential_load_never_dispatches(self):
+        transport = Mock()
+        current = [NOW]
+        values = {"GOLDSCOUT_ETORO_API_KEY": "file-api",
+                  "GOLDSCOUT_ETORO_USER_KEY": "file-user"}
+
+        def delayed_credentials(names):
+            current[0] = NOW + timedelta(hours=1)
+            return values
+
+        with patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+             patch("proxy_config._read_proxy_dotenv", side_effect=delayed_credentials):
+            with self.assertRaisesRegex(InvestmentError, "expired"):
+                self.collect(allow_network=True, transport=transport,
+                             completion_clock=lambda: current[0])
+        transport.assert_not_called()
+        attempts = read_cache(self.cache, self.profile, current[0])["attempts"]
+        self.assertEqual(attempts[-1]["error_code"], "collection_interrupted")
+        self.assertIsNone(attempts[-1]["observation"])
+
+    def test_approval_expiring_during_dns_never_sends_builtin_request(self):
+        from investment.etoro import EToroTransport
+
+        current = [NOW]
+        factory = Mock()
+        credentials = Mock(return_value={"x-api-key": "file-api", "x-user-key": "file-user"})
+
+        def delayed_dns(*args, **kwargs):
+            current[0] = NOW + timedelta(hours=1)
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 443))]
+
+        def create_transport(**kwargs):
+            return EToroTransport(resolver=delayed_dns, connection_factory=factory, proxy_url="", **kwargs)
+
+        with patch("investment.etoro.EToroTransport", side_effect=create_transport):
+            with self.assertRaisesRegex(InvestmentError, "approval"):
+                self.collect(allow_network=True, credential_accessor=credentials,
+                             completion_clock=lambda: current[0])
+        credentials.assert_called_once()
+        factory.assert_not_called()
+        attempts = read_cache(self.cache, self.profile, current[0])["attempts"]
+        self.assertEqual(attempts[-1]["error_code"], "collection_interrupted")
+
+    def test_approval_expiring_during_connection_setup_never_sends_request(self):
+        from investment.etoro import EToroTransport
+
+        current = [NOW]
+        connection = Mock(sock=None)
+        credentials = Mock(return_value={"x-api-key": "file-api", "x-user-key": "file-user"})
+
+        def delayed_connection(*args):
+            current[0] = NOW + timedelta(hours=1)
+            return connection
+
+        def create_transport(**kwargs):
+            return EToroTransport(
+                resolver=lambda *args, **kw: [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP,
+                                               "", ("8.8.8.8", 443))],
+                connection_factory=delayed_connection, proxy_url="", **kwargs)
+
+        with patch("investment.etoro.EToroTransport", side_effect=create_transport):
+            with self.assertRaisesRegex(InvestmentError, "approval"):
+                self.collect(allow_network=True, credential_accessor=credentials,
+                             completion_clock=lambda: current[0])
+        connection.request.assert_not_called()
+        connection.close.assert_called_once()
+
+    def test_approval_expiring_during_tls_never_sends_account_headers(self):
+        from investment.etoro import EToroTransport
+
+        current = [NOW]
+        tls_socket, raw_socket, context = Mock(), Mock(), Mock()
+        context.wrap_socket.return_value = tls_socket
+        tls_socket.do_handshake.side_effect = lambda: current.__setitem__(0, NOW + timedelta(hours=1))
+        credentials = Mock(return_value={"x-api-key": "file-api", "x-user-key": "file-user"})
+
+        def create_transport(**kwargs):
+            return EToroTransport(
+                resolver=lambda *args, **kw: [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP,
+                                               "", ("8.8.8.8", 443))],
+                proxy_url="", **kwargs)
+
+        with patch("market_intelligence.providers.ssl.create_default_context", return_value=context), \
+             patch("market_intelligence.providers.socket.create_connection", return_value=raw_socket), \
+             patch("investment.etoro.EToroTransport", side_effect=create_transport):
+            with self.assertRaisesRegex(InvestmentError, "approval"):
+                self.collect(allow_network=True, credential_accessor=credentials,
+                             completion_clock=lambda: current[0])
+        tls_socket.do_handshake.assert_called_once()
+        tls_socket.sendall.assert_not_called()
+        tls_socket.close.assert_called()
+        attempts = read_cache(self.cache, self.profile, current[0])["attempts"]
+        self.assertEqual(attempts[-1]["error_code"], "collection_interrupted")
+
+    def test_valid_approval_sends_one_request_over_the_connected_tls_socket(self):
+        from investment.etoro import EToroTransport
+
+        payload = (b'{"clientPortfolio":{"credit":42,"positions":[],"mirrors":[],'
+                   b'"orders":[],"ordersForOpen":[]}}')
+        tls_socket, raw_socket, context = Mock(), Mock(), Mock()
+        tls_socket.makefile.return_value = BytesIO(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+            + str(len(payload)).encode("ascii") + b"\r\n\r\n" + payload)
+        context.wrap_socket.return_value = tls_socket
+
+        def create_transport(**kwargs):
+            return EToroTransport(
+                resolver=lambda *args, **kw: [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP,
+                                               "", ("8.8.8.8", 443))],
+                proxy_url="", **kwargs)
+
+        with patch("market_intelligence.providers.ssl.create_default_context", return_value=context), \
+             patch("market_intelligence.providers.socket.create_connection", return_value=raw_socket) as connect, \
+             patch("investment.etoro.EToroTransport", side_effect=create_transport):
+            result = self.collect(allow_network=True,
+                                  credential_accessor=lambda: {"x-api-key": "file-api", "x-user-key": "file-user"})
+        self.assertEqual(result["status"], "partial_observation")
+        connect.assert_called_once()
+        tls_socket.do_handshake.assert_called_once()
+        sent = b"".join(call.args[0] for call in tls_socket.sendall.call_args_list)
+        self.assertEqual(sent.count(b"GET "), 1)
+        self.assertIn(b"x-api-key: file-api\r\n", sent)
+
+    def test_historical_start_does_not_freeze_live_approval_clock(self):
+        from investment.core import clock
+
+        transport, credentials = Mock(), Mock()
+        wall_time = NOW + timedelta(hours=2)
+        with patch("investment.monitoring_runtime.clock",
+                   side_effect=lambda value=None: wall_time if value is None else clock(value)):
+            with self.assertRaisesRegex(InvestmentError, "approval"):
+                self.collect(allow_network=True, transport=transport,
+                             credential_accessor=credentials, completion_clock=None)
+        credentials.assert_not_called()
+        transport.assert_not_called()
+
+    def test_completion_clock_cannot_move_backwards_or_publish_evidence(self):
+        collector = Mock(return_value={"account_currency": "USD", "raw": {"credit": "42", "positions": []}})
+        readings = iter((NOW + timedelta(seconds=5), NOW + timedelta(seconds=3)))
+        with self.assertRaisesRegex(InvestmentError, "clock moved backwards"):
+            self.collect(allow_network=True, transport=Mock(), collector=collector,
+                         completion_clock=lambda: next(readings))
+        self.assertEqual(read_cache(self.cache, self.profile, NOW + timedelta(seconds=5))["attempts"], [])
+
+    def test_clock_failure_is_sanitized_without_inventing_an_attempt_time(self):
+        collector = Mock(return_value={"account_currency": "USD", "raw": {"credit": "42", "positions": []}})
+        for values in ((RuntimeError("synthetic-clock-secret"),),
+                       (NOW, RuntimeError("synthetic-clock-secret"))):
+            with self.subTest(stage=len(values)):
+                with self.assertRaisesRegex(InvestmentError, "clock unavailable") as caught:
+                    self.collect(allow_network=True, transport=Mock(), collector=collector,
+                                 completion_clock=Mock(side_effect=values))
+                formatted = "".join(traceback.format_exception(caught.exception))
+                self.assertNotIn("synthetic-clock-secret", formatted)
+                self.assertIn("no attempt recorded", str(caught.exception))
+                self.assertEqual(read_cache(self.cache, self.profile, NOW)["attempts"], [])
+
+    def test_unconfirmed_cancellation_reports_possible_inflight_request(self):
+        from investment.etoro import EToroError
+
+        transport = Mock(side_effect=EToroError("cancellation_unconfirmed"))
+        with self.assertRaisesRegex(InvestmentError, "request may remain in flight"):
+            self.collect(allow_network=True, transport=transport,
+                         credential_accessor=lambda: {"x-api-key": "file-api", "x-user-key": "file-user"})
+        attempt = read_cache(self.cache, self.profile, NOW)["attempts"][-1]
+        self.assertEqual(attempt["error_code"], "provider_unavailable")
+        self.assertIsNone(attempt["observation"])
+
+    def test_unconfirmed_cancellation_warning_survives_clock_and_cache_failures(self):
+        from investment.etoro import EToroError
+
+        def transport(*args):
+            raise EToroError("cancellation_unconfirmed")
+
+        credentials = lambda: {"x-api-key": "file-api", "x-user-key": "file-user"}
+        readings = Mock(side_effect=(NOW, NOW, RuntimeError("synthetic-clock-secret")))
+        with self.assertRaises(InvestmentError) as caught:
+            self.collect(allow_network=True, transport=transport,
+                         credential_accessor=credentials, completion_clock=readings)
+        self.assertIn("request may remain in flight", str(caught.exception))
+        self.assertIn("no attempt recorded", str(caught.exception))
+        self.assertNotIn("synthetic-clock-secret", "".join(traceback.format_exception(caught.exception)))
+        self.assertEqual(read_cache(self.cache, self.profile, NOW)["attempts"], [])
+
+        def committed_then_failed(*args, **kwargs):
+            append_attempt(*args, **kwargs)
+            raise InvestmentError("synthetic-post-commit-secret")
+
+        with patch("investment.monitoring_runtime.append_attempt", side_effect=committed_then_failed):
+            with self.assertRaises(InvestmentError) as caught:
+                self.collect(allow_network=True, transport=transport, credential_accessor=credentials)
+        self.assertIn("request may remain in flight", str(caught.exception))
+        self.assertIn("recording could not be confirmed", str(caught.exception))
+        self.assertNotIn("no attempt recorded", str(caught.exception))
+        self.assertNotIn("synthetic-post-commit-secret", "".join(traceback.format_exception(caught.exception)))
+        self.assertEqual(len(read_cache(self.cache, self.profile, NOW)["attempts"]), 1)
 
     def test_partial_usd_receipt_has_no_invented_source_clock_and_survives_failure(self):
         from investment.etoro import EToroError

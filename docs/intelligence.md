@@ -107,8 +107,8 @@ Create an operator-owned JSON profile file with no secrets. Example:
 Replace the example model names with models the operator has verified for the
 selected account and response requirements. A file can contain up to ten
 named profiles. Hosted profiles reference operator-owned `TRADER_AI_`
-environment variables, not key values; multiple profiles can reference
-different keys. Gemini profiles use a bare model identifier, not a URL or
+setting names, not key values; multiple profiles can reference different keys.
+Gemini profiles use a bare model identifier, not a URL or
 `models/` path. Only one registered profile is selected for analysis at a time.
 Ambiguous JSON fields and incomplete profile entries are rejected.
 Before live use, independently confirm model permissions, public-data and
@@ -119,7 +119,7 @@ The local adapter uses the explicitly configured loopback OpenAI-compatible serv
 it does not install or start a model. It must support the requested
 OpenAI-compatible JSON completion shape, including an assistant role and normal
 stop reason. Hosted credentials must be entered by
-the operator outside chat into the named environment variable. They are never
+the operator outside chat into the named private setting. They are never
 read by the browser or included in evidence. OpenAI, Anthropic and Gemini use
 their own fixed HTTPS hosts and request/response formats, DNS/address checks,
 TLS verification and the configured `TRADER_PROXY_URL` without a direct fallback.
@@ -130,50 +130,62 @@ Local loopback is an explicit profile kind, not a fallback for a failed remote
 request. Provider dispatches are bounded and have no internal retries or tools;
 the separately enabled long-running service can schedule another attempt and
 reserve more budget. Cancellation is cooperative; a request already being
-dispatched cannot be retracted. Actual provider and model compatibility still
+dispatched cannot be retracted. A failed socket cancellation logs that the
+request may still be in flight. Actual provider and model compatibility still
 requires separate operator-approved validation, not offline mocks.
 
-### Proxy configuration
+### Connection configuration
+
+The operator can privately configure the proxy and hosted-AI and eToro
+credentials in the project-root `.env` file. See the commented
+[connection settings example](../environment.example); do not overwrite an
+existing private file or put real values in the example, chat, source control
+or command arguments. The private file is Git-ignored but is plaintext: restrict
+access to the file and machine.
+
+For these GoldScout connection settings, an entry in `.env` takes precedence
+over the process environment, including an explicitly empty value. An absent
+entry falls back to the environment; an existing but unreadable file fails
+rather than falling back. On Windows, names match case-insensitively, as in the
+environment; elsewhere, names are case-sensitive. Other environment variables
+are not overridden. Set `PYTHON_DOTENV_DISABLED=1` in the process environment to disable
+private-file loading entirely; this safety switch cannot be overridden by the
+file. Blank credential entries make the corresponding provider unavailable.
+**A blank `TRADER_PROXY_URL` explicitly disables the proxy, even if the
+environment contains a proxy, and may allow a direct request.** The example
+therefore leaves its entries commented out. Values are literal; variable
+interpolation is not performed. Restart the service after changing connection
+settings.
+
+#### Proxy configuration
 
 `TRADER_PROXY_URL` configures the shared HTTP CONNECT proxy for public feeds,
 hosted AI and the separately approved eToro read adapter. It does not affect
-local-loopback AI or configure other applications. See the blank
-[connection parameter reference](../connection-parameters.example); do not
-source it, since its blank values would override existing settings.
-
-On Windows, the operator can open **Edit environment variables for your
-account**, create or edit a user variable named `TRADER_PROXY_URL`, and enter the
-proxy URL privately. Do not put an authenticated URL in chat, the example,
-source control or command arguments. For HTTP Basic authentication, its form is
+local-loopback AI or configure other applications; `HTTP_PROXY` and
+`HTTPS_PROXY` are not substitutes. For HTTP Basic authentication its form is
 `http://<username>:<password>@<proxy-host>:<port>`; percent-encode reserved
-characters in the username and password. Restart the application and any parent
-terminal or VS Code instance so new processes inherit the setting.
+characters in both credentials. Only HTTP proxies, either unauthenticated or
+using Basic authentication, are supported; integrated Windows authentication
+is not. Basic credentials are sent to the proxy without transport encryption;
+use a trusted network. HTTPS to the destination still uses certificate and
+hostname verification.
 
-Windows user environment variables are stored in plaintext and inherited by
-processes, so use that persistent scope only on a trusted account and machine.
-Only HTTP proxies, either unauthenticated or using Basic authentication, are
-supported; integrated Windows authentication is not supported. Basic credentials
-are sent to the proxy without transport encryption; use a trusted network.
-HTTPS to the destination still uses certificate and hostname verification.
-
-A nonempty `TRADER_PROXY_URL` has no direct-connection fallback. An explicitly
-empty process value disables the proxy and overrides the operator-managed dotenv
-setting; `HTTP_PROXY` and `HTTPS_PROXY` are not substitutes. Destination DNS
+A nonempty configured proxy has no direct-connection fallback. Destination DNS
 must resolve locally and the proxy must allow CONNECT to the validated IP
 address. Configuring the proxy does not start collection or authorize broker
 access. For an approved live check, see
 [supervised single-source checks](#supervised-single-source-checks).
 
-An operator can instead perform one approved BLS transport check without
-opening an intelligence store. Run this in a fresh terminal that has inherited
-the private proxy setting; it refuses to connect when the variable is blank:
+An operator can instead perform one approved BLS transport check without opening
+an intelligence store. It uses the same connection precedence as GoldScout and
+refuses to connect when the resolved proxy is blank:
 
 ```powershell
 @'
-import os
 from market_intelligence.providers import BLS_CALENDAR_URL, CalendarTransport
+from proxy_config import configured_proxy_url
 
-proxy = os.environ.get("TRADER_PROXY_URL")
+proxy = configured_proxy_url()
 if not proxy or not proxy.strip():
     raise SystemExit("TRADER_PROXY_URL is missing; no request made.")
 CalendarTransport(proxy_url=proxy).fetch(BLS_CALENDAR_URL)

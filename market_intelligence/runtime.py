@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import http.client
 import ipaddress
 import json
-import os
 from pathlib import Path
 import re
 import socket
@@ -13,8 +12,10 @@ import threading
 from market_intelligence.analysis import (
     DailyAnalysisBudget, JSONSummaryProvider, ProviderResponse, AnalysisError, strict_json_loads,
 )
-from market_intelligence.providers import PinnedHTTPSConnection, ProviderError
-from proxy_config import configured_proxy_url, parse_proxy_url
+from market_intelligence.providers import PinnedHTTPSConnection, ProviderError, abort_connection
+from proxy_config import (
+    ProxyConfigurationError, configured_connection_values, configured_proxy_url, parse_proxy_url,
+)
 
 
 _HOSTED_ENDPOINTS = {
@@ -127,7 +128,13 @@ class ProviderProfile:
             raise AnalysisError("analysis_cancelled")
         headers = {"Content-Type": "application/json", "Accept": "application/json", "Accept-Encoding": "identity"}
         if self.kind in _HOSTED_ENDPOINTS:
-            key = os.getenv(self.key_env, "")
+            key_env = self.key_env
+            if key_env is None:
+                raise AnalysisError("credential_unavailable")
+            try:
+                key = configured_connection_values(key_env)[key_env]
+            except ProxyConfigurationError:
+                raise AnalysisError("credential_unavailable") from None
             if not key or len(key) > 4096 or any(not 33 <= ord(character) <= 126 for character in key):
                 raise AnalysisError("credential_unavailable")
             if self.kind == "anthropic":
@@ -143,14 +150,7 @@ class ProviderProfile:
 
         def abort():
             cancelled.set()
-            active = active_socket or (connection.sock if connection is not None else None)
-            if active is not None:
-                try:
-                    active.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-            if connection is not None:
-                connection.close()
+            abort_connection(connection, active_socket)
 
         timer = threading.Timer(25.0, abort)
         timer.daemon = True

@@ -39,7 +39,7 @@ import threading
 import time
 import uuid
 
-from market_intelligence.providers import PinnedHTTPSConnection
+from market_intelligence.providers import PinnedHTTPSConnection, abort_connection
 from proxy_config import configured_proxy_url, parse_proxy_url
 
 
@@ -58,7 +58,8 @@ _TRANSPORT_CODES = frozenset({
     "request_in_progress", "redirect_refused", "authentication_refused",
     "permission_refused", "rate_limited", "http_unavailable", "encoding_refused",
     "content_refused", "framing_refused", "response_too_large",
-    "response_incomplete", "transport_unavailable",
+    "response_incomplete", "transport_unavailable", "approval_interrupted",
+    "cancellation_unconfirmed",
 })
 _LIMITATIONS = (
     "partial_source_snapshot_not_accounting_or_buying_power",
@@ -101,9 +102,13 @@ class EToroTransport:
     socket primitive is reused; account data never enters intelligence providers.
     """
 
-    def __init__(self, *, resolver=None, connection_factory=None, proxy_url=None):
+    def __init__(self, *, resolver=None, connection_factory=None, proxy_url=None,
+                 before_request=None):
         self._resolver = resolver or socket.getaddrinfo
         self._connection_factory = connection_factory or PinnedHTTPSConnection
+        if before_request is not None and not callable(before_request):
+            raise ValueError("The request approval check must be callable")
+        self._before_request = before_request
         try:
             self._proxy = parse_proxy_url(
                 configured_proxy_url() if proxy_url is None else proxy_url)
@@ -123,10 +128,22 @@ class EToroTransport:
         done, cancelled = threading.Event(), threading.Event()
         result = {}
         request_headers = dict(headers)
+        connection_lock = threading.Lock()
+        active_connection = [None]
+
+        def register_connection(connection):
+            with connection_lock:
+                active_connection[0] = connection
+
+        def abort():
+            cancelled.set()
+            with connection_lock:
+                connection = active_connection[0]
+            return abort_connection(connection)
 
         def run():
             try:
-                result["payload"] = self._get_one(request_headers, cancelled)
+                result["payload"] = self._get_one(request_headers, cancelled, register_connection, abort)
             except Exception as exc:
                 code = (exc.code if isinstance(exc, EToroError)
                         and type(exc.code) is str and exc.code in _TRANSPORT_CODES
@@ -143,29 +160,16 @@ class EToroTransport:
             _REQUEST_SLOT.release()
             raise EToroError("transport_unavailable") from None
         if not done.wait(_DEADLINE_SECONDS):
-            cancelled.set()
+            if not abort():
+                raise EToroError("cancellation_unconfirmed")
             raise EToroError("request_timeout")
         if "error" in result:
             raise EToroError(result["error"])
         return result["payload"]
 
-    def _get_one(self, headers, cancelled):
+    def _get_one(self, headers, cancelled, register_connection, abort):
         connection = response = None
         started = time.monotonic()
-
-        def abort():
-            cancelled.set()
-            if connection is not None:
-                active = getattr(connection, "sock", None)
-                if active is not None:
-                    try:
-                        active.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                try:
-                    connection.close()
-                except Exception:
-                    pass
 
         timer = threading.Timer(_DEADLINE_SECONDS, abort)
         timer.daemon = True
@@ -191,12 +195,24 @@ class EToroTransport:
                     raise EToroError("address_refused")
                 addresses.append(str(parsed))
             check_deadline()
+            if self._before_request is not None:
+                self._before_request()
+                check_deadline()
             args = (HOST, addresses[0], 3.0)
             connection = (self._connection_factory(*args) if self._proxy is None
                           else self._connection_factory(*args, self._proxy))
+            register_connection(connection)
             connection.cancel_event = cancelled
             connection.set_debuglevel(0)
             check_deadline()
+            if self._before_request is not None:
+                self._before_request()
+                check_deadline()
+            connection.connect()
+            check_deadline()
+            if self._before_request is not None:
+                self._before_request()
+                check_deadline()
             connection.request("GET", PORTFOLIO_PATH, headers={
                 **headers, "Host": HOST, "Accept": "application/json",
                 "Accept-Encoding": "identity", "Connection": "close",

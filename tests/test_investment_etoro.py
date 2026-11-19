@@ -320,6 +320,130 @@ class TransportTests(unittest.TestCase):
                 transport(etoro.PORTFOLIO_PATH, headers())
         self.factory.assert_not_called()
 
+    def test_cancellation_during_tls_setup_never_sends_request(self):
+        transport = self.setup_transport()
+        self.connection.connect.side_effect = lambda: self.connection.cancel_event.set()
+        with self.assertRaisesRegex(etoro.EToroError, "^request_timeout$"):
+            transport(etoro.PORTFOLIO_PATH, headers())
+        self.connection.request.assert_not_called()
+        self.connection.close.assert_called_once()
+
+    def test_cancellation_during_final_approval_never_sends_request(self):
+        self.setup_transport()
+        checks = []
+
+        def approval_check():
+            checks.append(True)
+            if len(checks) == 3:
+                self.connection.cancel_event.set()
+
+        transport = etoro.EToroTransport(resolver=self.resolver, connection_factory=self.factory,
+                                         proxy_url="", before_request=approval_check)
+        with self.assertRaisesRegex(etoro.EToroError, "^request_timeout$"):
+            transport(etoro.PORTFOLIO_PATH, headers())
+        self.connection.connect.assert_called_once()
+        self.connection.request.assert_not_called()
+        self.connection.close.assert_called_once()
+
+    def test_timed_out_request_cannot_send_after_caller_returns(self):
+        entered, release = threading.Event(), threading.Event()
+        tls_socket, raw_socket, context = Mock(spec=ssl.SSLSocket), Mock(), Mock()
+        context.wrap_socket.return_value = tls_socket
+        state = {"connected": True}
+        delivered = []
+
+        def send(data):
+            if not state["connected"]:
+                raise OSError("synthetic disconnected socket")
+            delivered.append(data)
+
+        def shutdown(*args):
+            state["connected"] = False
+
+        tls_socket.sendall.side_effect = send
+
+        class PausedConnection(etoro.PinnedHTTPSConnection):
+            def request(self, *args, **kwargs):
+                entered.set()
+                release.wait(2.0)
+                return super().request(*args, **kwargs)
+
+        transport = etoro.EToroTransport(
+            resolver=lambda *args, **kwargs: records(), connection_factory=PausedConnection, proxy_url="")
+        with patch.object(etoro, "_DEADLINE_SECONDS", 0.25), \
+             patch.object(etoro.threading, "Timer"), \
+             patch.object(socket.socket, "shutdown", side_effect=shutdown), \
+             patch("market_intelligence.providers.ssl.create_default_context", return_value=context), \
+             patch("market_intelligence.providers.socket.create_connection", return_value=raw_socket):
+            try:
+                with self.assertRaisesRegex(etoro.EToroError, "^request_timeout$"):
+                    transport(etoro.PORTFOLIO_PATH, headers())
+                self.assertTrue(entered.is_set())
+            finally:
+                release.set()
+                acquired = etoro._REQUEST_SLOT.acquire(timeout=2.0)
+                if acquired:
+                    etoro._REQUEST_SLOT.release()
+            self.assertTrue(acquired)
+        self.assertEqual(delivered, [])
+
+    def test_timeout_shutdown_never_exposes_plaintext_during_concurrent_request(self):
+        for shutdown_fails in (False, True):
+            with self.subTest(shutdown_fails=shutdown_fails):
+                entered, released, sent = threading.Event(), threading.Event(), threading.Event()
+                state = {"protected": True, "connected": True}
+                plaintext = []
+                tls_socket = Mock(spec=ssl.SSLSocket)
+                connection = Mock(sock=tls_socket)
+
+                def request(*args, **kwargs):
+                    entered.set()
+                    released.wait(2.0)
+                    if state["connected"] and not state["protected"]:
+                        plaintext.append(kwargs["headers"]["x-user-key"])
+                    sent.set()
+                    raise OSError("synthetic cancelled request")
+
+                def unsafe_shutdown(*args):
+                    state["protected"] = False
+                    released.set()
+                    sent.wait(2.0)
+                    state["connected"] = False
+
+                def native_shutdown(*args):
+                    if shutdown_fails:
+                        raise OSError("synthetic shutdown failure")
+                    state["connected"] = False
+                    released.set()
+                    sent.wait(2.0)
+
+                def connection_close():
+                    state["protected"] = False
+                    released.set()
+                    sent.wait(2.0)
+
+                tls_socket.shutdown.side_effect = unsafe_shutdown
+                connection.request.side_effect = request
+                connection.close.side_effect = connection_close
+                transport = etoro.EToroTransport(
+                    resolver=lambda *args, **kwargs: records(),
+                    connection_factory=lambda *args: connection, proxy_url="")
+                with patch.object(etoro, "_DEADLINE_SECONDS", 0.25), \
+                     patch.object(etoro.threading, "Timer"), \
+                     patch.object(socket.socket, "shutdown", side_effect=native_shutdown):
+                    try:
+                        error = "cancellation_unconfirmed" if shutdown_fails else "request_timeout"
+                        with self.assertRaisesRegex(etoro.EToroError, "^" + error + "$"):
+                            transport(etoro.PORTFOLIO_PATH, headers())
+                        self.assertTrue(entered.is_set())
+                    finally:
+                        released.set()
+                        acquired = etoro._REQUEST_SLOT.acquire(timeout=2.0)
+                        if acquired:
+                            etoro._REQUEST_SLOT.release()
+                    self.assertTrue(acquired)
+                self.assertEqual(plaintext, [])
+
     def test_blocked_dns_returns_timeout_without_unbounded_workers_or_late_request(self):
         transport = self.setup_transport()
         release, finished = threading.Event(), threading.Event()

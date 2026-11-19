@@ -17,6 +17,7 @@ from proxy_config import configured_proxy_url, parse_proxy_url
 
 
 logger = logging.getLogger(__name__)
+_SOCKET_TYPE = socket.socket
 
 BLS_CALENDAR_URL = "https://www.bls.gov/schedule/news_release/bls.ics"
 BEA_CALENDAR_URL = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
@@ -48,6 +49,24 @@ class ProviderError(RuntimeError):
     def __init__(self, code):
         self.code = code
         super().__init__(code)
+
+
+def abort_connection(connection, active_socket=None):
+    if connection is None:
+        return True
+    active = active_socket or connection.sock
+    try:
+        if active is not None:
+            if isinstance(active, _SOCKET_TYPE):
+                # SSLSocket.shutdown clears TLS state before the native shutdown.
+                _SOCKET_TYPE.shutdown(active, socket.SHUT_RDWR)
+                return True
+            active.shutdown(socket.SHUT_RDWR)
+        connection.close()
+        return True
+    except Exception:
+        logger.warning("Connection cancellation could not be confirmed; a request may remain in flight")
+        return False
 
 
 @dataclass(frozen=True)
@@ -180,17 +199,7 @@ class CalendarTransport:
 
         def abort():
             deadline.set()
-            if connection is not None:
-                active = active_socket or connection.sock
-                if active is not None:
-                    try:
-                        active.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                try:
-                    connection.close()
-                except OSError:
-                    pass
+            abort_connection(connection, active_socket)
 
         timer = threading.Timer(15.0, abort)
         timer.daemon = True

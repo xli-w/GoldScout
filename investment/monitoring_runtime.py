@@ -1,7 +1,7 @@
 """Explicit monitoring orchestration; only approved read collection may contact eToro."""
 
 from datetime import timedelta
-import os
+import threading
 import uuid
 
 from . import InvestmentError
@@ -41,10 +41,15 @@ def collect_once(database, profile, cache_path, account_id, approval, *, allow_n
     from .etoro import EToroError, EToroTransport, collect_portfolio
 
     def credentials():
-        return {"x-api-key": os.environ.get("GOLDSCOUT_ETORO_API_KEY", ""),
-                "x-user-key": os.environ.get("GOLDSCOUT_ETORO_USER_KEY", "")}
+        from proxy_config import configured_connection_values
+
+        values = configured_connection_values("GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
+        return {"x-api-key": values["GOLDSCOUT_ETORO_API_KEY"],
+                "x-user-key": values["GOLDSCOUT_ETORO_USER_KEY"]}
 
     identifier = str(uuid.uuid4())
+    clock_lock = threading.Lock()
+    last_checked = started
 
     def failed(code, completed):
         append_attempt(cache_path, profile, {
@@ -54,14 +59,50 @@ def collect_once(database, profile, cache_path, account_id, approval, *, allow_n
         }, completed)
 
     def completion():
-        return explicit_clock(completion_clock()) if completion_clock else clock(now)
+        nonlocal last_checked
+        with clock_lock:
+            try:
+                checked = explicit_clock(completion_clock()) if completion_clock is not None else clock()
+            except Exception:
+                raise InvestmentError("Collection clock unavailable; no attempt recorded") from None
+            if checked < last_checked:
+                raise InvestmentError("Collection clock moved backwards; no attempt recorded")
+            last_checked = checked
+            return checked
+
+    def check_approval():
+        try:
+            checked = completion()
+            validate_approval(approval, profile, account_id, checked)
+        except InvestmentError:
+            raise EToroError("approval_interrupted") from None
 
     try:
-        result = (collector or collect_portfolio)(
-            transport if transport is not None else EToroTransport(),
-            credential_accessor or credentials)
+        selected_transport = transport if transport is not None else EToroTransport(before_request=check_approval)
+        check_approval()
+
+        def guarded_transport(path, headers):
+            check_approval()
+            return selected_transport(path, headers)
+
+        result = (collector or collect_portfolio)(guarded_transport, credential_accessor or credentials)
     except EToroError as exc:
+        if exc.code == "cancellation_unconfirmed":
+            warning = "eToro cancellation could not be confirmed; a request may remain in flight"
+            try:
+                completed = completion()
+            except InvestmentError:
+                raise InvestmentError(warning + "; collection clock unavailable or moved backwards; "
+                                      "no attempt recorded") from None
+            try:
+                failed("provider_unavailable", completed)
+            except Exception:
+                raise InvestmentError(warning + "; failed attempt recording could not be confirmed") from None
+            raise InvestmentError(warning + "; a failed attempt was recorded") from None
         completed = completion()
+        if exc.code == "approval_interrupted":
+            failed("collection_interrupted", completed)
+            raise InvestmentError("Collection approval expired or became unavailable before dispatch") from None
         code = ("permission_denied" if exc.code in ("authentication_refused", "permission_refused")
                 else "invalid_response" if exc.code in ("schema_invalid", "schema_unsupported", "payload_invalid")
                 else "provider_unavailable")

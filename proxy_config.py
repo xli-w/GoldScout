@@ -1,10 +1,10 @@
-"""Shared HTTP proxy configuration without import-time IO."""
+"""Shared connection configuration without import-time IO."""
 
 import base64
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Dict, Optional, TextIO, Tuple
 from urllib.parse import unquote, urlsplit
 
 from dotenv.parser import parse_stream
@@ -29,33 +29,48 @@ def _dotenv_loading_disabled() -> bool:
     return os.getenv("PYTHON_DOTENV_DISABLED", "").casefold() in {"1", "true", "t", "yes", "y"}
 
 
-def _parse_proxy_dotenv(stream: TextIO) -> str:
-    value = ""
+def _parse_proxy_dotenv(stream: TextIO, names: Tuple[str, ...]) -> Dict[str, str]:
+    values = {}
+    insensitive = os.name == "nt"
     for binding in parse_stream(stream):
         if binding.error:
-            raise ProxyConfigurationError("Cannot safely read TRADER_PROXY_URL from malformed dotenv configuration")
-        if binding.key == "TRADER_PROXY_URL":
-            if binding.value is None:
-                raise ProxyConfigurationError("TRADER_PROXY_URL requires an explicit dotenv value")
-            value = binding.value
-    return value
+            raise ProxyConfigurationError("Cannot safely read malformed connection configuration")
+        if binding.key is not None:
+            for name in names:
+                match = binding.key.upper() == name.upper() if insensitive else binding.key == name
+                if match:
+                    if binding.value is None:
+                        raise ProxyConfigurationError(f"{name} requires an explicit value")
+                    values[name] = binding.value
+    return values
 
 
-def _read_proxy_dotenv() -> str:
+def _read_connection_file(path: Path, names: Tuple[str, ...]) -> Dict[str, str]:
     try:
-        with DOTENV_PATH.open(encoding="utf-8") as stream:
-            return _parse_proxy_dotenv(stream)
+        path.lstat()
     except FileNotFoundError:
-        return ""
+        return {}
+    except OSError:
+        raise ProxyConfigurationError("Cannot safely read connection configuration") from None
+    try:
+        with path.open(encoding="utf-8") as stream:
+            return _parse_proxy_dotenv(stream, names)
+    except (OSError, UnicodeError):
+        raise ProxyConfigurationError("Cannot safely read connection configuration") from None
+
+
+def _read_proxy_dotenv(names: Tuple[str, ...]) -> Dict[str, str]:
+    # All connection reads pass through the offline runner's existing guard.
+    return _read_connection_file(DOTENV_PATH, names)
+
+
+def configured_connection_values(*names: str) -> Dict[str, str]:
+    values = {} if _dotenv_loading_disabled() else _read_proxy_dotenv(names) or {}
+    return {name: values[name] if name in values else os.getenv(name, "") for name in names}
 
 
 def configured_proxy_url() -> str:
-    value = os.getenv("TRADER_PROXY_URL")
-    if value is not None:
-        return value
-    if _dotenv_loading_disabled():
-        return ""
-    return _read_proxy_dotenv()
+    return configured_connection_values("TRADER_PROXY_URL")["TRADER_PROXY_URL"]
 
 
 def parse_proxy_url(value: str) -> Optional[HTTPProxy]:

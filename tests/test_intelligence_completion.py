@@ -4,13 +4,17 @@ import unittest
 from market_intelligence.analysis import AnalysisBrief, AnalysisLimits, EvidenceClaim, analysis_input
 from market_intelligence.store import IntelligenceStore, StoreError, initialize, upgrade
 from unittest.mock import Mock,patch
+import io
 import json
 import threading
 import socket
+import ssl
 import tempfile
 import traceback
+import proxy_config
 from market_intelligence.runtime import ProviderProfile, load_profiles
 from market_intelligence.analysis import SummaryRequest,AnalysisError
+from proxy_config import ProxyConfigurationError
 from test_intelligence_providers import FakeResponse
 from test_intelligence_controls import IntelligenceStoreFixture
 from market_intelligence.news import parse_fed_news
@@ -123,6 +127,59 @@ class DurableCompletionTests(IntelligenceStoreFixture,unittest.TestCase):
 
 
 class RuntimeProviderTests(unittest.TestCase):
+    def test_hosted_key_from_dotenv_overrides_environment_without_mutation(self):
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        connection = Mock(sock=None)
+        payload = {"choices": [{"finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "{}"}}]}
+        connection.getresponse.return_value = FakeResponse(json.dumps(payload).encode())
+        with patch.dict("os.environ", {"TRADER_AI_TEST": "environment-key"}), \
+             patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+             patch("proxy_config._read_proxy_dotenv",
+                   return_value={"TRADER_AI_TEST": "file-key"}) as read, \
+             patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses), \
+             patch("market_intelligence.runtime.configured_proxy_url", return_value=""), \
+             patch("market_intelligence.runtime.PinnedHTTPSConnection", return_value=connection):
+            ProviderProfile("test", "openai", "model", "TRADER_AI_TEST").complete(
+                SummaryRequest("system", "{}", 64), threading.Event())
+            import os
+            self.assertEqual(os.environ["TRADER_AI_TEST"], "environment-key")
+        self.assertEqual(connection.request.call_args.args[3]["Authorization"], "Bearer file-key")
+        read.assert_called_once_with(("TRADER_AI_TEST",))
+
+    def test_blank_or_malformed_dotenv_key_never_dispatches(self):
+        for result in ({"TRADER_AI_TEST": ""}, ProxyConfigurationError("Invalid connection settings")):
+            with self.subTest(result=type(result)), \
+                 patch.dict("os.environ", {"TRADER_AI_TEST": "environment-key"}), \
+                 patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+                 patch("proxy_config._read_proxy_dotenv") as read, \
+                 patch("market_intelligence.runtime.socket.getaddrinfo",
+                       side_effect=AssertionError("DNS must not be used")) as resolve:
+                if isinstance(result, Exception):
+                    read.side_effect = result
+                else:
+                    read.return_value = result
+                with self.assertRaises(AnalysisError) as caught:
+                    ProviderProfile("test", "openai", "model", "TRADER_AI_TEST").complete(
+                        SummaryRequest("system", "{}", 64), threading.Event())
+                self.assertEqual(caught.exception.code, "credential_unavailable")
+                resolve.assert_not_called()
+
+    def test_windows_case_insensitive_blank_key_blocks_environment_fallback(self):
+        contents = "TRADER_AI_TEST=initial\ntrader_ai_test=\n"
+        with patch.dict("os.environ", {"TRADER_AI_test": "environment-key"}), \
+             patch.object(proxy_config.os, "name", "nt"), \
+             patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+             patch("proxy_config._read_proxy_dotenv",
+                   side_effect=lambda names: proxy_config._parse_proxy_dotenv(io.StringIO(contents), names)), \
+             patch("market_intelligence.runtime.socket.getaddrinfo",
+                   side_effect=AssertionError("DNS must not be used")) as resolve:
+            with self.assertRaises(AnalysisError) as caught:
+                ProviderProfile("test", "openai", "model", "TRADER_AI_test").complete(
+                    SummaryRequest("system", "{}", 64), threading.Event())
+            self.assertEqual(caught.exception.code, "credential_unavailable")
+            resolve.assert_not_called()
+
     def test_anthropic_and_gemini_use_provider_specific_requests(self):
         examples = (
             ("anthropic", "claude-test", "api.anthropic.com", "/v1/messages",
@@ -193,7 +250,9 @@ class RuntimeProviderTests(unittest.TestCase):
                 {"name": "gemini", "kind": "gemini", "model": "gemini-test",
                  "key_env": "TRADER_AI_GEMINI"},
             ]), encoding="utf-8")
-            with patch("market_intelligence.runtime.os.getenv", side_effect=AssertionError("unexpected credential read")):
+            with patch("proxy_config.os.getenv", side_effect=AssertionError("unexpected credential read")), \
+                 patch("market_intelligence.runtime.configured_connection_values",
+                       side_effect=AssertionError("unexpected connection configuration read")):
                 profiles = load_profiles(path)
             self.assertEqual(set(profiles), {"claude", "gemini"})
 
@@ -208,7 +267,9 @@ class RuntimeProviderTests(unittest.TestCase):
             for content in examples:
                 with self.subTest(content=content):
                     path.write_text(content, encoding="utf-8")
-                    with patch("market_intelligence.runtime.os.getenv", side_effect=AssertionError("unexpected credential read")):
+                    with patch("proxy_config.os.getenv", side_effect=AssertionError("unexpected credential read")), \
+                         patch("market_intelligence.runtime.configured_connection_values",
+                               side_effect=AssertionError("unexpected connection configuration read")):
                         with self.assertRaises(ValueError):
                             load_profiles(path)
 
@@ -350,6 +411,70 @@ class RuntimeProviderTests(unittest.TestCase):
             with self.assertRaises(AnalysisError):
                 ProviderProfile("hosted","openai","model","TRADER_AI_TEST").complete(SummaryRequest("system","{}",64),cancelled)
         factory.assert_not_called()
+
+    def test_hosted_cancellation_keeps_inflight_credentials_under_tls(self):
+        entered, released, sent = threading.Event(), threading.Event(), threading.Event()
+        state = {"protected": True, "connected": True}
+        plaintext, errors, timers = [], [], []
+        tls_socket = Mock(spec=ssl.SSLSocket)
+        connection = Mock(sock=tls_socket)
+        cancelled = threading.Event()
+
+        def request(*args, **kwargs):
+            entered.set()
+            released.wait(2.0)
+            if state["connected"] and not state["protected"]:
+                plaintext.append(kwargs["headers"]["Authorization"])
+            sent.set()
+            raise OSError("synthetic cancelled request")
+
+        def unsafe_shutdown(*args):
+            state["protected"] = False
+            released.set()
+            sent.wait(2.0)
+            state["connected"] = False
+
+        def native_shutdown(*args):
+            state["connected"] = False
+            released.set()
+            sent.wait(2.0)
+
+        def close_connection():
+            state["protected"] = False
+            released.set()
+            sent.wait(2.0)
+
+        def timer_factory(delay, callback):
+            timers.append(callback)
+            return Mock()
+
+        def complete():
+            try:
+                ProviderProfile("hosted", "openai", "model", "TRADER_AI_TEST").complete(
+                    SummaryRequest("system", "{}", 64), cancelled)
+            except AnalysisError as exc:
+                errors.append(exc.code)
+
+        tls_socket.shutdown.side_effect = unsafe_shutdown
+        connection.request.side_effect = request
+        connection.close.side_effect = close_connection
+        records = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 443))]
+        with patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+             patch("market_intelligence.runtime.socket.getaddrinfo", return_value=records), \
+             patch("market_intelligence.runtime.PinnedHTTPSConnection", return_value=connection), \
+             patch("market_intelligence.runtime.threading.Timer", side_effect=timer_factory), \
+             patch.object(socket.socket, "shutdown", side_effect=native_shutdown):
+            worker = threading.Thread(target=complete)
+            try:
+                worker.start()
+                self.assertTrue(entered.wait(2.0))
+                timers[0]()
+            finally:
+                released.set()
+                worker.join(2.0)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, ["provider_unavailable"])
+        self.assertEqual(plaintext, [])
 
     def test_cancelled_local_connection_setup_does_not_dispatch(self):
         cancelled = threading.Event()

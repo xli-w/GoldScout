@@ -285,8 +285,17 @@ profile hash and selected local account alias:
 Approval has a maximum one-day lifetime and is an operator attestation, not an
 authenticated approval service or proof of permissions. The operator supplies
 `GOLDSCOUT_ETORO_API_KEY` and `GOLDSCOUT_ETORO_USER_KEY` privately through their
-environment, never command-line arguments, browser fields or committed files.
-Only the explicitly invoked collector reads them.
+project connection settings or environment, never command-line arguments,
+browser fields or committed files. See
+[connection configuration](intelligence.md#connection-configuration) for
+precedence and plaintext storage risks. Only the explicitly invoked collector
+uses them after its approval gates.
+Approval is checked against the current clock before dispatch, and again
+after DNS and TLS setup for the built-in adapter. An already dispatched
+request cannot be retracted; an expired approval prevents publishing its
+result. If cancellation cannot be confirmed, the collector reports that the
+request may still be in flight. If no trustworthy completion time is
+available, no attempt is recorded rather than inventing a timestamp.
 
 ```powershell
 python -m investment monitor-collect --database .\investment.sqlite3 --monitoring-profile .\monitoring.json --cache .\monitoring.sqlite3 --account-id broker --approval .\read-approval.json --allow-network

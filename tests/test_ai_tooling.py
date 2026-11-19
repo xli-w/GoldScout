@@ -84,8 +84,11 @@ class OfflineEnvironmentTests(unittest.TestCase):
         proxy = "http://sample:secret@proxy.invalid:8080"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.txt"
-            path.write_text(f"TRADER_PROXY_URL={proxy}\n", encoding="utf-8")
-            with patch.dict(os.environ, {"TRADER_PROXY_URL": proxy}), \
+            path.write_text(f"TRADER_PROXY_URL={proxy}\nTRADER_AI_SYNTHETIC=file-key\n"
+                            "GOLDSCOUT_ETORO_USER_KEY=file-user\n", encoding="utf-8")
+            with patch.dict(os.environ, {"TRADER_PROXY_URL": proxy,
+                                         "TRADER_AI_SYNTHETIC": "environment-key",
+                                         "GOLDSCOUT_ETORO_USER_KEY": "environment-user"}), \
                     patch.object(proxy_config, "DOTENV_PATH", path), \
                     patch.object(proxy_config, "_dotenv_loading_disabled", return_value=False), \
                     patch.object(proxy_config, "_read_proxy_dotenv",
@@ -94,6 +97,9 @@ class OfflineEnvironmentTests(unittest.TestCase):
                     self.assertEqual(os.environ["TRADER_PROXY_URL"], "")
                     os.environ.pop("TRADER_PROXY_URL")
                     self.assertEqual(proxy_config.configured_proxy_url(), "")
+                    self.assertEqual(proxy_config.configured_connection_values(
+                        "TRADER_AI_SYNTHETIC", "GOLDSCOUT_ETORO_USER_KEY"),
+                        {"TRADER_AI_SYNTHETIC": "", "GOLDSCOUT_ETORO_USER_KEY": ""})
                 reader.assert_not_called()
                 self.assertEqual(os.environ["TRADER_PROXY_URL"], proxy)
 
