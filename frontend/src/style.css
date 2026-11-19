@@ -15,6 +15,7 @@
 @media (max-width: 640px) { .setup-row { grid-template-columns: 1fr; } }
 .record-toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 22px; }
 .record-toolbar > .refresh { margin-left: auto; }
+.recording-access-note { margin: 0; }
 .history-chart { margin: 0 0 28px; padding: 16px 0; border-block: 1px solid var(--line); }
 .history-group[id] { scroll-margin-top: 20px; }
 .investment-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0 0 18px; }
@@ -361,6 +362,10 @@ tbody tr:hover { background: #182b21; }
 .investment-setup .setup-intro { max-width: 65ch; font-size: 16px; }
 .investment-setup .position-note { font-size: 13px; }
 .setup-draft-note { color: var(--amber); font-size: 13px; }
+.setup-preflight { max-width: 75ch; margin-block: 18px; padding: 14px 18px; border-left: 4px solid var(--green); background: var(--surface); }
+.setup-preflight h2 { margin: 0; font-size: 16px; }
+.setup-preflight ul { margin-bottom: 0; padding-left: 22px; }
+.field-error { display: block; color: var(--red); font-size: 12px; line-height: 1.5; }
 .setup-steps { gap: 12px 20px; padding: 16px 0; border-block: 1px solid var(--line); }
 .setup-steps li { color: var(--muted); }
 .setup-steps li[aria-current="step"] { color: var(--green); font-weight: 600; }
@@ -400,5 +405,8 @@ tbody tr:hover { background: #182b21; }
   .metrics { gap: 8px; }
   .investment-view .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metrics > div, .metrics > div:first-child, .metrics > div:nth-child(3) { padding: 14px 10px; border: 1px solid var(--line); }
+  .investment-view .metrics strong { font-size: clamp(15px, 4.8vw, 19px); }
+  .investment-view .metrics strong.unavailable { font-size: clamp(14px, 4vw, 17px); }
+  .investment-view .metrics .metric-amount-nowrap { white-space: nowrap; }
   .table-scroll::before { background: #192b23; }
 }

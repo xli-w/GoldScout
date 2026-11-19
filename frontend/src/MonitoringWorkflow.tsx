@@ -25,6 +25,8 @@ type Session = {
   accounts: { account_id: string; name: string; provider: string }[];
   products: { product_id: string; name: string }[];
 };
+type NamedAccount = Session["accounts"][number];
+type NamedProduct = Session["products"][number];
 type StagedHolding = { source_product: string; quantity: string };
 type ProductMapping = { source_product: string; product_id: string; evidence: string };
 type Comparison = { observed: string | null; recorded: string | null; difference: string | null; status: string };
@@ -43,9 +45,27 @@ type Reconciliation = {
 };
 type StagePreview = {
   preview_id: string; request_id: string; journal_revision: number; cache_revision: number;
+  mapping_observed_at: string;
   observation: Record<string, unknown>; reconciliation: Reconciliation;
   expires_at: string; investment_journal_changed: false; already_staged?: boolean;
 };
+
+function accountReference(accounts: NamedAccount[], id: string | null) {
+  if (id === null) return "No account mapping";
+  const account = accounts.find(item => item.account_id === id);
+  return account ? `${account.name} (${id})` : id;
+}
+
+function productReference(products: NamedProduct[], id: string | null) {
+  if (id === null) return "Unmapped";
+  const product = products.find(item => item.product_id === id);
+  return product ? `${product.name} (${id})` : id;
+}
+
+function optionLabel<T extends { name: string }>(items: T[], item: T, id: string) {
+  return items.filter(candidate => candidate.name === item.name).length > 1
+    ? `${item.name} (${id})` : item.name;
+}
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { cache: "no-store" });
@@ -111,14 +131,16 @@ function ActionRow({ item, inboxRevision, csrf, enabled, changed }: {
   </div>;
 }
 
-function ReconciliationSummary({ result }: { result: Reconciliation }) {
+function ReconciliationSummary({ result, accounts, products }: {
+  result: Reconciliation; accounts: NamedAccount[]; products: NamedProduct[];
+}) {
   return <section className="reconciliation-summary" aria-label="Reconciliation results">
     <h4>Comparison with your portfolio records</h4>
     <p>Status: <strong>{result.status === "matched" ? "Matched at the stated dates and times" : label(result.status)}</strong>.
       A match does not verify today's account balance or money available to spend.</p>
     {result.reason && <p>{label(result.reason)}</p>}
     {result.accounts?.map(account => <article key={account.source_account}>
-      <h5>{account.source_account} → {account.account_id ?? "No account mapping"}</h5>
+      <h5>{accountReference(accounts, account.source_account)} → {accountReference(accounts, account.account_id)}</h5>
       <dl className="review-dates">
         <div><dt>Snapshot applies at</dt><dd>{reviewTimestamp(account.observed_at)}</dd></div>
         <div><dt>Source available from</dt><dd>{reviewTimestamp(account.available_at)}</dd></div>
@@ -132,16 +154,18 @@ function ReconciliationSummary({ result }: { result: Reconciliation }) {
         <thead><tr><th>Investment in source</th><th>Recorded investment reference</th><th>Quantity in source</th>
           <th>Recorded quantity</th><th>Difference</th><th>Status</th></tr></thead>
         <tbody>{account.holdings.map((holding, index) => <tr key={`${holding.source_product}:${index}`}>
-          <td>{holding.source_product}</td><td>{holding.product_id ?? "Unmapped"}</td>
+          <td>{holding.source_product}</td><td>{productReference(products, holding.product_id)}</td>
           <td>{holding.observed ?? "unknown"}</td><td>{holding.recorded ?? "unavailable"}</td>
           <td>{holding.difference ?? "unavailable"}</td><td>{label(holding.status)}</td>
         </tr>)}</tbody>
       </table></div>}
-      {account.missing_recorded_products.length > 0 && <p>Recorded products not represented in this observation: {account.missing_recorded_products.join(", ")}.</p>}
+      {account.missing_recorded_products.length > 0 && <p>Recorded investments not represented in this observation: {account.missing_recorded_products
+        .map(id => productReference(products, id)).join(", ")}.</p>}
       <p>Coverage evidence: {account.coverage_evidence}</p>
     </article>)}
     {result.missing_recorded_accounts && result.missing_recorded_accounts.length > 0 &&
-      <p>Recorded accounts absent from this observation: {result.missing_recorded_accounts.join(", ")}.</p>}
+      <p>Recorded accounts absent from this observation: {result.missing_recorded_accounts
+        .map(id => accountReference(accounts, id)).join(", ")}.</p>}
     {result.limitations && <details><summary>Comparison limitations</summary>
       <ul>{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>
     </details>}
@@ -297,41 +321,41 @@ export function MonitoringWorkflowPage() {
         <p>No monitoring snapshot store has been selected. Configure the separate store before saving comparisons;
           your portfolio journal cannot be used in its place.</p>}
       {auth?.enabled && auth.cache_enabled && <>
-        <form className="recording-form" onSubmit={event => void previewObservation(event)}>
+        {!preview && <form className="recording-form" onSubmit={event => void previewObservation(event)}>
           <label>Account to compare<select required value={accountId || auth.accounts[0]?.account_id || ""}
-            onChange={event => setAccountId(event.target.value)}>
+            disabled={busy} onChange={event => setAccountId(event.target.value)}>
             {auth.accounts.map(item => <option key={item.account_id} value={item.account_id}>
-              {item.name}</option>)}
+              {optionLabel(auth.accounts, item, item.account_id)}</option>)}
           </select></label>
           <label>Snapshot reference (source observation ID)<input required maxLength={200} value={observationId}
             aria-label="Snapshot reference (source observation ID)" aria-describedby="snapshot-reference-help"
-            onChange={event => setObservationId(event.target.value)} />
+            disabled={busy} onChange={event => setObservationId(event.target.value)} />
             <small className="field-help" id="snapshot-reference-help">A stable reference for this source snapshot, not an account number.
               Reuse it for the same snapshot; do not reuse it for different figures.</small></label>
           <details className="help-disclosure"><summary>Advanced: save request reference and retries</summary>
             <label>Save request reference (attempt ID)<input maxLength={128} value={requestId}
-              onChange={event => setRequestId(event.target.value)} /></label>
+              disabled={busy} onChange={event => setRequestId(event.target.value)} /></label>
             <p>Leave blank to generate one on preview. Keep it unchanged when retrying the same snapshot.
               This identifies the request, not the source statement.</p>
           </details>
           <label>When do these figures apply? (leave blank if unknown)<input type="datetime-local" value={observedAt}
-            onChange={event => setObservedAt(event.target.value)} /></label>
+            disabled={busy} onChange={event => setObservedAt(event.target.value)} /></label>
           <label>When was this source available?<input required type="datetime-local" value={availableAt}
-            onChange={event => setAvailableAt(event.target.value)} /></label>
+            disabled={busy} onChange={event => setAvailableAt(event.target.value)} /></label>
           <label>Cash (GBP decimal; blank if unknown)<input inputMode="decimal" value={cash}
-            onChange={event => setCash(event.target.value)} /></label>
+            disabled={busy} onChange={event => setCash(event.target.value)} /></label>
           <label>How much does the source cover?<select aria-label="How much does the source cover?" aria-describedby="snapshot-coverage-help"
-            value={coverage} onChange={event => setCoverage(event.target.value as typeof coverage)}>
+            value={coverage} disabled={busy} onChange={event => setCoverage(event.target.value as typeof coverage)}>
             <option value="complete">All cash and holdings (declared by you)</option>
             <option value="partial">Some information only</option><option value="unknown">I cannot establish coverage</option>
           </select><small className="field-help" id="snapshot-coverage-help">An empty holdings list does not prove that the account has no investments.
             Unknown cash or quantity is not zero.</small></label>
           <label>When was the account or investment match established?<input required type="datetime-local" value={mappingAt}
-            aria-describedby="snapshot-mapping-help" onChange={event => setMappingAt(event.target.value)} />
+            aria-describedby="snapshot-mapping-help" disabled={busy} onChange={event => setMappingAt(event.target.value)} />
             <small className="field-help" id="snapshot-mapping-help">When the source identifying this account and any matched investments was available.
               Names alone are not proof of a match. If unknown, pause rather than guessing.</small></label>
           <label>Where did these figures come from?<input required maxLength={2000} value={evidence}
-            onChange={event => setEvidence(event.target.value)} /></label>
+            disabled={busy} onChange={event => setEvidence(event.target.value)} /></label>
           <p className="form-note">Enter each source time in your computer's local timezone. The preview shows the converted time
             as well. Keep the time figures apply separate from when the source became available.</p>
           <fieldset className="monitoring-entry-group">
@@ -339,15 +363,15 @@ export function MonitoringWorkflowPage() {
             <p>Enter only source evidence. Do not enter a row for an unknown quantity; coverage remains explicit.</p>
             {holdings.map((holding, index) => <div className="monitoring-entry-row" key={index}>
               <label>Investment name in source<input required value={holding.source_product}
-                onChange={event => setHoldings(rows => rows.map((row, i) => i === index
+                disabled={busy} onChange={event => setHoldings(rows => rows.map((row, i) => i === index
                   ? { ...row, source_product: event.target.value } : row))} /></label>
               <label>Number of units in source<input required inputMode="decimal" value={holding.quantity}
-                onChange={event => setHoldings(rows => rows.map((row, i) => i === index
+                disabled={busy} onChange={event => setHoldings(rows => rows.map((row, i) => i === index
                   ? { ...row, quantity: event.target.value } : row))} /></label>
               <button type="button" aria-label={`Remove observed holding ${index + 1}`}
-                onClick={() => setHoldings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
+                disabled={busy} onClick={() => setHoldings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
             </div>)}
-            <button type="button" onClick={() => setHoldings(rows => [...rows, { source_product: "", quantity: "" }])}>
+            <button type="button" disabled={busy} onClick={() => setHoldings(rows => [...rows, { source_product: "", quantity: "" }])}>
               Add observed holding</button>
           </fieldset>
           <fieldset className="monitoring-entry-group">
@@ -356,28 +380,28 @@ export function MonitoringWorkflowPage() {
               An unmatched investment cannot be fully compared.</p>
             {productMappings.map((mapping, index) => <div className="monitoring-entry-row" key={index}>
               <label>Investment name to match<input required value={mapping.source_product}
-                onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
+                disabled={busy} onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, source_product: event.target.value } : row))} /></label>
               <label>Recorded investment<select required value={mapping.product_id}
-                onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
+                disabled={busy} onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, product_id: event.target.value } : row))}>
                 <option value="">Choose an investment</option>
                 {auth.products.map(product => <option key={product.product_id} value={product.product_id}>
-                  {product.name}</option>)}
+                  {optionLabel(auth.products, product, product.product_id)}</option>)}
               </select></label>
               <label>Source supporting this match<input required value={mapping.evidence}
-                onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
+                disabled={busy} onChange={event => setProductMappings(rows => rows.map((row, i) => i === index
                   ? { ...row, evidence: event.target.value } : row))} /></label>
               <button type="button" aria-label={`Remove product mapping ${index + 1}`}
-                onClick={() => setProductMappings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
+                disabled={busy} onClick={() => setProductMappings(rows => rows.filter((_, i) => i !== index))}>Remove</button>
             </div>)}
             {auth.products.length === 0
               ? <p>No recorded investments are available to match. Source holdings can still be compared without a match.</p>
-              : <button type="button" onClick={() => setProductMappings(rows =>
+              : <button type="button" disabled={busy} onClick={() => setProductMappings(rows =>
                 [...rows, { source_product: "", product_id: "", evidence: "" }])}>Add investment match</button>}
           </fieldset>
           <button type="submit" disabled={busy || !csrf}>Preview comparison</button>
-        </form>
+        </form>}
         {preview && <div className="recording-preview observation-preview" role="region" aria-label="Observation reconciliation preview">
           <h3>Check this comparison before saving</h3>
           <p>{preview.already_staged ? "This identical save request is already in the monitoring store."
@@ -386,17 +410,18 @@ export function MonitoringWorkflowPage() {
           <dl className="review-dates">
             <div><dt>Snapshot applies at</dt><dd>{reviewTimestamp(typeof preview.observation.observed_at === "string" ? preview.observation.observed_at : null)}</dd></div>
             <div><dt>Source available from</dt><dd>{reviewTimestamp(typeof preview.observation.available_at === "string" ? preview.observation.available_at : null)}</dd></div>
+            <div><dt>Account and investment match known from</dt><dd>{reviewTimestamp(preview.mapping_observed_at)}</dd></div>
           </dl>
           <details className="help-disclosure"><summary>Exact snapshot and technical references</summary>
             <p>Journal revision {preview.journal_revision}; cache revision {preview.cache_revision}.
               Attempt ID: {preview.request_id}{preview.already_staged ? " (identical attempt already present)" : ""}.</p>
             <pre>{JSON.stringify(preview.observation, null, 2)}</pre>
           </details>
-          <ReconciliationSummary result={preview.reconciliation} />
+          <ReconciliationSummary result={preview.reconciliation} accounts={auth.accounts} products={auth.products} />
           <button type="button" disabled={busy} onClick={() => void confirmStage()}>
             Confirm and save monitoring snapshot only
           </button>
-          <button type="button" disabled={busy} onClick={() => setPreview(null)}>Discard preview</button>
+          <button type="button" disabled={busy} onClick={() => setPreview(null)}>Edit comparison</button>
         </div>}
       </>}
       {error && <p role="status">{error}</p>}

@@ -87,6 +87,28 @@ function pounds(value: string | null, exact = false) {
 }
 function percent(value: string | null) { return value === null ? "Unavailable" : `${new Decimal(value).toFixed(2)}%`; }
 
+function accountDisplay(data: OpeningSnapshot, id: string) {
+  const account = data.accounts.find(item => item.id === id);
+  if (!account) return id;
+  return data.accounts.filter(item => item.name === account.name).length > 1
+    ? `${account.name} (${id})` : account.name;
+}
+
+function accountReference(data: OpeningSnapshot, id: string | null) {
+  if (id === null) return "Not applicable";
+  const account = data.accounts.find(item => item.id === id);
+  return account ? `${account.name} (${id})` : id;
+}
+
+function productReference(data: OpeningSnapshot, id: string | null) {
+  if (id === null) return "GBP cash";
+  const held = data.holdings.find(item => item.product_id === id);
+  const profileName = [...data.recorded_profile_changes].reverse().find(item =>
+    item.target === "product" && item.entity_id === id && item.name !== null)?.name;
+  const name = held?.name ?? profileName;
+  return name ? `${name} (${id})` : id;
+}
+
 function evidenceAge(value: string | null, now: number) {
   if (value === null) return "Age unavailable";
   const age = now - Date.parse(value);
@@ -149,6 +171,12 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
     !new Decimal(observation.difference_gbp).isZero());
   const needsAttention = !data.complete || data.recorded_corrections.length > 0 ||
     data.baseline_as_of === null || data.twr_pct === null || data.max_drawdown_pct === null || hasDifferences;
+  const priceAction = (holding: OpeningSnapshot["holdings"][number]) => data.source_mode === "recorded"
+    ? <NavLink aria-label={`Add a checked price for ${holding.name} in ${accountDisplay(data, holding.account_id)}`}
+      to={`/investment/record?record=missing-price&account_id=${encodeURIComponent(holding.account_id)}&product_id=${encodeURIComponent(holding.product_id)}`}>
+      add a checked price
+    </NavLink>
+    : <NavLink to="/investment-guide#recording-prices">how to add a checked price</NavLink>;
   return <section className="history-group investment-next-steps" aria-label="What needs attention">
     <h2>What needs attention</h2>
     {data.source_mode === "demo" && <p><strong>Synthetic demonstration:</strong> these are illustrative records, not your accounts.</p>}
@@ -158,15 +186,20 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
         {unmarked.length > 0
           ? <>A complete total needs prices for every holding. {unmarked.slice(0, 5).map((holding, index) =>
               <span key={`${holding.account_id}:${holding.product_id}`}>
-                {index > 0 ? ", " : ""}{holding.name}
-                {" "}({data.accounts.find(account => account.id === holding.account_id)?.name ?? holding.account_id})
+                {index > 0 ? "; " : ""}{holding.name}
+                {" "}({accountDisplay(data, holding.account_id)}):{" "}
+                {priceAction(holding)}
               </span>)}{unmarked.length > 5 ? ` and ${unmarked.length - 5} more` : ""}.
+              {unmarked.length > 5 && <details className="help-disclosure">
+                <summary>Show {unmarked.length - 5} more holdings without prices</summary>
+                <ul>{unmarked.slice(5).map(holding => <li key={`${holding.account_id}:${holding.product_id}`}>
+                  {holding.name} ({accountDisplay(data, holding.account_id)}): {priceAction(holding)}
+                </li>)}</ul>
+              </details>}
               {" "}<a href="#investment-holdings">Review holdings</a>.</>
           : "A complete portfolio total is unavailable for the recorded date. Missing or late information is not zero."}
-        {!data.complete && <p>Use a dated source to record the missing prices. A later price cannot fill an earlier gap.
-          {" "}{data.source_mode === "recorded"
-            ? <NavLink to="/investment/record">Add a price record</NavLink>
-            : <NavLink to="/investment-guide#recording-prices">Learn how to add a price</NavLink>}.</p>}
+        {!data.complete && unmarked.length > 0 && <p>Use a source that supports the price and the date it applied. If the source became available later, it cannot complete an earlier valuation. The price link opens a draft for that holding; verify the account, investment, price and both dates before previewing.</p>}
+        {!data.complete && unmarked.length === 0 && <p>A later price cannot fill an earlier gap. Check the recorded dates and source before adding or correcting anything.</p>}
       </li>}
       {data.recorded_corrections.length > 0
         ? <li>Historical corrections make performance unavailable. Later prices cannot undo this, and no new starting point is created automatically.
@@ -176,7 +209,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
           or necessarily restore past returns.{" "}<NavLink to="/investment-guide#performance-gaps">Understand missing performance</NavLink>.</li>
         : (data.twr_pct === null || data.max_drawdown_pct === null) &&
           <li>Return or largest fall is unavailable. A complete total does not restore missing performance history.
-            {" "}<a href="#investment-performance">Review recorded performance gaps</a>.</li>}
+            {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>Review recorded performance gaps</a>.</li>}
       {hasDifferences && <li>Earlier cash observations differ from the journal. A later match does not resolve a past difference or prove a current one.
         {" "}<a href="#investment-accounts" onClick={onReviewCashEvidence}>Review cash evidence</a>.
       </li>}
@@ -187,11 +220,11 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
 function AccountAndHoldingsSummary({ data }: { data: OpeningSnapshot }) {
   return <section className="history-group portfolio-summary" id="investment-account-summary" aria-label="Accounts and investments">
     <h2>Your accounts and investments</h2>
-    <p className="position-note">Balances and holdings recorded for the date shown above; they are not live provider balances.</p>
+    <p className="position-note">Cash and unit counts are the latest journal records, not live balances. Their dates may differ from the valuation above.</p>
     <h3>Accounts and cash</h3>
     <dl className="health-facts">
       {data.accounts.map(account => <div key={account.id}>
-        <dt>{account.name}{account.status === "retired" ? " · no longer included" : ""}</dt>
+        <dt>{accountDisplay(data, account.id)}{account.status === "retired" ? " · no longer included" : ""}</dt>
         <dd>{label(account.kind)} · {pounds(account.cash_gbp)}</dd>
       </div>)}
     </dl>
@@ -202,12 +235,25 @@ function AccountAndHoldingsSummary({ data }: { data: OpeningSnapshot }) {
           <thead><tr><th>Investment</th><th>Account</th><th>Units</th><th>Recorded value</th></tr></thead>
           <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}>
             <td>{holding.name}</td>
-            <td>{data.accounts.find(account => account.id === holding.account_id)?.name ?? holding.account_id}</td>
+            <td>{accountDisplay(data, holding.account_id)}</td>
             <td>{holding.quantity}</td>
             <td>{pounds(holding.value_gbp)}</td>
           </tr>)}</tbody>
         </table>
       </div>}
+    {data.holdings.length > 0 && <details className="help-disclosure">
+      <summary>Price dates and source availability</summary>
+      <p>These are the dates for each holding's latest recorded price. Missing is not zero.</p>
+      <div className="table-scroll"><table>
+        <thead><tr><th>Investment</th><th>Account</th><th>Price applies at</th><th>Source available from</th></tr></thead>
+        <tbody>{data.holdings.map(holding => <tr key={`${holding.account_id}:${holding.product_id}`}>
+          <td>{holding.name}</td>
+          <td>{accountDisplay(data, holding.account_id)}</td>
+          <td>{holding.mark_at === null ? "No recorded price" : timestamp(holding.mark_at)}</td>
+          <td>{holding.mark_available_at === null ? "Not available" : timestamp(holding.mark_available_at)}</td>
+        </tr>)}</tbody>
+      </table></div>
+    </details>}
   </section>;
 }
 
@@ -566,10 +612,12 @@ async function recordingRequest<T>(path: string, csrf?: string, payload?: unknow
 }
 
 function InvestmentRecording() {
+  const { search } = useLocation();
   const [session, setSession] = useState<RecordingSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [kind, setKind] = useState("opening");
   const [recordGroup, setRecordGroup] = useState("");
+  const [priceTargetStatus, setPriceTargetStatus] = useState<"matched" | "stale" | null>(null);
   const [role, setRole] = useState<"core" | "dynamic" | "unassigned">("unassigned");
   const [assignmentAsset, setAssignmentAsset] = useState<"cash" | "holding">("cash");
   const [accountId, setAccountId] = useState("");
@@ -615,30 +663,65 @@ function InvestmentRecording() {
   const [storageError, setStorageError] = useState(pendingState.error);
   const resolvedConfirmation = useRef(false);
 
-  async function refreshSession() {
-    try {
-      const result = await recordingRequest<RecordingSession>(
-        "/api/investment/v1/recording/session");
-      setSession(result);
-      setLoadError(null);
-      if (result.accounts.length && !accountId) setAccountId(result.accounts[0].id);
-      if (result.products.length && !productId) setProductId(result.products[0].id);
-      if (result.accounts.length > 1 && !destinationAccountId)
-        setDestinationAccountId(result.accounts[1].id);
-      setBalances(current => Object.keys(current).length ? current :
-        Object.fromEntries(result.accounts.map(account => [account.id, ""])));
-      setScopeBalances(current => Object.keys(current).length ? current :
-        Object.fromEntries(result.accounts.map(account => [account.id, ""])));
-      setScopeHoldings(current => current.length ? current : result.current_holdings.map(holding => ({
-        ...holding, price_gbp: "", existing: true,
-      })));
-      if (result.opened) setKind(current => current === "opening" ? "" : current);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "recording_session_unavailable");
+  useEffect(() => {
+    let active = true;
+    async function refreshSession() {
+      try {
+        const result = await recordingRequest<RecordingSession>(
+          "/api/investment/v1/recording/session");
+        if (!active) return;
+        setSession(result);
+        setLoadError(null);
+        const params = new URLSearchParams(search);
+        const missingPrice = params.get("record") === "missing-price";
+        const requestedAccount = params.get("account_id");
+        const requestedProduct = params.get("product_id");
+        const account = result.accounts.find(item => item.id === requestedAccount && item.kind === "broker");
+        const product = result.products.find(item => item.id === requestedProduct);
+        const stillHeld = result.current_holdings.some(item =>
+          item.account_id === requestedAccount && item.product_id === requestedProduct);
+        if (missingPrice) {
+          if (result.opened) {
+            setRecordGroup("investment");
+            setKind("mark");
+            if (account && product && stillHeld) {
+              setAccountId(account.id);
+              setProductId(product.id);
+              setPriceTargetStatus("matched");
+            } else {
+              setAccountId("");
+              setProductId("");
+              setPriceTargetStatus("stale");
+            }
+          } else {
+            setRecordGroup("");
+            setKind("opening");
+            setAccountId("");
+            setProductId("");
+            setPriceTargetStatus("stale");
+          }
+        } else {
+          setPriceTargetStatus(null);
+          if (result.accounts.length && !accountId) setAccountId(result.accounts[0].id);
+          if (result.products.length && !productId) setProductId(result.products[0].id);
+          if (result.opened) setKind(current => current === "opening" ? "" : current);
+        }
+        if (result.accounts.length > 1 && !destinationAccountId)
+          setDestinationAccountId(result.accounts[1].id);
+        setBalances(current => Object.keys(current).length ? current :
+          Object.fromEntries(result.accounts.map(item => [item.id, ""])));
+        setScopeBalances(current => Object.keys(current).length ? current :
+          Object.fromEntries(result.accounts.map(item => [item.id, ""])));
+        setScopeHoldings(current => current.length ? current : result.current_holdings.map(holding => ({
+          ...holding, price_gbp: "", existing: true,
+        })));
+      } catch (error) {
+        if (active) setLoadError(error instanceof Error ? error.message : "recording_session_unavailable");
+      }
     }
-  }
-
-  useEffect(() => { void refreshSession(); }, []);
+    void refreshSession();
+    return () => { active = false; };
+  }, [search]);
   useEffect(() => {
     const changed = (event: StorageEvent) => {
       if (event.key !== PENDING_RECORDING_KEY && event.key !== null) return;
@@ -868,6 +951,12 @@ function InvestmentRecording() {
   return <section className="history-group investment-recording" aria-label="Manual recording">
     <h2>Add a portfolio record</h2>
     <p>Copy a transaction or balance from your records, then check the preview before saving. Your entries are not independently verified.</p>
+    {priceTargetStatus === "matched" && <p className="position-note" role="status">
+      Started from a missing-price reminder. The account and investment are preselected from the saved portfolio; verify them and use a source that supports the price and both dates. This record does not repair earlier gaps automatically.
+    </p>}
+    {priceTargetStatus === "stale" && <p className="position-note" role="status">
+      This missing-price reminder no longer matches a held investment in the current records. Nothing was preselected; check the current holdings before choosing an account or investment.
+    </p>}
     {preview ? <div className="recording-preview" role="group" aria-label="Review record before confirmation">
       <h3>Review before recording</h3>
       <dl className="health-facts">
@@ -1090,6 +1179,7 @@ function InvestmentRecording() {
       </>}
       {kind !== "opening" && kind !== "correction" && <label>Account<select required value={accountId}
         onChange={event => { setAccountId(event.target.value); setRoleEvidence(""); }}>
+        <option value="">Choose account</option>
         {session.accounts.map(account => <option key={account.id} value={account.id}>{account.name} ({label(account.kind)})</option>)}
       </select></label>}
       {(kind === "transfer" || kind === "correction" && correction?.type === "transfer") &&
@@ -1102,6 +1192,7 @@ function InvestmentRecording() {
         kind === "correction" && ["dividend", "buy", "sell", "mark", "split"].includes(recordType ?? "") ||
         kind === "role_assignment" && assignmentAsset === "holding") && <label>Investment<select required value={productId}
         onChange={event => { setProductId(event.target.value); setRoleEvidence(""); }}>
+        <option value="">Choose investment</option>
         {session.products.map(product => <option key={product.id} value={product.id}>{product.name} ({product.id})</option>)}
       </select></label>}
       {(["contribution", "withdrawal", "interest", "dividend", "transfer", "cash_observation", "role_assignment"]
@@ -1187,10 +1278,18 @@ export function InvestmentView({ now }: { now: number }) {
   const query = useQuery({ queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal), refetchInterval: 60000 });
   const accountsRef = useRef<HTMLDetailsElement>(null);
   const data = query.isError ? undefined : query.data;
+  const metricValues = data ? [
+    pounds(data.equity_gbp),
+    pounds(data.net_contributions_gbp),
+    pounds(data.since_baseline_gain_gbp),
+  ] : [];
   return <article className="investment-view">
     <div className="record-toolbar">
       <NavLink className="text-link" to="/investment-guide">Help</NavLink>
       {data?.source_mode === "recorded" && <NavLink className="record-action" to="/investment/record">Add a record</NavLink>}
+      {data?.source_mode === "recorded" && <span className="position-note recording-access-note">
+        Manual recording must be enabled at startup. If it is off, this page explains how to restart.
+      </span>}
       <button className="icon-button refresh" aria-label="Refresh investment" disabled={query.isFetching} onClick={() => void query.refetch()}>
         <RefreshCw size={19} className={query.isFetching ? "spin" : ""} />
       </button>
@@ -1214,14 +1313,14 @@ export function InvestmentView({ now }: { now: number }) {
             </details>
           </section>
           <section className="metrics" aria-label="Investment totals">
-            <div><span>Portfolio value</span><strong>{pounds(data.equity_gbp)}</strong><small>GBP, recorded valuation</small></div>
-            <div><span>Net money added</span><strong>{pounds(data.net_contributions_gbp)}</strong><small>Money in minus money out</small></div>
-            <div><span>Gain since tracking began</span><strong>{pounds(data.since_baseline_gain_gbp)}</strong><small>Since the starting value; net of recorded fees</small></div>
+            <div><span>Portfolio value</span><strong className={metricValues[0].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[0]}</strong><small>GBP, recorded valuation</small></div>
+            <div><span>Net money added</span><strong className={metricValues[1].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[1]}</strong><small>Money in minus money out</small></div>
+            <div><span>Gain since tracking began</span><strong className={metricValues[2].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[2]}</strong><small>Since the starting value; net of recorded fees</small></div>
           </section>
-          <AccountAndHoldingsSummary data={data} />
           <InvestmentNextSteps data={data} onReviewCashEvidence={() => {
             if (accountsRef.current) accountsRef.current.open = true;
           }} />
+          <AccountAndHoldingsSummary data={data} />
           <section className="history-group">
             <h2>Performance summary</h2>
             <dl className="health-facts">
@@ -1263,10 +1362,10 @@ export function InvestmentView({ now }: { now: number }) {
               <summary>{label(item.role)} by account and holding</summary>
               <ul>
                 {item.accounts.map(account => <li key={account.account_id}>
-                  {account.account_id}: {pounds(account.cash_gbp)} recorded cash
+                  {accountReference(data, account.account_id)}: {pounds(account.cash_gbp)} recorded cash
                 </li>)}
                 {item.holdings.map(holding => <li key={`${holding.account_id}:${holding.product_id}`}>
-                  {holding.account_id} · {holding.product_id}: {holding.quantity} units
+                  {accountReference(data, holding.account_id)} · {productReference(data, holding.product_id)}: {holding.quantity} units
                 </li>)}
               </ul>
             </details>)}
@@ -1275,8 +1374,8 @@ export function InvestmentView({ now }: { now: number }) {
               <div className="table-scroll" tabIndex={0} aria-label="Role attribution history">
               <table><thead><tr><th>Attribution clock</th><th>Role</th><th>Account</th><th>Asset</th><th>Amount / quantity</th><th>Evidence</th></tr></thead>
                 <tbody>{data.role_assignments.slice(-100).map(item => <tr key={item.id}>
-                  <td>{timestamp(item.timestamp)}</td><td>{label(item.role)}</td><td>{item.account_id}</td>
-                  <td>{item.product_id ?? "GBP cash"}</td><td>{item.amount}</td><td>{item.evidence}</td>
+                  <td>{timestamp(item.timestamp)}</td><td>{label(item.role)}</td><td>{accountReference(data, item.account_id)}</td>
+                  <td>{productReference(data, item.product_id)}</td><td>{item.amount}</td><td>{item.evidence}</td>
                 </tr>)}</tbody></table>
               </div>
             </details>}
@@ -1309,7 +1408,8 @@ export function InvestmentView({ now }: { now: number }) {
                   <thead><tr><th>Effective at (UTC)</th><th>Side</th><th>Role</th><th>Account</th><th>Product</th><th>Quantity</th><th>Price</th><th>Fee</th><th>Available at</th><th>Evidence</th></tr></thead>
                   <tbody>{data.recorded_fee_events.slice(-100).map(event =>
                     <tr key={event.id}><td>{timestamp(event.timestamp)}</td><td>{label(event.type)}</td>
-                      <td>{label(event.role)}</td><td>{event.account_id}</td><td>{event.product_id}</td><td>{event.quantity}</td>
+                      <td>{label(event.role)}</td><td>{accountReference(data, event.account_id)}</td>
+                      <td>{productReference(data, event.product_id)}</td><td>{event.quantity}</td>
                       <td>{pounds(event.price_gbp)}</td><td>{pounds(event.fee_gbp)}</td>
                       <td>{timestamp(event.available_at)}</td><td>{event.evidence}</td></tr>)}</tbody>
                 </table>
@@ -1323,7 +1423,8 @@ export function InvestmentView({ now }: { now: number }) {
                   <thead><tr><th>Effective at (UTC)</th><th>Type</th><th>Role</th><th>Account</th><th>Product</th><th>Amount</th><th>Available at</th><th>Evidence</th><th>Role allocation evidence</th></tr></thead>
                   <tbody>{data.recorded_income_events.slice(-100).map(event =>
                     <tr key={event.id}><td>{timestamp(event.timestamp)}</td><td>{label(event.type)}</td>
-                      <td>{label(event.role)}</td><td>{event.account_id}</td><td>{event.product_id ?? "Not applicable"}</td>
+                      <td>{label(event.role)}</td><td>{accountReference(data, event.account_id)}</td>
+                      <td>{event.product_id === null ? "Not applicable" : productReference(data, event.product_id)}</td>
                       <td>{pounds(event.amount_gbp)}</td><td>{timestamp(event.available_at)}</td>
                       <td>{event.evidence}</td><td>{event.role_evidence ?? "Not recorded"}</td></tr>)}</tbody>
                 </table>
@@ -1340,9 +1441,11 @@ export function InvestmentView({ now }: { now: number }) {
                   <thead><tr><th>Effective at (UTC)</th><th>Type</th><th>Role</th><th>Account</th><th>Other side</th><th>Recorded amount</th><th>Available at</th><th>Evidence</th></tr></thead>
                   <tbody>{data.recorded_flow_events.slice(-100).map(event =>
                     <tr key={event.id}><td>{timestamp(event.timestamp)}</td><td>{label(event.type)}</td>
-                      <td>{label(event.role)}</td><td>{event.account_id}</td>
-                      <td>{event.destination_account_id ??
-                        (event.type === "contribution" ? "External source" : "External destination")}</td>
+                      <td>{label(event.role)}</td><td>{accountReference(data, event.account_id)}</td>
+                      <td>{event.destination_account_id === null
+                        ? (event.type === "contribution" ? "External source" : "External destination")
+                        : accountReference(data, event.destination_account_id)}
+                      </td>
                       <td>{pounds(event.amount_gbp)}</td><td>{timestamp(event.available_at)}</td>
                       <td>{event.evidence}</td></tr>)}</tbody>
                 </table>
@@ -1356,7 +1459,8 @@ export function InvestmentView({ now }: { now: number }) {
                 <table><thead><tr><th>Effective at (UTC)</th><th>Record type / account</th><th>Role</th><th>Original amount</th><th>Replacement amount</th><th>Evidence available at</th><th>Reason and evidence</th><th>Role allocation evidence</th></tr></thead>
                   <tbody>{data.recorded_corrections.slice(-100).map(item =>
                     <tr key={item.id}><td>{timestamp(item.timestamp)}</td>
-                      <td>{label(item.replaced_type)}{item.account_id ? ` · ${item.account_id}` : ""}</td><td>{label(item.role)}</td>
+                      <td>{label(item.replaced_type)}{item.account_id ? ` · ${accountReference(data, item.account_id)}` : ""}</td>
+                      <td>{label(item.role)}</td>
                       <td>{pounds(item.original_amount_gbp)}</td>
                       <td>{pounds(item.replacement_amount_gbp)}</td>
                       <td>{timestamp(item.available_at)}</td><td>{item.evidence}</td><td>{item.role_evidence ?? "Not recorded"}</td></tr>)}</tbody>
@@ -1369,12 +1473,15 @@ export function InvestmentView({ now }: { now: number }) {
               <p className="position-note">Names can change, while account/product identities and financial semantics remain fixed. Retired entries remain visible. Funded account scope additions are unitization-neutral and are not external contributions.</p>
               <p className="position-note">Recorded scope additions: {pounds(data.recorded_scope_additions_gbp)}</p>
               <ul>{data.recorded_profile_changes.slice(-100).map(item =>
-                <li key={item.id}>{label(item.action)} · {label(item.target)} {item.name ?? item.entity_id}
-                  {item.name ? ` (${item.entity_id})` : ""} at {timestamp(item.timestamp)}; available at {timestamp(item.available_at)}. {item.evidence}</li>)}</ul>
+                <li key={item.id}>{label(item.action)} · {label(item.target)} {item.name
+                  ? `${item.name} (${item.entity_id})`
+                  : item.target === "account" ? accountReference(data, item.entity_id)
+                    : productReference(data, item.entity_id)}
+                  at {timestamp(item.timestamp)}; available at {timestamp(item.available_at)}. {item.evidence}</li>)}</ul>
               {data.recorded_scope_additions.length > 0 &&
                 <ul aria-label="Unitization-neutral scope additions">
                   {data.recorded_scope_additions.slice(-100).map(item =>
-                    <li key={item.id}>{item.account_id}: {pounds(item.amount_gbp)} at {timestamp(item.timestamp)}; {item.evidence}</li>)}
+                    <li key={item.id}>{accountReference(data, item.account_id)}: {pounds(item.amount_gbp)} at {timestamp(item.timestamp)}; {item.evidence}</li>)}
                 </ul>}
             </section>}
           </details>
@@ -1391,7 +1498,7 @@ export function InvestmentView({ now }: { now: number }) {
                   <thead><tr><th>Observed at (UTC)</th><th>Account</th><th>Balance</th><th>Difference (observed minus recorded)</th><th>Available at</th><th>Source and evidence</th></tr></thead>
                   <tbody>{[...data.cash_observations].reverse().slice(0, 100).map((observation, index) =>
                     <tr key={`${observation.account_id}:${observation.timestamp}:${index}`}>
-                      <td>{timestamp(observation.timestamp)}</td><td>{observation.account_id}</td>
+                      <td>{timestamp(observation.timestamp)}</td><td>{accountReference(data, observation.account_id)}</td>
                       <td>{pounds(observation.balance_gbp, true)}</td><td>{pounds(observation.difference_gbp, true)}</td>
                       <td>{timestamp(observation.available_at)}</td>
                       <td>{observation.source} · {observation.evidence}</td>
@@ -1474,12 +1581,27 @@ export function InvestmentGuide() {
     <section id="monitoring-setup"><h2>Optional checks and market context</h2>
       <p>Optional checks compare saved information and can help you review differences. A comparison does not change your portfolio records or verify an account.</p>
       <p>Market context shows separate public information. It is not needed to use your portfolio and does not make decisions or trade. Neither view starts provider collection when opened.</p>
-      <p>These features need separate local configuration. Private account records must never be sent to hosted AI.</p>
+      <p>To enable local checks, ask the person who set up GoldScout to follow the local profile and dashboard steps in <code>docs/monitoring.md</code>.
+        It requires a separate monitoring profile and explicitly selected stores; this page cannot enable them. Snapshot comparisons need extra setup.
+        The dashboard reads saved local evidence; provider collection, if configured, is a separate explicit operation.</p>
+      <p>Market context also needs its own optional local configuration. Private account records must never be sent to hosted AI.</p>
     </section>
     <section id="backup-recovery"><h2>Backup and recovery</h2>
-      <p>GoldScout does not create or check backups. Stop the dashboard before making one. Use the validated backup command to copy the journal to a new, protected location; it will not replace an existing file.</p>
-      <p>Keep source documents and setup receipts separately, and keep a protected copy away from this computer. The backup is not encrypted automatically. Test recovery to a new location rather than replacing your active records.</p>
-      <p>The complete procedure is in <code>docs/investment-journal.md</code> for source-checkout users. If you did not install GoldScout from a source checkout, ask the person who set it up to help with a verified backup.</p>
+      <p>GoldScout does not create or check backups. Only the person responsible for this workspace should arrange one.
+        Before copying, stop the dashboard and any other process that can write to the journal. Keep source documents and setup receipts separately.</p>
+      <details className="help-disclosure"><summary>Backup steps for a source checkout</summary>
+        <ol>
+          <li>Use the exact journal path selected when GoldScout was started. Choose an existing protected destination folder and a new filename.</li>
+          <li>Run the validated backup command. It refuses to replace an existing file:</li>
+        </ol>
+        <pre>python -m investment backup --database .\investment.sqlite3 --destination .\backups\investment-backup.sqlite3</pre>
+        <p>These paths are examples: replace them with your actual journal path and a new destination. Do not copy the command unchanged.
+          The backup is not encrypted automatically.</p>
+        <ol start={3}><li>Follow <code>docs/investment-journal.md</code> to verify the receipt and test a restore to a fresh path.
+          Never restore over your active journal.</li></ol>
+      </details>
+      <p>If you did not install GoldScout from a source checkout, ask the person who set it up to arrange a verified backup.
+        Keep a protected copy away from this computer.</p>
     </section>
     <section><h2>About your records</h2>
       <p>Figures are entered by you and are not checked with a bank or broker. The dashboard is read-only unless manual recording is explicitly enabled when it starts. Keep it on this computer; there is no sign-in.</p>

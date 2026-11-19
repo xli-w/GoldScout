@@ -96,6 +96,12 @@ async function accountStep(page, broker = false) {
   await page.getByRole("checkbox", { name: /These are the GBP accounts I want to track/ }).check();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 }
+async function confirmOpeningContext(page, recoveryEntry = false) {
+  const label = recoveryEntry
+    ? /re-entered figures, source and dates match the original opening record/
+    : /I checked that every starting figure is current/;
+  await page.getByRole("checkbox", { name: label }).check();
+}
 async function evidenceStep(page, recoveryEntry = false) {
   if (recoveryEntry) {
     await page.getByLabel("Balances as of (local time)").fill("2026-01-01T10:00");
@@ -103,24 +109,70 @@ async function evidenceStep(page, recoveryEntry = false) {
   }
   await page.getByLabel("Cash for Synthetic savings (GBP)").fill("1234.56");
   await page.getByLabel("Where did these figures come from?").fill("Synthetic dated statement, selected scope only.");
+  await confirmOpeningContext(page, recoveryEntry);
 }
 async function depositPreview(page) {
   await accountStep(page);
   await expect(page.getByRole("heading", { name: "Starting balances", exact: true })).toBeVisible();
   await expect(page.locator(".setup-steps")).toContainText("2. Starting balances");
+  await expect(page.getByText(/only savings \/ deposit accounts; no investment holdings are needed/)).toBeVisible();
   await evidenceStep(page);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
 }
+
+test("cash-only setup skips investments in both directions", async ({ page }) => {
+  await setupRoutes(page);
+  await unlock(page);
+  await accountStep(page);
+  await expect(page.getByRole("heading", { name: "Starting balances", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Starting balances", exact: true })).toBeVisible();
+  await expect(page.locator(".setup-steps")).toContainText("2. Starting balances");
+  await expect(page.locator(".setup-steps")).not.toContainText("Investments");
+  await expect(page.getByRole("button", { name: "Add holding", exact: true })).toHaveCount(0);
+});
+
+test("starting figures must be confirmed current before a preview can be requested", async ({ page }) => {
+  const api = await setupRoutes(page);
+  await unlock(page);
+  await accountStep(page);
+  await page.getByLabel("Cash for Synthetic savings (GBP)").fill("1234.56");
+  await page.getByLabel("Where did these figures come from?").fill("Synthetic current statement.");
+  const currentCheck = page.getByRole("checkbox", { name: /I checked that every starting figure is current/ });
+  await expect(currentCheck).not.toBeChecked();
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  expect(api.calls.filter(call => call.path === "preview")).toHaveLength(0);
+  await currentCheck.check();
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  await expect(page.getByRole("group", { name: "Review setup before confirmation" })).toBeVisible();
+  expect(api.calls.filter(call => call.path === "preview")).toHaveLength(1);
+  await page.getByRole("button", { name: "Edit evidence" }).click();
+  await expect(currentCheck).not.toBeChecked();
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  await expect(currentCheck).toBeFocused();
+  expect(api.calls.filter(call => call.path === "preview")).toHaveLength(1);
+  await currentCheck.check();
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  await expect(page.getByRole("group", { name: "Review setup before confirmation" })).toBeVisible();
+  expect(api.calls.filter(call => call.path === "preview")).toHaveLength(2);
+});
 
 test("guided deposit setup requires review and creates only on explicit confirmation", async ({ page }) => {
   const api = await setupRoutes(page);
   await page.clock.setFixedTime(new Date("2026-01-01T10:00:00.000Z"));
   await unlock(page);
-  await expect(page.getByText("Keep a record of your savings and investments in pounds. You'll add your accounts, enter starting balances, then check everything before saving.", { exact: true })).toBeVisible();
+  await expect(page.getByText(/list each investment you hold, then enter how much you hold in each account/)).toBeVisible();
+  const preflight = page.getByRole("region", { name: "Have these ready" });
+  await expect(preflight).toContainText("one current point in time");
+  await expect(preflight).toContainText("smallest unit amount it supports and the minimum purchase");
+  await expect(preflight).toContainText("Look in dealing rules or product documents");
   await expect(page.getByText(/Manual records only/)).toHaveCount(0);
   await expect(page.getByLabel("Balances as of (local time)")).toHaveCount(0);
   await expect(page.getByLabel("Source available from (local time)")).toHaveCount(0);
-  const help = page.getByText("Before you start: privacy, storage and later changes", { exact: true });
+  const help = page.getByText("Before you start", { exact: true });
   const disclosure = help.locator("..");
   await expect(disclosure).not.toHaveAttribute("open", "");
   await help.focus();
@@ -157,22 +209,173 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await expect(confirm).toBeDisabled();
   await page.getByRole("checkbox", { name: /I reviewed every account/ }).check();
   await confirm.click();
+  await expect(page.getByRole("heading", { name: "Setup completed — read-only" })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("Restart it with");
+  await expect(page.getByRole("status")).toContainText(".\\.venv\\Scripts\\python.exe -m dashboard --investment-recording");
+  await expect(page.getByText(/Your draft is not saved until you confirm/)).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Have these ready" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open read-only investment view" }).click();
+  await expect(page).toHaveURL(/\/investment$/);
+  await expect(page.getByRole("heading", { name: "Your portfolio", exact: true })).toBeVisible();
   await expect.poll(() => api.calls.filter(call => call.path === "confirm").length).toBe(1);
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
 });
 
-test("investment accounts require an explicit no-holdings confirmation when left empty", async ({ page }) => {
+test("investment accounts require an explicit completeness confirmation when left empty", async ({ page }) => {
   const api = await setupRoutes(page);
   await unlock(page);
   await accountStep(page, true);
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await evidenceStep(page);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Confirm that the included investment accounts have no shares");
+  await expect(page.getByRole("alert")).toContainText("Confirm that you have listed all holdings");
   expect(api.calls.filter(call => call.path === "preview")).toHaveLength(0);
-  await page.getByRole("checkbox", { name: /do not currently hold any shares/ }).check();
+  await page.getByRole("checkbox", { name: /Synthetic savings: I have listed all holdings/ }).check();
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   expect(api.preview().opening.holdings).toEqual([]);
+  await expect(page.getByRole("group", { name: "Review setup before confirmation" }))
+    .toContainText("Synthetic savings: You confirmed there are no holdings.");
+});
+
+test("investment rules are validated on their step and explain why a holding cannot yet be added", async ({ page }) => {
+  await setupRoutes(page);
+  await unlock(page);
+  await accountStep(page, true);
+  await page.getByRole("button", { name: "Add investment", exact: true }).click();
+  await page.getByLabel("Investment 1 name").fill("Synthetic equity");
+  await page.getByLabel("Investment 1 type").selectOption("equity");
+  await page.getByLabel("Investment 1 pricing currency").selectOption("GBP");
+  await page.getByLabel("Investment 1 smallest quantity step").fill("0");
+  await page.getByLabel("Investment 1 minimum purchase (GBP)").fill("1.00");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Check the highlighted investment details");
+  await expect(page.getByLabel("Investment 1 smallest quantity step")).toHaveAttribute("aria-invalid", "true");
+  await page.getByLabel("Investment 1 smallest quantity step").fill("0.001");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Starting balances", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add holding", exact: true })).toBeEnabled();
+
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Remove investment 1", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Add holding", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Add holding", exact: true })).toHaveAttribute("aria-describedby", "setup-no-investments");
+  await expect(page.getByText(/go back and add its investment first/)).toBeVisible();
+});
+
+test("every investment account needs its own holdings completeness confirmation", async ({ page }) => {
+  const api = await setupRoutes(page);
+  await unlock(page);
+  await page.getByLabel("Account 1 name").fill("First brokerage");
+  await page.getByLabel("Account 1 type").selectOption("broker");
+  await page.getByRole("button", { name: "Add account", exact: true }).click();
+  await page.getByLabel("Account 2 name").fill("Second brokerage");
+  await page.getByLabel("Account 2 type").selectOption("broker");
+  await page.getByRole("checkbox", { name: /These are the GBP accounts I want to track/ }).check();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByLabel("Cash for First brokerage (GBP)").fill("0");
+  await page.getByLabel("Cash for Second brokerage (GBP)").fill("0");
+  await page.getByLabel("Where did these figures come from?").fill("Two synthetic brokerage statements.");
+  await page.getByRole("checkbox", { name: /First brokerage: I have listed all holdings/ }).check();
+  await confirmOpeningContext(page);
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("each investment account");
+  expect(api.calls.filter(call => call.path === "preview")).toHaveLength(0);
+  await page.getByRole("checkbox", { name: /Second brokerage: I have listed all holdings/ }).check();
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  expect(api.preview().opening.holdings).toEqual([]);
+  const preview = page.getByRole("group", { name: "Review setup before confirmation" });
+  await expect(preview).toContainText("First brokerage: You confirmed there are no holdings.");
+  await expect(preview).toContainText("Second brokerage: You confirmed there are no holdings.");
+});
+
+test("holding completeness checks survive amount edits but clear when a holding moves accounts", async ({ page }) => {
+  const api = await setupRoutes(page);
+  await unlock(page);
+  await page.getByLabel("Account 1 name").fill("First brokerage");
+  await page.getByLabel("Account 1 type").selectOption("broker");
+  await page.getByRole("button", { name: "Add account", exact: true }).click();
+  await page.getByLabel("Account 2 name").fill("Second brokerage");
+  await page.getByLabel("Account 2 type").selectOption("broker");
+  await page.getByRole("checkbox", { name: /These are the GBP accounts I want to track/ }).check();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Add investment", exact: true }).click();
+  await page.getByLabel("Investment 1 name").fill("Synthetic equity");
+  await page.getByLabel("Investment 1 type").selectOption("equity");
+  await page.getByLabel("Investment 1 pricing currency").selectOption("GBP");
+  await page.getByLabel("Investment 1 smallest quantity step").fill("0.001");
+  await page.getByLabel("Investment 1 minimum purchase (GBP)").fill("1.00");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByLabel("Cash for First brokerage (GBP)").fill("0");
+  await page.getByLabel("Cash for Second brokerage (GBP)").fill("0");
+  await page.getByLabel("Where did these figures come from?").fill("Two synthetic brokerage statements.");
+  await page.getByRole("button", { name: "Add holding", exact: true }).click();
+  await page.getByLabel("Holding 1 account").selectOption({ label: "First brokerage" });
+  await page.getByLabel("Holding 1 investment").selectOption({ label: "Synthetic equity" });
+  await page.getByLabel("Holding 1 quantity", { exact: true }).fill("2.345");
+  const firstCheck = page.getByRole("checkbox", { name: /First brokerage: I have listed all holdings/ });
+  const secondCheck = page.getByRole("checkbox", { name: /Second brokerage: I have listed all holdings/ });
+  await firstCheck.check();
+  await secondCheck.check();
+  await confirmOpeningContext(page);
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  expect(api.preview().opening.holdings).toHaveLength(1);
+  await page.getByRole("button", { name: "Edit evidence" }).click();
+  await page.getByLabel("Holding 1 quantity", { exact: true }).fill("2.500");
+  await expect(firstCheck).toBeChecked();
+  await expect(secondCheck).toBeChecked();
+  await page.getByLabel("Holding 1 investment").selectOption("");
+  await expect(firstCheck).not.toBeChecked();
+  await expect(secondCheck).toBeChecked();
+  await page.getByLabel("Holding 1 investment").selectOption({ label: "Synthetic equity" });
+  await expect(firstCheck).not.toBeChecked();
+  await firstCheck.check();
+  await page.getByLabel("Holding 1 account").selectOption({ label: "Second brokerage" });
+  await expect(firstCheck).not.toBeChecked();
+  await expect(secondCheck).not.toBeChecked();
+});
+
+test("removing an account warns before removing its linked holdings", async ({ page }) => {
+  await setupRoutes(page);
+  await unlock(page);
+  await page.getByLabel("Account 1 name").fill("Synthetic brokerage");
+  await page.getByLabel("Account 1 type").selectOption("broker");
+  await page.getByRole("button", { name: "Add account", exact: true }).click();
+  await page.getByLabel("Account 2 name").fill("Synthetic savings");
+  await page.getByLabel("Account 2 type").selectOption("deposit");
+  await page.getByRole("checkbox", { name: /These are the GBP accounts I want to track/ }).check();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Add investment", exact: true }).click();
+  await page.getByLabel("Investment 1 name").fill("Synthetic equity");
+  await page.getByLabel("Investment 1 type").selectOption("equity");
+  await page.getByLabel("Investment 1 pricing currency").selectOption("GBP");
+  await page.getByLabel("Investment 1 smallest quantity step").fill("0.001");
+  await page.getByLabel("Investment 1 minimum purchase (GBP)").fill("1.00");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Add holding", exact: true }).click();
+  await page.getByLabel("Holding 1 account").selectOption({ label: "Synthetic brokerage" });
+  await page.getByLabel("Holding 1 investment").selectOption({ label: "Synthetic equity" });
+  await page.getByLabel("Holding 1 quantity", { exact: true }).fill("1");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  let warning = "";
+  page.once("dialog", async dialog => {
+    warning = dialog.message();
+    await dialog.dismiss();
+  });
+  await page.getByRole("button", { name: "Remove account 1" }).click();
+  expect(warning).toContain("Synthetic brokerage");
+  expect(warning).toContain("1 linked holding row");
+  await expect(page.getByLabel("Account 1 name")).toHaveValue("Synthetic brokerage");
+
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Remove account 1" }).click();
+  await expect(page.getByLabel("Account 1 name")).toHaveValue("Synthetic savings");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Starting balances", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add holding", exact: true })).toHaveCount(0);
 });
 
 test("broker holdings preserve exact decimal strings and unknown unit prices", async ({ page }) => {
@@ -193,6 +396,8 @@ test("broker holdings preserve exact decimal strings and unknown unit prices", a
   await page.getByLabel("Holding 1 account").selectOption({ label: "Synthetic savings" });
   await page.getByLabel("Holding 1 investment").selectOption({ label: "Synthetic equity" });
   await page.getByLabel("Holding 1 quantity", { exact: true }).fill("2.345");
+  await page.getByRole("checkbox", { name: /Synthetic savings: I have listed all holdings/ }).check();
+  await confirmOpeningContext(page);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByText("Unknown — not zero", { exact: false })).toBeVisible();
   expect(api.preview().opening.holdings[0]).toMatchObject({ quantity: "2.345", price_gbp: null });
@@ -200,11 +405,30 @@ test("broker holdings preserve exact decimal strings and unknown unit prices", a
   await page.getByRole("button", { name: "Edit evidence" }).click();
   await expect(page.getByRole("button", { name: "Confirm and create local records" })).toHaveCount(0);
   await page.getByLabel("Cash for Synthetic savings (GBP)").fill("NaN");
+  await confirmOpeningContext(page);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByRole("alert")).toBeFocused();
   await expect(page.getByRole("alert")).toContainText("number of zero or more");
+  const amountError = page.getByRole("alert").getByRole("link", { name: /Synthetic savings cash/ });
+  await expect(amountError).toBeVisible();
+  await amountError.click();
+  await expect(page.getByLabel("Cash for Synthetic savings (GBP)")).toBeFocused();
   expect(api.calls.filter(call => call.path === "preview")).toHaveLength(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByText(/Removing this investment will also remove its 1 linked holding row/)).toBeVisible();
+  let removalWarning = "";
+  page.once("dialog", async dialog => {
+    removalWarning = dialog.message();
+    await dialog.dismiss();
+  });
+  await page.getByRole("button", { name: "Remove investment 1", exact: true }).click();
+  expect(removalWarning).toContain("1 linked holding row");
+  await expect(page.getByLabel("Investment 1 name")).toHaveValue("Synthetic equity");
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Remove investment 1", exact: true }).click();
+  await expect(page.getByLabel("Investment 1 name")).toHaveCount(0);
 });
 
 test("malformed preview fails closed without offering confirmation", async ({ page }) => {
@@ -286,6 +510,8 @@ test("revision-zero recovery prefills only the original locked profile and recon
   await page.getByLabel("Holding 1 account").selectOption("original-broker");
   await page.getByLabel("Holding 1 investment").selectOption("original-fund");
   await page.getByLabel("Holding 1 quantity", { exact: true }).fill("2.345");
+  await page.getByRole("checkbox", { name: /Synthetic broker: I have listed all holdings/ }).check();
+  await confirmOpeningContext(page, true);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByRole("group", { name: "Review setup before confirmation" })).toBeVisible();
   expect(api.preview().profile).toEqual(originalProfile);
@@ -306,6 +532,8 @@ test("reconstructed opening hash refusal cannot advance to confirmation or edit 
   await page.getByRole("button", { name: "Re-enter original opening evidence" }).click();
   await evidenceStep(page, true);
   await page.getByLabel("Cash for Synthetic broker (GBP)").fill("1");
+  await page.getByRole("checkbox", { name: /Synthetic broker: I have listed all holdings/ }).check();
+  await confirmOpeningContext(page, true);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("refused");
   await expect(page.getByRole("button", { name: "Confirm and create local records" })).toHaveCount(0);

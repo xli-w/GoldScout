@@ -30,6 +30,13 @@ figures. Review the preview before confirming; nothing is saved before that
 confirmation. Cash-only setup skips investment details. If an investment
 account has holdings, include them rather than omitting them.
 
+For investment accounts, list each different investment once, then enter its
+quantity for each account that holds it. Use current figures for the same point
+in time; setup records them when you request the preview and cannot be
+backdated. After setup the portfolio opens read-only. To record future updates,
+restart with `--investment-recording` using the same workspace and startup
+command as before.
+
 Existing valid journals open read-only. To record changes, stop the dashboard
 with Ctrl+C and restart with `--investment-recording`, keeping the same folder:
 

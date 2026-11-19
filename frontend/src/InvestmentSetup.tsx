@@ -13,15 +13,24 @@ type Holding = { id: string; account: string; product: string; quantity: string;
 const identifier = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const newAccount = (): Account => ({ id: identifier("account"), binding: identifier("local"),
   name: "", kind: "", cash: "" });
-const steps = ["Accounts", "Investments (optional)", "Starting balances", "Review and save"];
+const steps = ["Accounts", "Investments held (if any)", "Starting balances", "Review and save"];
 const fixedWarning = "Starting accounts and figures cannot be edited in place. Later changes use a separate, previewed recording process.";
 
-function amount(value: string, label: string, positive = false): string {
+function amountIssue(value: string, label: string, positive = false): string | null {
   if (!/^(?:0|[1-9]\d{0,14})(?:\.\d{1,8})?$/.test(value) ||
       (positive && !/[1-9]/.test(value)))
-    throw new Error(`${label}: enter a number ${positive ? "greater than zero" : "of zero or more"}, with up to eight decimal places. Enter 0 only if your source confirms zero.`);
+    return `${label}: enter a number ${positive ? "greater than zero" : "of zero or more"}, with up to eight decimal places. Enter 0 only if your source confirms zero.`;
+  return null;
+}
+
+function amount(value: string, label: string, positive = false): string {
+  const issue = amountIssue(value, label, positive);
+  if (issue) throw new Error(issue);
   return value;
 }
+
+const fieldTarget = (key: string) => `setup-field-${key}`;
+
 function utc(value: string, label: string): string {
   let timestamp: string;
   try { timestamp = localClock(value); }
@@ -41,7 +50,9 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   const [available, setAvailable] = useState("");
   const [evidence, setEvidence] = useState("");
   const [scope, setScope] = useState(false);
-  const [noHoldingsConfirmed, setNoHoldingsConfirmed] = useState(false);
+  const [holdingsCoverage, setHoldingsCoverage] = useState<Record<string, boolean>>({});
+  const [openingContextConfirmed, setOpeningContextConfirmed] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [reviewed, setReviewed] = useState(false);
   const [step, setStep] = useState(0);
   const [preview, setPreview] = useState<SetupPreview | null>(null);
@@ -54,10 +65,28 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   const [now, setNow] = useState(Date.now());
   const lock = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const stepHeading = useRef<HTMLHeadingElement>(null);
   const errorSummary = useRef<HTMLDivElement>(null);
   const portfolioId = useRef(identifier("portfolio"));
   const openingId = useRef(identifier("opening"));
   const recovery = session?.state === "recoverable" ? session.recovery : undefined;
+  const investmentAccounts = accounts.filter(account => account.kind === "broker");
+
+  const clearFieldError = (key: string) => setFieldErrors(current => {
+    if (!current[key]) return current;
+    const next = { ...current };
+    delete next[key];
+    return next;
+  });
+  const validateAmountField = (key: string, value: string, label: string, positive = false) => {
+    const issue = value === "" ? null : amountIssue(value, label, positive);
+    setFieldErrors(current => {
+      const next = { ...current };
+      if (issue) next[key] = issue;
+      else delete next[key];
+      return next;
+    });
+  };
 
   useEffect(() => {
     let active = true;
@@ -77,7 +106,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     document.addEventListener("click", abandon, true);
     return () => { window.removeEventListener("beforeunload", warn); document.removeEventListener("click", abandon, true); };
   }, [dirty, receipt]);
-  useEffect(() => { heading.current?.focus(); }, [step, preview, receipt, session?.enabled]);
+  useEffect(() => { (stepHeading.current ?? heading.current)?.focus(); }, [step, preview, receipt, session?.enabled]);
   useEffect(() => { if (error) errorSummary.current?.focus(); }, [error]);
   useEffect(() => {
     if (!preview) return;
@@ -92,21 +121,63 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     catch (failure) { setError(failure instanceof Error ? failure.message : "Setup is unavailable. No further action was taken."); }
     finally { lock.current = false; setBusy(false); }
   };
-  const changed = () => {
-    setDirty(true); setPreview(null); setReviewed(false); setNoHoldingsConfirmed(false); setError("");
+  const changed = (coverageToClear: string[] = []) => {
+    setDirty(true); setPreview(null); setReviewed(false); setOpeningContextConfirmed(false); setError("");
+    if (coverageToClear.length) setHoldingsCoverage(current => {
+      const next = { ...current };
+      coverageToClear.forEach(id => { delete next[id]; });
+      return next;
+    });
   };
   const changeAccount = (id: string, patch: Partial<Account>) => {
-    changed(); setAccounts(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
+    const account = accounts.find(row => row.id === id);
+    const invalidatedHoldings = account?.kind === "broker" && patch.kind === "deposit"
+      ? holdings.filter(holding => holding.account === id) : [];
+    if (invalidatedHoldings.length > 0 && !window.confirm(
+      `Changing "${account?.name}" to a savings / deposit account will remove its ${invalidatedHoldings.length} holding ${invalidatedHoldings.length === 1 ? "row" : "rows"}. Continue?`,
+    )) return;
+    changed(account && patch.kind && account.kind !== patch.kind ? [id] : []);
+    if (invalidatedHoldings.length > 0)
+      setHoldings(rows => rows.filter(holding => holding.account !== id));
+    setAccounts(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
   };
   const changeProduct = (id: string, patch: Partial<Product>) => {
     changed(); setProducts(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
   };
   const changeHolding = (id: string, patch: Partial<Holding>) => {
-    changed(); setHoldings(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
+    const holding = holdings.find(row => row.id === id);
+    const affectedAccounts = holding && (
+      patch.account !== undefined && holding.account !== patch.account ||
+      patch.product !== undefined && holding.product !== patch.product
+    ) ? [holding.account, patch.account ?? holding.account].filter(Boolean) : [];
+    changed(affectedAccounts); setHoldings(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
   };
   const next = (event: FormEvent) => {
     event.preventDefault();
     if (!scope) { setError("Confirm that you have chosen the GBP accounts you want to track."); return; }
+    if (step === 1) {
+      const productIssues: Record<string, string> = {};
+      products.forEach(product => {
+        const incrementKey = `product-${product.id}-increment`;
+        const minimumKey = `product-${product.id}-minimum`;
+        const incrementIssue = amountIssue(product.increment, `${product.name || "Investment"} smallest quantity step`, true);
+        const minimumIssue = amountIssue(product.minimum, `${product.name || "Investment"} minimum purchase`);
+        if (incrementIssue) productIssues[incrementKey] = incrementIssue;
+        if (minimumIssue) productIssues[minimumKey] = minimumIssue;
+      });
+      setFieldErrors(current => {
+        const nextErrors = { ...current };
+        products.forEach(product => {
+          delete nextErrors[`product-${product.id}-increment`];
+          delete nextErrors[`product-${product.id}-minimum`];
+        });
+        return { ...nextErrors, ...productIssues };
+      });
+      if (Object.keys(productIssues).length) {
+        setError("Check the highlighted investment details before continuing.");
+        return;
+      }
+    }
     setError("");
     setStep(value => value === 0 && !accounts.some(account => account.kind === "broker") ? 2 : value + 1);
   };
@@ -118,8 +189,36 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       const timestamp = recoveryEntry ? utc(effective, "Balances as of") : new Date().toISOString();
       const availableAt = recoveryEntry ? utc(available, "Source available from") : timestamp;
       if (availableAt < timestamp) throw new Error('"Source available from" cannot be earlier than "Balances as of". Check the dates against your source; do not guess.');
-      if (accounts.some(account => account.kind === "broker") && holdings.length === 0 && !noHoldingsConfirmed)
-        throw new Error("Confirm that the included investment accounts have no shares, funds or bonds, or add the holdings you own.");
+      if (!openingContextConfirmed)
+        throw new Error(recoveryEntry
+          ? "Confirm that the re-entered details match the original starting record before requesting a recovery preview."
+          : "Confirm that all starting figures are current and reflect the same point in time before requesting a preview.");
+      if (investmentAccounts.some(account => !holdingsCoverage[account.id]))
+        throw new Error("Confirm that you have listed all holdings for each investment account, including accounts with none.");
+      const amountIssues: Record<string, string> = {};
+      accounts.forEach(account => {
+        const key = `account-${account.id}-cash`;
+        const issue = amountIssue(account.cash, `${account.name} cash`);
+        if (issue) amountIssues[key] = issue;
+      });
+      holdings.forEach(holding => {
+        const quantityKey = `holding-${holding.id}-quantity`;
+        const quantityIssue = amountIssue(holding.quantity, "Holding quantity", true);
+        if (quantityIssue) amountIssues[quantityKey] = quantityIssue;
+        if (holding.price !== "") {
+          const priceKey = `holding-${holding.id}-price`;
+          const priceIssue = amountIssue(holding.price, "Unit price", true);
+          if (priceIssue) amountIssues[priceKey] = priceIssue;
+        }
+      });
+      setFieldErrors(current => {
+        const nextErrors = { ...current };
+        Object.keys(nextErrors).filter(key => key.startsWith("account-") ||
+          key.startsWith("holding-")).forEach(key => { delete nextErrors[key]; });
+        return { ...nextErrors, ...amountIssues };
+      });
+      if (Object.keys(amountIssues).length)
+        throw new Error(`Check the highlighted amounts before requesting a preview. ${Object.values(amountIssues).join(" ")}`);
       const wireAccounts: SetupProfile["accounts"] = accounts.map(a => {
         if (!a.name.trim() || !a.kind) throw new Error("Give each account a name and choose its type.");
         return { id: a.id, binding: a.binding, name: a.name.trim(), kind: a.kind, currency: "GBP" };
@@ -143,6 +242,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
             price_gbp: h.price === "" ? null : amount(h.price, "Unit price", true) };
         }),
       };
+      setOpeningContextConfirmed(false);
       const result = await setupPreview(session?.csrf ?? "", {
         request_id: identifier("request"),
         profile: recoveryEntry && recovery ? recovery.profile : { schema_version: 2, portfolio_id: portfolioId.current, currency: "GBP", created_at: timestamp,
@@ -159,7 +259,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       try {
         const result = await setupConfirm(session?.csrf ?? "", preview.preview_id);
         setReceipt(result);
-        if (result.status === "completed") { setDirty(false); onComplete(); }
+        if (result.status === "completed") setDirty(false);
       } catch {
         throw new Error("The save outcome is unknown or the request was refused. Records may already have been saved. Do not start another setup or delete files. Use Retry same confirmation to check this exact request, or reload for recovery guidance. Error details may be in the terminal window used to start the dashboard.");
       }
@@ -183,31 +283,54 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       increment: p.quantity_increment, minimum: p.minimum_notional_gbp,
     })));
     setHoldings([]); setEffective(""); setAvailable(""); setEvidence("");
-    setPreview(null); setReviewed(false); setError(""); setScope(true);
+    setPreview(null); setReviewed(false); setOpeningContextConfirmed(false);
+    setHoldingsCoverage({}); setFieldErrors({}); setError(""); setScope(true);
     setStep(2); setRecoveryEntry(true); setDirty(true);
   };
   const expired = preview !== null && Date.parse(preview.expires_at) <= now;
   const blocked = session && (!session.enabled || !["empty", "recoverable"].includes(session.state));
   const progressSteps = steps.map((name, index) => ({ name, index })).filter(({ index }) =>
-    (index !== 1 || accounts.some(account => account.kind === "broker")) &&
+    (index !== 1 || investmentAccounts.length > 0) &&
     (session?.state !== "recoverable" || index >= 2));
 
   return <section className="investment-setup" aria-label="Investment setup" aria-busy={busy}>
     <p className="eyebrow">WELCOME TO GOLDSCOUT</p>
     <h1 ref={heading} tabIndex={-1}>Let's set up your portfolio</h1>
-    <p className="setup-intro">Keep a record of your savings and investments in pounds. You'll add your accounts, enter starting balances, then check everything before saving.</p>
-    <p className="setup-draft-note">{session?.state === "recoverable"
+    <p className="setup-intro">{session?.state === "recoverable"
+      ? "Use the recovery options below to check or exactly reconstruct the original setup. Do not start a replacement portfolio."
+      : "Keep a record of your savings and investments in pounds. Add your accounts, list each investment you hold, then enter how much you hold in each account. Portfolios with only savings / deposit accounts skip the investment steps."}</p>
+    {!receipt && <p className="setup-draft-note">{session?.state === "recoverable"
       ? "Leaving or reloading loses any re-entered figures. Existing setup files may already contain saved records."
-      : "Your draft is not saved until you confirm. Leaving or reloading this page loses your progress."}</p>
+      : "Your draft is not saved until you confirm. Leaving or reloading this page loses your progress."}</p>}
+    {!receipt && session?.state !== "recoverable" && <section className="setup-preflight" aria-labelledby="setup-preflight-title">
+      <h2 id="setup-preflight-title">Have these ready</h2>
+      <ul>
+        <li>Current cash balances and, for investment accounts, a complete list of holdings and quantities from one current point in time.</li>
+        <li>For each investment, check your provider's rules for its price in pounds, the smallest unit amount it supports and the minimum purchase. Look in dealing rules or product documents; if you cannot verify a detail, pause rather than guess.</li>
+        <li>A brief note naming the dated sources you used. Do not paste account numbers, passwords or full statements.</li>
+      </ul>
+    </section>}
     <details className="help-disclosure">
       <summary>Before you start</summary>
-      <p>Have statements or other dated records ready. Use nicknames, not account numbers, passwords or credentials.</p>
+      <p>Use account nicknames, not account numbers, passwords or credentials.</p>
       <p>{fixedWarning}</p>
       <p>Nothing is saved until you confirm. Setup does not enable later recording. If a previous setup was interrupted, use only the recovery options shown.</p>
       {session && <p className="setup-workspace">Saved on this computer in: <strong>{session.workspace}</strong>.</p>}
       <p>Keep this computer private and make separate backups. GoldScout has no sign-in and is intended for use on this computer only.</p>
     </details>
-    {error && <div role="alert" tabIndex={-1} ref={errorSummary} className="investment-warnings">{error}</div>}
+    {error && <div role="alert" tabIndex={-1} ref={errorSummary} className="investment-warnings">
+      <p>{error}</p>
+      {Object.entries(fieldErrors).length > 0 && <ul aria-label="Fields to correct">
+        {Object.entries(fieldErrors).map(([key, message]) => <li key={key}>
+          <a href={`#${fieldTarget(key)}`} onClick={event => {
+            event.preventDefault();
+            const target = document.getElementById(fieldTarget(key));
+            target?.focus();
+            target?.scrollIntoView({ block: "center" });
+          }}>{message}</a>
+        </li>)}
+      </ul>}
+    </div>}
     {receipt ? <div role="status" className="recording-preview">
       <h2>{receipt.status === "completed" ? "Setup completed — read-only" : "Setup partially completed — preserve the workspace"}</h2>
       <p>{receipt.committed
@@ -218,7 +341,15 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
         <p>Journal committed: {receipt.committed ? "yes" : "no"}.</p>
       </details>
       {receipt.status === "completed" ? <>
-        <p>Recording remains disabled. Enable later recording separately and arrange a verified backup.</p>
+        <p>Your portfolio is saved and will open read-only. This protects the starting records; setup does not enable later changes.</p>
+        <h3>To record future updates</h3>
+        <ol>
+          <li>Stop GoldScout in the terminal window where it is running by pressing <kbd>Ctrl</kbd> + <kbd>C</kbd>.</li>
+          <li>Restart it with <code>--investment-recording</code>, keeping the same workspace or journal selection.</li>
+        </ol>
+        <p>For a standard Windows source checkout, run this from the GoldScout folder:</p>
+        <pre className="command-example"><code>.\.venv\Scripts\python.exe -m dashboard --investment-recording</code></pre>
+        <p>If you used a different startup command or folder, add the option to that same command. If unsure, ask the person who set up GoldScout rather than choosing a different workspace. This enables manual record-entry only; it does not place trades or move money.</p>
         <button type="button" onClick={onComplete}>Open read-only investment view</button>
       </>       : <p>Setup did not finish completely. Keep the whole setup folder unchanged and reload this page for recovery guidance.
         Do not recreate, delete, overwrite or manually repair any files.</p>}
@@ -235,7 +366,9 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       : <>
         <ol className="setup-steps" aria-label="Setup progress">{progressSteps.map(({ name, index }, progressIndex) =>
           <li key={name} aria-current={index === step ? "step" : undefined}>{progressIndex + 1}. {name}</li>)}</ol>
-        <h2>{session.state === "recoverable" && !preview && !recoveryEntry ? "Recovery" : steps[step]}</h2>
+        <h2 ref={stepHeading} tabIndex={-1}>
+          {session.state === "recoverable" && !preview && !recoveryEntry ? "Recovery" : steps[step]}
+        </h2>
         {preview ? <div className="recording-preview" role="group" aria-label="Review setup before confirmation">
           <p>{session.state === "recoverable"
             ? "Check the recovered records below. Starting records may already be saved; confirmation continues only this verified recovery."
@@ -251,6 +384,16 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
           <h3>Accounts and cash (GBP)</h3>
           <ul>{preview.profile.accounts.map(a => <li key={a.id}>{a.name} — {a.kind === "deposit" ? "Savings / deposit" : "Investment / broker"};
             cash GBP {preview.opening.balances_gbp[a.id] ?? "Unavailable"}</li>)}</ul>
+          {(session.state !== "recoverable" || recoveryEntry) &&
+            preview.profile.accounts.some(account => account.kind === "broker") && <>
+              <h3>Investment holdings check</h3>
+              <ul>{preview.profile.accounts.filter(account => account.kind === "broker").map(account => {
+                const hasHoldings = preview.opening.holdings.some(holding => holding.account_id === account.id);
+                return <li key={account.id}>{account.name}: {hasHoldings
+                  ? "You confirmed all holdings are listed."
+                  : "You confirmed there are no holdings."}</li>;
+              })}</ul>
+            </>}
           <h3>What you already own</h3>
           {preview.opening.holdings.length === 0 ? <p>No investment holdings declared.</p> : <ul>{preview.opening.holdings.map((h, index) =>
             <li key={index}>{preview.profile.accounts.find(a => a.id === h.account_id)?.name ?? h.account_id} /
@@ -326,7 +469,11 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                   <option value="">Choose account type</option><option value="deposit">Savings / deposit account</option><option value="broker">Investment / broker account</option>
                 </select></label>
                 <button type="button" disabled={accounts.length === 1} onClick={() => {
-                  changed(); setAccounts(rows => rows.filter(row => row.id !== a.id));
+                  const linkedHoldings = holdings.filter(holding => holding.account === a.id);
+                  if (linkedHoldings.length > 0 && !window.confirm(
+                    `Remove "${a.name}" and its ${linkedHoldings.length} linked holding ${linkedHoldings.length === 1 ? "row" : "rows"}? This cannot be undone in the draft.`,
+                  )) return;
+                  changed([a.id]); setAccounts(rows => rows.filter(row => row.id !== a.id));
                   setHoldings(rows => rows.filter(row => row.account !== a.id));
                 }}>Remove account {index + 1}</button>
               </div>)}
@@ -341,9 +488,10 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
               </details>
             </>}
             {step === 1 && <>
-              <p>Add each share, fund or bond you already hold in the selected investment accounts. If those accounts hold cash only, continue without adding investments.</p>
+              <p>Add each different share, fund or bond you already hold once. On the next step, enter the quantity held in each account. If the same fund is in two accounts, list it once here and add one holding for each account.</p>
+              <p>If your investment accounts only hold cash, continue without adding an investment.</p>
               <p className="position-note">Only GBP-priced equity and bond investments are supported. Copy the details from your provider; don't guess.</p>
-              <p className="example-note"><strong>Example:</strong> Add each fund once here. Enter the units held in each account on the next step.</p>
+              <p className="example-note"><strong>Example:</strong> Add “Global fund” once here. If you hold it in two accounts, enter its units twice on the next step—once for each account.</p>
               <details className="help-disclosure"><summary>Help with investment types and quantity rules</summary>
                 <p>Equity means shares or share-based funds. Bonds are debt investments, not protected savings.
                   GBP pricing does not remove any underlying foreign-currency risk.</p>
@@ -363,18 +511,37 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                 <label>Investment {index + 1} pricing currency<select required value={p.currency} onChange={event => {
                   if (event.target.value === "GBP") changeProduct(p.id, { currency: "GBP" });
                 }}><option value="">Confirm currency</option><option value="GBP">GBP</option></select></label>
-                <label>Investment {index + 1} smallest quantity step<input required inputMode="decimal" maxLength={34} value={p.increment}
-                  aria-describedby={`setup-increment-${p.id}`}
-                  onChange={event => changeProduct(p.id, { increment: event.target.value })} />
+                <label>Investment {index + 1} smallest quantity step<input required inputMode="decimal" maxLength={34}
+                  id={fieldTarget(`product-${p.id}-increment`)} value={p.increment}
+                  aria-invalid={Boolean(fieldErrors[`product-${p.id}-increment`])}
+                  aria-describedby={`setup-increment-${p.id}${fieldErrors[`product-${p.id}-increment`] ? ` setup-error-product-${p.id}-increment` : ""}`}
+                  onBlur={() => validateAmountField(`product-${p.id}-increment`, p.increment, `${p.name || "Investment"} smallest quantity step`, true)}
+                  onChange={event => { clearFieldError(`product-${p.id}-increment`); changeProduct(p.id, { increment: event.target.value }); }}
+                />
                   <small id={`setup-increment-${p.id}`} className="field-help">The provider's unit step, not how many you own. For example, 1 or 0.001; check your provider.</small></label>
-                <label>Investment {index + 1} minimum purchase (GBP)<input required inputMode="decimal" maxLength={34} value={p.minimum}
-                  aria-describedby={`setup-minimum-${p.id}`}
-                  onChange={event => changeProduct(p.id, { minimum: event.target.value })} />
+                <label>Investment {index + 1} minimum purchase (GBP)<input required inputMode="decimal" maxLength={34}
+                  id={fieldTarget(`product-${p.id}-minimum`)} value={p.minimum}
+                  aria-invalid={Boolean(fieldErrors[`product-${p.id}-minimum`])}
+                  aria-describedby={`setup-minimum-${p.id}${fieldErrors[`product-${p.id}-minimum`] ? ` setup-error-product-${p.id}-minimum` : ""}`}
+                  onBlur={() => validateAmountField(`product-${p.id}-minimum`, p.minimum, `${p.name || "Investment"} minimum purchase`)}
+                  onChange={event => { clearFieldError(`product-${p.id}-minimum`); changeProduct(p.id, { minimum: event.target.value }); }}
+                />
                   <small id={`setup-minimum-${p.id}`} className="field-help">The provider's smallest purchase in pounds. For example, £10; if unknown, pause rather than guessing.</small></label>
-                <button type="button" onClick={() => { changed(); setProducts(rows => rows.filter(row => row.id !== p.id));
-                  setHoldings(rows => rows.filter(row => row.product !== p.id)); }}>Remove investment {index + 1}</button>
+                {fieldErrors[`product-${p.id}-increment`] && <small id={`setup-error-product-${p.id}-increment`} className="field-error">{fieldErrors[`product-${p.id}-increment`]}</small>}
+                {fieldErrors[`product-${p.id}-minimum`] && <small id={`setup-error-product-${p.id}-minimum`} className="field-error">{fieldErrors[`product-${p.id}-minimum`]}</small>}
+                {holdings.some(holding => holding.product === p.id) &&
+                  <p className="field-help">Removing this investment will also remove its {holdings.filter(holding => holding.product === p.id).length} linked holding row(s).</p>}
+                <button type="button" onClick={() => {
+                  const linkedHoldings = holdings.filter(holding => holding.product === p.id);
+                  if (linkedHoldings.length > 0 && !window.confirm(
+                    `Remove "${p.name}" and its ${linkedHoldings.length} linked holding ${linkedHoldings.length === 1 ? "row" : "rows"}? This cannot be undone in the draft.`,
+                  )) return;
+                  changed(investmentAccounts.map(account => account.id));
+                  setProducts(rows => rows.filter(row => row.id !== p.id));
+                  setHoldings(rows => rows.filter(row => row.product !== p.id));
+                }}>Remove investment {index + 1}</button>
               </div>)}
-              <button type="button" disabled={products.length >= 100} onClick={() => { changed(); setProducts(rows => [...rows,
+              <button type="button" disabled={products.length >= 100} onClick={() => { changed(investmentAccounts.map(account => account.id)); setProducts(rows => [...rows,
                 { id: identifier("product"), name: "", sleeve: "", currency: "", increment: "", minimum: "" }]); }}>Add investment</button>
             </>}
             {step === 2 && <>
@@ -391,10 +558,11 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                     Recovery verifies the original confirmed opening hash.</p>
                   <pre>{JSON.stringify(recovery.profile, null, 2)}</pre></details>
               </section>}
-              <p>Enter the cash and holdings you have now. All starting figures use one current time, captured when you request the preview.</p>
+              <p>{recoveryEntry
+                ? "Re-enter the original cash, holdings and dates exactly as they were recorded. Recovery will reject approximate matches."
+                : "Enter current cash and holdings. All accounts and quantities must reflect the same current point in time. GoldScout records them at the moment you request the preview; setup cannot be backdated. If a source is too old to reflect the figures now, do not treat it as current or guess."}</p>
               <h3>1. Starting figures</h3>
-              <p className="position-note">The review shows the recorded time in your local timezone alongside its exact UTC time.
-                This setup cannot be backdated.</p>
+              <p className="position-note">The review shows when you request the preview in your local timezone and UTC.</p>
               {recoveryEntry && <details className="help-disclosure" open>
                 <summary>Re-enter the original opening time</summary>
                 <p>Recovery must reproduce the original record exactly. Enter its original dates and source details; approximate values are refused.</p>
@@ -408,37 +576,76 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
               <h3>2. Cash in each account</h3>
               <p>Enter cash only, not the value of investments held in the account. Enter 0 if your source confirms no cash. Don't leave a cash balance blank.</p>
               {accounts.map(a => <label key={a.id}>Cash for {a.name} (GBP)<input required inputMode="decimal" maxLength={34}
-                value={a.cash} onChange={event => changeAccount(a.id, { cash: event.target.value })} /></label>)}
+                id={fieldTarget(`account-${a.id}-cash`)} value={a.cash}
+                aria-invalid={Boolean(fieldErrors[`account-${a.id}-cash`])}
+                aria-describedby={fieldErrors[`account-${a.id}-cash`] ? `setup-error-account-${a.id}-cash` : undefined}
+                onBlur={() => validateAmountField(`account-${a.id}-cash`, a.cash, `${a.name} cash`)}
+                onChange={event => { clearFieldError(`account-${a.id}-cash`); changeAccount(a.id, { cash: event.target.value }); }} />
+                {fieldErrors[`account-${a.id}-cash`] && <small id={`setup-error-account-${a.id}-cash`} className="field-error">{fieldErrors[`account-${a.id}-cash`]}</small>}
+              </label>)}
+              {investmentAccounts.length === 0
+                ? <p>This setup contains only savings / deposit accounts; no investment holdings are needed.</p>
+                : <>
               <h3>3. Investments you own</h3>
-              <p>Add every investment holding in the accounts you chose. Leave only the unit price blank if unknown; it is not treated as zero.
-                If you add no rows, confirm below that these accounts have no investment holdings.</p>
+              <p>Add every investment holding in the accounts you chose. Leave only the unit price blank if unknown; it is not treated as zero.</p>
               {holdings.map((h, index) => <div className="setup-row" key={h.id}>
                 <label>Holding {index + 1} account<select required value={h.account} onChange={event => changeHolding(h.id, { account: event.target.value })}>
-                  <option value="">Choose broker</option>{accounts.filter(a => a.kind === "broker").map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+                  <option value="">Choose investment account</option>{investmentAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
                 <label>Holding {index + 1} investment<select required value={h.product} onChange={event => changeHolding(h.id, { product: event.target.value })}>
                   <option value="">Choose investment</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-                <label>Holding {index + 1} quantity<input required inputMode="decimal" maxLength={34} value={h.quantity}
-                  onChange={event => changeHolding(h.id, { quantity: event.target.value })} /></label>
-                <label>Holding {index + 1} unit price (GBP, optional)<input inputMode="decimal" maxLength={34} value={h.price}
-                  onChange={event => changeHolding(h.id, { price: event.target.value })} /></label>
-                <button type="button" onClick={() => { changed(); setHoldings(rows => rows.filter(row => row.id !== h.id)); }}>Remove holding {index + 1}</button>
+                <label>Holding {index + 1} quantity<input required inputMode="decimal" maxLength={34}
+                  id={fieldTarget(`holding-${h.id}-quantity`)} value={h.quantity}
+                  aria-invalid={Boolean(fieldErrors[`holding-${h.id}-quantity`])}
+                  aria-describedby={fieldErrors[`holding-${h.id}-quantity`] ? `setup-error-holding-${h.id}-quantity` : undefined}
+                  onBlur={() => validateAmountField(`holding-${h.id}-quantity`, h.quantity, "Holding quantity", true)}
+                  onChange={event => { clearFieldError(`holding-${h.id}-quantity`); changeHolding(h.id, { quantity: event.target.value }); }} />
+                  {fieldErrors[`holding-${h.id}-quantity`] && <small id={`setup-error-holding-${h.id}-quantity`} className="field-error">{fieldErrors[`holding-${h.id}-quantity`]}</small>}
+                </label>
+                <label>Holding {index + 1} unit price (GBP, optional)<input inputMode="decimal" maxLength={34}
+                  id={fieldTarget(`holding-${h.id}-price`)} value={h.price}
+                  aria-invalid={Boolean(fieldErrors[`holding-${h.id}-price`])}
+                  aria-describedby={fieldErrors[`holding-${h.id}-price`] ? `setup-error-holding-${h.id}-price` : undefined}
+                  onBlur={() => validateAmountField(`holding-${h.id}-price`, h.price, "Unit price", true)}
+                  onChange={event => { clearFieldError(`holding-${h.id}-price`); changeHolding(h.id, { price: event.target.value }); }} />
+                  {fieldErrors[`holding-${h.id}-price`] && <small id={`setup-error-holding-${h.id}-price`} className="field-error">{fieldErrors[`holding-${h.id}-price`]}</small>}
+                </label>
+                <button type="button" onClick={() => { changed([h.account]); setHoldings(rows => rows.filter(row => row.id !== h.id)); }}>Remove holding {index + 1}</button>
               </div>)}
-              <button type="button" disabled={!products.length || !accounts.some(a => a.kind === "broker") || holdings.length >= 5000}
-                onClick={() => { changed(); setHoldings(rows => [...rows, { id: identifier("holding"), account: "", product: "", quantity: "", price: "" }]); }}>Add holding</button>
-              {accounts.some(account => account.kind === "broker") && holdings.length === 0 &&
-                <label className="setup-check"><input type="checkbox" checked={noHoldingsConfirmed}
-                  onChange={event => setNoHoldingsConfirmed(event.target.checked)} />
-                  I confirm these investment accounts do not currently hold any shares, funds or bonds.</label>}
-              <h3>4. Your source</h3>
+                {!products.length && <p id="setup-no-investments" className="field-help">To add a holding, go back and add its investment first. If your investment accounts only hold cash, leave this list empty and confirm that below.</p>}
+                <button type="button" aria-describedby={!products.length ? "setup-no-investments" : undefined}
+                  disabled={!products.length || !investmentAccounts.length || holdings.length >= 5000}
+                  onClick={() => { changed(investmentAccounts.map(account => account.id)); setHoldings(rows => [...rows, { id: identifier("holding"), account: "", product: "", quantity: "", price: "" }]); }}>Add holding</button>
+                </>}
+              <h3>{investmentAccounts.length > 0 ? 4 : 3}. Your source</h3>
               <label>Where did these figures come from?<textarea required maxLength={200} value={evidence}
                 placeholder="e.g. Savings statement and investment statement, 1 November"
                 onChange={event => { changed(); setEvidence(event.target.value); }} /></label>
               <p>Briefly name the source and accounts covered (up to 200 characters). Do not paste account numbers, passwords or full statements.</p>
+              <label className="setup-check"><input type="checkbox" required checked={openingContextConfirmed}
+                onChange={event => { setOpeningContextConfirmed(event.target.checked); setDirty(true); setError(""); }} />
+                {recoveryEntry
+                  ? "I checked that the re-entered figures, source and dates match the original opening record exactly."
+                  : "I checked that every starting figure is current and all accounts and holdings reflect the same point in time."}</label>
+              {investmentAccounts.length > 0 && <section aria-label="Investment account holdings check">
+                <h3>5. Check every investment account</h3>
+                <p>Confirm that you have listed all shares, funds and bonds in each account, including any account with none.</p>
+                {investmentAccounts.map(account => <label className="setup-check" key={account.id}>
+                  <input type="checkbox" checked={Boolean(holdingsCoverage[account.id])}
+                    onChange={event => setHoldingsCoverage(current => ({
+                      ...current, [account.id]: event.target.checked,
+                    }))} />
+                  {account.name}: I have listed all holdings, or confirmed there are none.
+                </label>)}
+                <p className="field-help">Changing cash, quantities, prices or source keeps these checks. Adding/removing accounts or holdings, changing an account type or investment list, or changing a holding's account or investment clears the affected checks so you can confirm them again.</p>
+              </section>}
             </>}
           </fieldset>
           <div className="setup-actions">
             {recoveryEntry ? <button type="button" disabled={busy} onClick={() => { setError(""); setRecoveryEntry(false); }}>Back to recovery guidance</button>
-              : step > 0 && <button type="button" disabled={busy} onClick={() => { setError(""); setStep(value => value - 1); }}>Back</button>}
+              : step > 0 && <button type="button" disabled={busy} onClick={() => {
+                setError("");
+                setStep(value => value === 2 && investmentAccounts.length === 0 ? 0 : value - 1);
+              }}>Back</button>}
             <button type="submit" disabled={busy}>{step === 2 ? "Preview setup" : "Continue"}</button>
           </div>
         </form>}

@@ -815,6 +815,9 @@ class InvestmentDashboardTests(unittest.TestCase):
                       "mapping_observed_at": OPENING_NOW.isoformat().replace("+00:00", "Z"),
                       "observation": observation}, headers=headers)
             self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(
+                response.json()["mapping_observed_at"],
+                iso(OPENING_NOW + timedelta(minutes=10)))
             compared = response.json()["reconciliation"]["accounts"][0]
             self.assertEqual(
                 compared["comparison_unavailable_reason"],

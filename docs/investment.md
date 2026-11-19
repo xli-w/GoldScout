@@ -18,15 +18,28 @@ a wizard; startup, status and preview never write files. Review accounts,
 products, cash and long holdings with explicit opening evidence, then confirm
 the bound preview. No login or hand-written profile is required.
 
-The wizard walks through **Accounts**, optional **Investments**, **Starting
-balances**, and **Review and save**. Cash-only bank accounts go directly to
-starting balances. If an investment account holds shares or funds, include them;
-when no holdings are listed, setup asks you to confirm that the account is cash
-only. Expand the help panels for account types and provider quantity rules.
-Missing prices remain unknown, not zero. Enter current cash and holdings; the
-opening is timestamped when you request its preview, and the review shows that
-one time in local and UTC formats before confirmation. Leaving or reloading
-loses an unsaved draft.
+The wizard walks through **Accounts**, **Investments held (if any)**, **Starting
+balances**, and **Review and save**. Setups with only savings / deposit accounts
+go directly to starting balances. In investment setups, list each different
+share or fund once, then enter its quantity separately for each account that
+holds it. Cash-only investment accounts can continue without adding investments,
+but each account still needs an explicit completeness confirmation.
+
+Before starting, have current cash and holding quantities for a consistent
+point in time, a brief description of the dated sources, and the provider's
+GBP price, smallest supported unit amount and minimum purchase value for each
+investment. Check the provider's dealing rules or product documents. Those
+details validate the record; if you cannot verify them, pause rather than
+guessing. The opening is timestamped when you request
+its preview; setup does not backdate. Check that the figures still reflect the
+same current point in time rather than treating an old statement as current.
+Confirm the current-point check again after returning from a preview before
+requesting another one. If you change a holdings account to savings/deposit or
+remove an account that has holdings, the wizard asks before removing those
+linked rows; changing a holding's account or investment requires the affected
+completeness checks again. The review shows the preview time in local and UTC
+formats before confirmation.
+Leaving or reloading loses an unsaved draft.
 
 Fictional setup examples distinguish an investment from the units held in an
 account. Quantity steps and minimum purchases must come from the provider's
@@ -39,21 +52,29 @@ them. Interrupted-setup recovery still requires the original opening clocks to
 reconstruct and verify the exact record. Ambiguous recovery times when clocks
 move back are refused rather than silently choosing an occurrence.
 
-On **Your portfolio**, start with **What needs attention** and the recorded date.
-These are not live bank balances. Optional roles and detailed history are
-collapsed; section shortcuts open the relevant panel. Performance help
+On **Your portfolio**, start with **What needs attention** and the valuation
+date. This is not a live bank balance; latest cash and unit counts can be from
+different journal dates. Each holding's price-effective and source-available
+dates are available in a collapsed detail. Optional roles and detailed history
+are collapsed; section shortcuts open the relevant panel. Performance help
 explains the starting point (baseline), cash-flow-neutral return and largest
-fall (drawdown). **Add a record** first asks for a category and then the record
-type; it still requires a reviewed preview. Recording dates and purchase/sale
+fall (drawdown). A missing-price link identifies the affected account and
+investment and opens a mark-record draft with those fields selected only when
+that holding still appears in the current saved records. Verify the source,
+price and dates; a later price cannot complete an earlier valuation. **Add a
+record** first asks for a category and then the record type; it still requires
+a reviewed preview. Recording dates and purchase/sale
 fees start blank: enter source-supported values, including zero only when
 verified. Corrections reject a source-availability time earlier than the
 correction clock instead of silently changing it. Monitoring snapshots remain separate comparisons,
 not transactions or repairs. Technical identities and provider details remain
 available in expandable panels; errors and missing-data warnings stay visible.
 
-Read-only recording pages give visible restart instructions: stop the existing
+After setup, the portfolio opens read-only. To record future updates, stop the
 dashboard and add `--investment-recording` to the original startup command,
-retaining its workspace/journal selection. The page never enables writing.
+retaining its workspace/journal selection. The setup receipt shows the standard
+source-checkout command and reminds users not to switch workspaces. The page
+never enables writing.
 Missing-price and cash-review links open the relevant records or guidance.
 Later prices cannot repair earlier performance gaps; historical corrections
 do not automatically establish a replacement baseline.
@@ -73,7 +94,9 @@ Required matching/source facts remain visible and are never inferred from names.
 Its date inputs use your computer's local timezone and are converted to UTC for
 review; snapshot, source-availability and matching-evidence clocks remain
 separate. Monitoring and awareness are optional and require separate local
-configuration; the investment guide links to the relevant instructions.
+configuration; the investment guide points to the local setup instructions.
+Snapshot comparison needs a separately selected monitoring cache and review
+store; opening the page never enables writing or contacts a provider.
 Recovery starts with safe actions:
 keep the whole setup folder unchanged, check/re-enter the exact original figures
 when offered, and review before confirmation. Committed or uncertain save outcomes

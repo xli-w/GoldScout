@@ -594,6 +594,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                 "profile_hash": sources["profile_hash"],
                 "cache_revision": sources["cache"]["revision"],
                 "cache_instance_id": sources["cache"]["instance_id"],
+                "mapping_observed_at": iso(mapping_at),
                 "observation": observation, "reconciliation": reconciliation,
                 "already_staged": existing_attempt is not None,
                 "expires_at": (now + monitoring_workflow.PREVIEW_TTL)
