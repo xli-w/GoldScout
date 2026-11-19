@@ -47,11 +47,11 @@ async function read<T>(path:string):Promise<T>{
   return value;
 }
 const serviceStateText:Record<ServiceState,string>={
-  unknown:"No service observation is recorded; service activity is unknown.",
+  unknown:"No service observation is recorded; activity is unknown.",
   unsupported:"Service observations require an explicit intelligence database upgrade.",
-  future:"The observation has a future timestamp; service activity is unknown.",
-  superseded:"The observation predates the applied settings; service activity is unknown.",
-  stale:"The last service observation is stale; service activity is unknown.",
+  future:"The observation is future-dated; activity is unknown.",
+  superseded:"The observation predates applied settings; activity is unknown.",
+  stale:"The last observation is stale; activity is unknown.",
   recent:"A recent service observation is recorded.",
 };
 function sourceName(source:string){
@@ -116,27 +116,29 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
     {snapshot.source_mode==="demo"&&<div className="demo-band">Synthetic intelligence</div>}
     <section className="intelligence-advisory" aria-label="Advisory-only boundary">
       <ShieldAlert size={20}/>
-      <div><h2>Optional public information — not investment advice</h2><p>Calendar, news and AI information may be incomplete or unverified. It cannot change your records or make trades.
-        Portfolio awareness is a separate local view that matches saved public information to your selected investments. Private account evidence must not be sent to hosted AI.</p></div>
+      <div><h2>Optional public information — not investment advice</h2><p>Calendar, news and analysis may be incomplete or unverified; they cannot change records or make trades.
+        Portfolio awareness is separate and local. Never send private account evidence to hosted AI.</p></div>
     </section>
     <section className="intelligence-coverage" aria-label="Current source coverage">
       <h2>Current source coverage</h2>
-      <p>U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS. UK/global calendars and issuer coverage are not established; coverage remains incomplete and unverified.</p>
+      <p>U.S.-focused calendars and Federal Reserve policy news. UK/global calendars and issuer coverage are unverified.</p>
     </section>
-    <section className="intelligence-coverage" aria-label="Service observation">
-      <h2>Service observation</h2>
+    <section className="intelligence-coverage" aria-label="Source status">
+      <h2>Source status</h2>
       <p>{snapshot.source_mode==="demo"&&snapshot.service_status_state==="unknown"
-        ?"The synthetic demo has no separate service observation.":serviceStateText[snapshot.service_status_state]}</p>
+        ?"Synthetic demo: service activity is unknown.":serviceStateText[snapshot.service_status_state]}</p>
       {snapshot.service_status&&<>
-        <p>Observed {timestamp(snapshot.service_status.observed_at)} · Applied settings revision {snapshot.service_status.settings_revision}.</p>
-        <p>Reported capabilities: network {snapshot.service_status.network_permitted?"permitted":"not permitted"};
-          news {snapshot.service_status.news_permitted?"permitted":"not permitted"};
-          AI {snapshot.service_status.ai_permitted?"permitted":"not permitted"}.
-          Calendar sources: {snapshot.service_status.calendar_sources.map(sourceName).join(", ")}.</p>
         {snapshot.service_status.failures.length>0&&<ul aria-label="Last reported failures">{snapshot.service_status.failures.map(failure=>
           <li key={failure.source}>{sourceName(failure.source)}: {label(failure.error_code)}; reported {timestamp(failure.observed_at)}. This may be historical.</li>)}</ul>}
+        <details className="help-disclosure"><summary>Observation details</summary>
+          <p>Observed {timestamp(snapshot.service_status.observed_at)} · Applied settings revision {snapshot.service_status.settings_revision}.</p>
+          <p>Reported capabilities: network {snapshot.service_status.network_permitted?"permitted":"not permitted"};
+            news {snapshot.service_status.news_permitted?"permitted":"not permitted"};
+            AI {snapshot.service_status.ai_permitted?"permitted":"not permitted"}.
+            Calendar sources: {snapshot.service_status.calendar_sources.map(sourceName).join(", ")}.</p>
+        </details>
       </>}
-      <p>An observation does not prove that the service is currently running or a provider is connected.</p>
+      <p>This does not prove that the service is running now or that a provider is connected.</p>
     </section>
     <nav className="intelligence-sections" aria-label="Intelligence sections">
       <div><span>Evidence</span><a href="#intelligence-calendar">Calendar</a><a href="#intelligence-briefs">AI briefs</a>
@@ -147,13 +149,13 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       <div className="section-heading"><h2><CalendarDays size={18}/> Economic calendar</h2><span className="status caution">Coverage unverified</span></div>
       {snapshot.calendar_sources.length>0&&<div className="snapshot-strip" aria-label="Calendar source observations">
         {snapshot.calendar_sources.map(source=><span key={source.source}>{sourceName(source.source)} last saved source check: {timestamp(source.checked_at)}</span>)}
-        <span>A later failed attempt may be shown in the service observation.</span>
+        <span>A later failure may appear in Source status.</span>
       </div>}
-      <div className="table-scroll" tabIndex={0} aria-label="Economic calendar" aria-describedby="table-scroll-instructions"><table><thead><tr><th>Event</th><th>Scheduled (UTC)</th><th>Instruments</th></tr></thead><tbody>{snapshot.calendar.map(event=><tr key={event.event_id}><td>{event.title}</td><td>{timestamp(event.scheduled_at,"Unknown")}</td><td>{event.symbols.join(', ')}</td></tr>)}</tbody></table>{snapshot.calendar.length===0&&<div className="intelligence-empty"><h3>No calendar events recorded</h3><p>{calendarCollectionActive?"No events are recorded in this snapshot. Calendar coverage remains unverified; this does not establish that no events are scheduled.":"Calendar collection is off in the applied settings. This empty view does not establish that no events are scheduled."}</p></div>}</div>
+      <div className="table-scroll" tabIndex={0} aria-label="Economic calendar" aria-describedby="table-scroll-instructions"><table><thead><tr><th>Event</th><th>Scheduled (UTC)</th><th>Instruments</th></tr></thead><tbody>{snapshot.calendar.map(event=><tr key={event.event_id}><td>{event.title}</td><td>{timestamp(event.scheduled_at,"Unknown")}</td><td>{event.symbols.join(', ')}</td></tr>)}</tbody></table>{snapshot.calendar.length===0&&<div className="intelligence-empty"><h3>No calendar events recorded</h3><p>{calendarCollectionActive?"No events in this snapshot; coverage may be incomplete.":"Calendar collection is off in applied settings. This does not show whether events are scheduled."}</p></div>}</div>
     </section>
     <section className="position-section" id="intelligence-briefs">
-      <div className="section-heading"><h2>AI briefs</h2><span className="subtle">{snapshot.budget?.calls??0} reserved calls today</span></div>
-      {snapshot.briefs.length===0?<div className="intelligence-empty"><h3>No AI briefs recorded</h3><p>{briefGenerationActive?"No briefs are recorded in this snapshot. Enabled settings do not guarantee a completed analysis.":"Brief generation requires Market intelligence, News collection, and AI summaries in the applied settings. This empty list is not evidence that no relevant events exist."}</p></div>:snapshot.briefs.map(brief=><article className="intelligence-brief" key={brief.brief_id}>
+      <div className="section-heading"><h2>AI briefs</h2><span className="subtle">{snapshot.budget===null?"Usage unavailable":`${snapshot.budget.calls} reserved calls today`}</span></div>
+      {snapshot.briefs.length===0?<div className="intelligence-empty"><h3>No AI briefs recorded</h3><p>{briefGenerationActive?"No briefs in this snapshot. Enabled settings do not guarantee analysis completed.":"Brief generation is off in applied settings. No briefs does not show whether relevant events exist."}</p></div>:snapshot.briefs.map(brief=><article className="intelligence-brief" key={brief.brief_id}>
         <div><span className="status caution">{Date.parse(brief.expires_at)<=Date.now()?'Expired':'Unverified'} / {brief.recommendation}</span><span className="subtle">{brief.provider} / {brief.model}</span></div>
         <p className="intelligence-brief-time">Available {timestamp(brief.available_at)} · Expires {timestamp(brief.expires_at)}</p>
         {brief.claims.map((claim,index)=><div className="intelligence-claim" key={index}>
@@ -174,15 +176,18 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
         {snapshot.source_status?.error_code&&<span>Last error: {label(snapshot.source_status.error_code)}</span>}
         <span>Last saved news evidence: {timestamp(snapshot.news_last_success_at)}</span></div>
       {snapshot.news.map(item=><article id={`evidence-${item.evidence_id}`} className="intelligence-news" key={item.evidence_id}><a href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a><time>Published {timestamp(item.published_at,"Unknown")}</time><p>{item.snippet}</p></article>)}
-      {snapshot.news.length===0&&<div className="intelligence-empty"><h3>No news evidence recorded</h3><p>{newsCollectionActive?`No news items are recorded in this snapshot. ${sourceObservation} News coverage may be incomplete.`:"News collection is off in the applied settings. No evidence here does not establish that no relevant news exists."}</p></div>}
+      {snapshot.news.length===0&&<div className="intelligence-empty"><h3>No news evidence recorded</h3><p>{newsCollectionActive?`No news in this snapshot. ${sourceObservation} Coverage may be incomplete.`:"News collection is off in applied settings. This does not show whether relevant news exists."}</p></div>}
     </section>
     <section className="intelligence-controls" id="intelligence-controls">
       <div className="section-heading"><div><h2>Analysis controls</h2><span className="subtle">Optional settings for collection and analysis</span></div><span className="status caution">No trading authority</span></div>
       <div className="intelligence-revisions" aria-label="Analysis settings status">
-        <div><span>Latest request</span><strong>{requested?"Waiting for the service":latestControl?`${label(latestControl.status)} / ${latestControl.reason}`:"No recorded request"}</strong></div>
-        <div><span>Applied settings</span><strong>{snapshot.settings.enabled?"Market intelligence enabled":"Market intelligence off"}</strong></div>
+        <div><span>Latest request</span><strong>{requested?`Awaiting revision ${requested.settings.revision}`:latestControl?`${label(latestControl.status)} / ${latestControl.reason}`:"No recorded request"}</strong></div>
+        <div><span>Applied settings</span><strong>Revision {snapshot.settings.revision} · Market intelligence {snapshot.settings.enabled?"on":"off"};
+          calendar {snapshot.settings.calendar_enabled?"on":"off"}; news {snapshot.settings.news_enabled?"on":"off"};
+          AI {snapshot.settings.ai_enabled?"on":"off"}</strong></div>
+        <div><span>Service</span><strong>{label(snapshot.service_status_state)}</strong></div>
       </div>
-      <p className="subtle">A request is not applied until the service confirms it. Applied settings do not prove that collection or analysis is running.</p>
+      <p className="subtle">Requested settings, applied settings and service observations are separate. Applied settings do not prove that collection or analysis is running.</p>
       <details className="help-disclosure"><summary>Settings revisions</summary>
         <p>Applied revision {snapshot.settings.revision}.{requested && ` Requested revision ${requested.settings.revision}.`}</p>
       </details>
@@ -192,13 +197,11 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       {!displayed.ai_enabled&&displayed.ai_profile&&!snapshot.profiles.includes(displayed.ai_profile)&&<p className="subtle">The saved AI profile is not registered and will be cleared when other settings change.</p>}
       {displayed.ai_enabled&&(!displayed.ai_profile||!snapshot.profiles.includes(displayed.ai_profile))&&<p className="subtle">The saved AI profile is not registered. Turn off AI summaries or Market intelligence before changing other settings.</p>}
       {!displayed.ai_enabled&&displayed.ai_profile&&latestControl?.status==='rejected'&&latestControl.reason==='AI profile is not registered'&&<p className="subtle">The service rejected the saved AI profile. <button disabled={locked} onClick={()=>change('ai_profile',null)}>Clear saved AI profile</button> and retry the setting.</p>}
-      {requested&&<p role="status">Requested revision {requested.settings.revision}: awaiting application</p>}
       {locked&&<p className="control-lock-reason" role="status">{controlLockReason}</p>}
       {!snapshot.controls_enabled?<span className="status caution">Controls disabled</span>
         :session.isPending||session.isError?null
-        :<span className="status observed">Enabled for this local session</span>}
+        :<span className="status observed">Settings controls enabled for this session</span>}
       {error&&<p role="alert">{error}</p>}
-      {latestControl&&<div className="subtle" role="status">Last request: {latestControl.status} / {latestControl.reason}</div>}
     </section>
   </>;
 }

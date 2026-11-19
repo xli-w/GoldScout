@@ -103,6 +103,12 @@ class OfflineEnvironmentTests(unittest.TestCase):
                 reader.assert_not_called()
                 self.assertEqual(os.environ["TRADER_PROXY_URL"], proxy)
 
+    def test_dns_override_is_isolated_and_restored(self):
+        with patch.dict(os.environ, {"TRADER_DNS_IPV4": "192.0.2.53"}):
+            with offline_environment():
+                self.assertEqual(os.environ["TRADER_DNS_IPV4"], "")
+            self.assertEqual(os.environ["TRADER_DNS_IPV4"], "192.0.2.53")
+
     def _assert_isolation_and_restoration(self):
         credentials = {
             "ALPACA_API_KEY": "test-sentinel",

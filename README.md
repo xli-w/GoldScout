@@ -29,6 +29,9 @@ folder. The first run guides you through choosing accounts and entering starting
 figures. Review the preview before confirming; nothing is saved before that
 confirmation. Cash-only setup skips investment details. If an investment
 account has holdings, include them rather than omitting them.
+The startup wizard also offers an optional, explicitly approved eToro read.
+It displays a separate provider snapshot; it never imports balances into the GBP
+journal. See [the eToro connection guide](docs/investment.md#optional-etoro-connection).
 
 For investment accounts, list each different investment once, then enter its
 quantity for each account that holds it. Use current figures for the same point

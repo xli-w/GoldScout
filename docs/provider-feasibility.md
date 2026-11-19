@@ -16,7 +16,7 @@ configurable; no account values or personal identifiers belong in these docs.
 | --- | --- | --- |
 | NatWest Digital Regular Saver | Manual normalized GBP evidence | Exact saver's Excel/PDF export, fields, balance clock, history, applicable terms |
 | Moneybox S&S LISA | Manual normalized evidence and separately evidenced wrapper notes | Statement format/fields/history; actual funds, fee waivers and transfer terms |
-| eToro | First read-only adapter candidate, disabled pending approval | UK/account eligibility, actual Read scope, credentials, data retention/deletion, schema/completeness and currencies |
+| eToro | Fixed GET adapter; wizard read and expiring startup refresh require explicit consent | UK/account eligibility, verified Read scope or accepted one-time broader-key risk, credentials, data retention/deletion, schema/completeness and currencies |
 | Trading 212 | Comparator only; not selected | Actual account fit, beta API limitations, terms and total migration costs |
 | AJ Bell Dodl | LISA cost comparator only | Matched funds, complete charges, transfer effects; no verified API/export schema |
 | TrueLayer / other bank aggregators | Deferred | Personal production eligibility, pricing, exact saver coverage and permitted retention |
@@ -26,18 +26,22 @@ New integration code is offline engineering, not verified account connectivity.
 
 ## Connection and scheduling status
 
-The eToro collector is separately gated and live-unvalidated; its current
-retained output is a partial native-currency summary, not a GBP account sync.
+The eToro collector is separately gated and live-unvalidated; the wizard keeps
+a partial provider portfolio observation in memory and shows a separate
+provider-reported GBP balance when available. It is not a GBP journal sync.
 NatWest and Moneybox remain operator-normalized manual evidence until a
 supported route, the exact account fields and permitted retention are verified.
 A manual or partial route must not be labelled a complete live connection.
 
-No unattended account collection is approved. The eToro watch loop still needs
-an explicit, account/profile-bound approval expiring within one day; it does
-not renew authority. Any future recurring collection needs separately approved
+The dashboard offers one eToro read set per server startup only after separate
+operator consent, verified Read-only key scope and a 1-30 day expiry. This
+permission is revocable and does not renew itself; failed reads are not retried.
+It is not a periodic watch loop or OS schedule, and the feature is not live
+validated or blanket approval to connect an actual account. The separate
+`monitor-collect --watch` CLI retains its shorter, one-day approval behavior.
+No recurring collector is approved; any such design needs separately reviewed
 scope, permissions, source-specific rate/retention terms, revocation and stop
-controls, and a failure/restart policy. No scheduler or standing authority is
-created by the current collector.
+controls, and a failure/restart policy.
 
 ## What the recovered public research supports
 

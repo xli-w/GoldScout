@@ -169,8 +169,22 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
   const unmarked = data.holdings.filter(holding => holding.mark_at === null);
   const hasDifferences = data.cash_observations.some(observation =>
     !new Decimal(observation.difference_gbp).isZero());
+  const correctionWarnings = data.warnings.filter(warning =>
+    warning.startsWith("Historical corrections preserve original evidence"));
+  const correctionReplayWarnings = data.warnings.filter(warning =>
+    warning.startsWith("Historical correction replay may have changed past cash-observation differences."));
+  const cashWarnings = data.warnings.filter(warning =>
+    warning.startsWith("Recorded cash observation"));
+  const otherWarnings = data.warnings.filter(warning =>
+    !(warning === "A complete common-clock valuation is unavailable." && !data.complete)
+    && !correctionWarnings.includes(warning)
+    && !correctionReplayWarnings.includes(warning)
+    && !cashWarnings.includes(warning));
+  const correctionDetails = [...correctionWarnings,
+    ...(hasDifferences ? [] : correctionReplayWarnings)];
   const needsAttention = !data.complete || data.recorded_corrections.length > 0 ||
-    data.baseline_as_of === null || data.twr_pct === null || data.max_drawdown_pct === null || hasDifferences;
+    data.baseline_as_of === null || data.twr_pct === null || data.max_drawdown_pct === null ||
+    hasDifferences || otherWarnings.length > 0;
   const priceAction = (holding: OpeningSnapshot["holdings"][number]) => data.source_mode === "recorded"
     ? <NavLink aria-label={`Add a checked price for ${holding.name} in ${accountDisplay(data, holding.account_id)}`}
       to={`/investment/record?record=missing-price&account_id=${encodeURIComponent(holding.account_id)}&product_id=${encodeURIComponent(holding.product_id)}`}>
@@ -179,40 +193,47 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
     : <NavLink to="/investment-guide#recording-prices">how to add a checked price</NavLink>;
   return <section className="history-group investment-next-steps" aria-label="What needs attention">
     <h2>What needs attention</h2>
-    {data.source_mode === "demo" && <p><strong>Synthetic demonstration:</strong> these are illustrative records, not your accounts.</p>}
     {!needsAttention && <p>No issues are flagged in the recorded information.</p>}
     {needsAttention && <ul>
       {!data.complete && <li>
         {unmarked.length > 0
-          ? <>A complete total needs prices for every holding. {unmarked.slice(0, 5).map((holding, index) =>
+          ? <>{unmarked.length} {unmarked.length === 1 ? "holding has" : "holdings have"} no recorded price: {unmarked.slice(0, 3).map((holding, index) =>
               <span key={`${holding.account_id}:${holding.product_id}`}>
                 {index > 0 ? "; " : ""}{holding.name}
                 {" "}({accountDisplay(data, holding.account_id)}):{" "}
                 {priceAction(holding)}
-              </span>)}{unmarked.length > 5 ? ` and ${unmarked.length - 5} more` : ""}.
-              {unmarked.length > 5 && <details className="help-disclosure">
-                <summary>Show {unmarked.length - 5} more holdings without prices</summary>
-                <ul>{unmarked.slice(5).map(holding => <li key={`${holding.account_id}:${holding.product_id}`}>
+              </span>)}{unmarked.length > 3 ? ` and ${unmarked.length - 3} more` : ""}.
+              {unmarked.length > 3 && <details className="help-disclosure">
+                <summary>Show {unmarked.length - 3} more missing prices</summary>
+                <ul>{unmarked.slice(3).map(holding => <li key={`${holding.account_id}:${holding.product_id}`}>
                   {holding.name} ({accountDisplay(data, holding.account_id)}): {priceAction(holding)}
                 </li>)}</ul>
               </details>}
-              {" "}<a href="#investment-holdings">Review holdings</a>.</>
-          : "A complete portfolio total is unavailable for the recorded date. Missing or late information is not zero."}
-        {!data.complete && unmarked.length > 0 && <p>Use a source that supports the price and the date it applied. If the source became available later, it cannot complete an earlier valuation. The price link opens a draft for that holding; verify the account, investment, price and both dates before previewing.</p>}
-        {!data.complete && unmarked.length === 0 && <p>A later price cannot fill an earlier gap. Check the recorded dates and source before adding or correcting anything.</p>}
+              {" "}<a href="#investment-holdings">Review holdings</a>.
+              <p>Use a source that supports the price and both dates. Later information cannot fill an earlier valuation.</p></>
+          : "No complete total is available for this date. Missing is not zero; check the dates and source. Later information cannot fill an earlier gap."}
       </li>}
       {data.recorded_corrections.length > 0
-        ? <li>Historical corrections make performance unavailable. Later prices cannot undo this, and no new starting point is created automatically.
-          {" "}<a href="#investment-records" onClick={() => openDisclosure("investment-records")}>Review correction history</a>.</li>
+        ? <li>A correction made past performance unavailable; no new starting point was created.
+          {" "}<a href="#investment-records" onClick={() => openDisclosure("investment-records")}>Review</a>.
+          {correctionDetails.length > 0 && <details className="help-disclosure">
+            <summary>Correction details</summary>
+            <ul>{correctionDetails.map(warning => <li key={warning}>{warning}</li>)}</ul>
+          </details>}</li>
         : data.baseline_as_of === null
-        ? <li>Performance tracking has no starting point yet (the baseline). Late information cannot establish an earlier starting point
-          or necessarily restore past returns.{" "}<NavLink to="/investment-guide#performance-gaps">Understand missing performance</NavLink>.</li>
+        ? <li>Performance has no complete starting value. Later information cannot recreate missing past returns.
+          {" "}<NavLink to="/investment-guide#performance-gaps">Learn more</NavLink>.</li>
         : (data.twr_pct === null || data.max_drawdown_pct === null) &&
-          <li>Return or largest fall is unavailable. A complete total does not restore missing performance history.
-            {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>Review recorded performance gaps</a>.</li>}
-      {hasDifferences && <li>Earlier cash observations differ from the journal. A later match does not resolve a past difference or prove a current one.
+          <li>Some performance figures are unavailable; complete totals do not restore past history.
+            {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>Review</a>.</li>}
+      {hasDifferences && <li>Recorded cash observations differ from the journal; they do not change balances or show the current one.
         {" "}<a href="#investment-accounts" onClick={onReviewCashEvidence}>Review cash evidence</a>.
+        {(cashWarnings.length > 0 || correctionReplayWarnings.length > 0) && <details className="help-disclosure">
+          <summary>Cash evidence details</summary>
+          <ul>{[...cashWarnings, ...correctionReplayWarnings].map(warning => <li key={warning}>{warning}</li>)}</ul>
+        </details>}
       </li>}
+      {otherWarnings.map(warning => <li key={warning}>{warning}</li>)}
     </ul>}
   </section>;
 }
@@ -220,7 +241,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
 function AccountAndHoldingsSummary({ data }: { data: OpeningSnapshot }) {
   return <section className="history-group portfolio-summary" id="investment-account-summary" aria-label="Accounts and investments">
     <h2>Your accounts and investments</h2>
-    <p className="position-note">Cash and unit counts are the latest journal records, not live balances. Their dates may differ from the valuation above.</p>
+    <p className="position-note">Latest journal entries, not live balances; dates may differ from the valuation.</p>
     <h3>Accounts and cash</h3>
     <dl className="health-facts">
       {data.accounts.map(account => <div key={account.id}>
@@ -473,8 +494,8 @@ const recordNames: Record<string, string> = {
   correction: "Correct an earlier record", opening: "Starting balances",
 };
 const recordGroups = [
-  { id: "money", name: "Money or income", kinds: ["contribution", "withdrawal", "transfer", "interest", "dividend"] },
-  { id: "investment", name: "An investment", kinds: ["buy", "sell", "mark", "split"] },
+  { id: "money", name: "Money and income", kinds: ["contribution", "withdrawal", "transfer", "interest", "dividend"] },
+  { id: "investment", name: "Investments", kinds: ["buy", "sell", "mark", "split"] },
   { id: "balance", name: "Check a cash balance", kinds: ["cash_observation"] },
   { id: "other", name: "Something else", kinds: ["role_assignment", "profile_change", "scope_addition", "correction"] },
 ];
@@ -616,7 +637,6 @@ function InvestmentRecording() {
   const [session, setSession] = useState<RecordingSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [kind, setKind] = useState("opening");
-  const [recordGroup, setRecordGroup] = useState("");
   const [priceTargetStatus, setPriceTargetStatus] = useState<"matched" | "stale" | null>(null);
   const [role, setRole] = useState<"core" | "dynamic" | "unassigned">("unassigned");
   const [assignmentAsset, setAssignmentAsset] = useState<"cash" | "holding">("cash");
@@ -682,7 +702,6 @@ function InvestmentRecording() {
           item.account_id === requestedAccount && item.product_id === requestedProduct);
         if (missingPrice) {
           if (result.opened) {
-            setRecordGroup("investment");
             setKind("mark");
             if (account && product && stillHeld) {
               setAccountId(account.id);
@@ -694,7 +713,6 @@ function InvestmentRecording() {
               setPriceTargetStatus("stale");
             }
           } else {
-            setRecordGroup("");
             setKind("opening");
             setAccountId("");
             setProductId("");
@@ -949,8 +967,8 @@ function InvestmentRecording() {
   const selectedProduct = session.products.find(product => product.id === productId);
 
   return <section className="history-group investment-recording" aria-label="Manual recording">
-    <h2>Add a portfolio record</h2>
-    <p>Copy a transaction or balance from your records, then check the preview before saving. Your entries are not independently verified.</p>
+    <h2>Record details</h2>
+    <p>Enter a completed transaction or sourced figure. Review the preview before saving; entries are not independently verified.</p>
     {priceTargetStatus === "matched" && <p className="position-note" role="status">
       Started from a missing-price reminder. The account and investment are preselected from the saved portfolio; verify them and use a source that supports the price and both dates. This record does not repair earlier gaps automatically.
     </p>}
@@ -969,30 +987,21 @@ function InvestmentRecording() {
       <button type="button" disabled={busy} onClick={() => void confirmPreview()}>{pending ? "Retry same confirmation" : "Confirm and append record"}</button>
       <button type="button" disabled={busy || Boolean(pending)} onClick={() => setPreview(null)}>Cancel preview</button>
     </div> : <form className="recording-form" onSubmit={makePreview}>
-      {opened && <label>What do you want to record?<select required value={recordGroup}
-        onChange={event => {
-          setRecordGroup(event.target.value); setKind(""); setCorrectionEventId("");
-          setFee(""); setEffectiveAt(""); setAvailableAt(""); setEvidence(""); setRole("unassigned"); setRoleEvidence("");
-        }}>
-        <option value="">Choose a category</option>
-        {recordGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
-      </select></label>}
-      {opened && recordGroup && <label>Choose a record<select required value={kind}
+      {opened && <label>What are you recording?<select required value={kind}
         onChange={event => {
           setKind(event.target.value); setCorrectionEventId("");
           setFee(""); setEffectiveAt(""); setAvailableAt(""); setEvidence(""); setRole("unassigned"); setRoleEvidence("");
         }}>
-        <option value="">Choose what happened</option>
-        {recordGroups.find(group => group.id === recordGroup)?.kinds.filter(value => availableKinds.includes(value))
-          .map(value => <option key={value} value={value}>{recordNames[value]}</option>)}
+        <option value="">Choose a record</option>
+        {recordGroups.map(group => <optgroup key={group.id} label={group.name}>
+          {group.kinds.filter(value => availableKinds.includes(value))
+            .map(value => <option key={value} value={value}>{recordNames[value]}</option>)}
+        </optgroup>)}
       </select></label>}
       <details className="help-disclosure"><summary>Which record should I choose?</summary>
-        <p>Money added or withdrawn means money entering or leaving this portfolio. A transfer moves cash between accounts already included here.
-          A purchase or sale records a trade you have already made; it does not place one.</p>
-        <p>A cash balance check compares a source balance with the journal without changing your money records. A price update records a price,
-          not a purchase. Add an existing account when bringing previously untracked assets into view, not when depositing new money.</p>
-        <p>Core and dynamic are optional long-term and experimental labels, not targets or trading approval.
-          Match the role already recorded for the funds involved; do not assume unassigned means core or dynamic.</p>
+        <p>Money added or withdrawn changes recorded cash; a transfer moves cash between tracked accounts. Buy or sell records a completed trade; a price update changes valuation only.</p>
+        <p>A cash check compares a source with recorded cash without changing it. Add an account when bringing existing assets into view, not when depositing money.</p>
+        <p>Roles are optional labels, not targets or trade approval. Match the role already recorded; unassigned is not core or dynamic.</p>
       </details>
       {(!opened || kind !== "") && <>
       {kind === "correction" && <label>Event to correct<select required value={correctionEventId}
@@ -1172,10 +1181,7 @@ function InvestmentRecording() {
               quantity: "", price_gbp: "", existing: false },
           ])}>Add new-account holding</button>}
         </fieldset>
-        <p className="form-note">You are bringing an existing account into view, not recording new money paid in.
-          Enter cash for every included account and all holdings with supported prices at one time.
-          The source must have been available at that same time, and performance tracking must already have a valid starting point.
-          If those requirements are not met, pause; do not invent dates or balances.</p>
+        <p className="form-note">Add an existing account, not new money. Enter cash for every account and all holdings at one time, using sources available then. A valid starting value is required; do not guess dates or balances.</p>
       </>}
       {kind !== "opening" && kind !== "correction" && <label>Account<select required value={accountId}
         onChange={event => { setAccountId(event.target.value); setRoleEvidence(""); }}>
@@ -1229,8 +1235,7 @@ function InvestmentRecording() {
         <label>GBP price per unit<input required inputMode="decimal" value={price}
         onChange={event => setPrice(event.target.value)} /></label>}
       {["buy", "sell", "mark"].includes(recordType ?? "") && <p className="form-note">
-        Use the supported price for one unit in pounds. A quote in pence is not the same number in pounds; verify the GBP equivalent.
-        For a purchase or sale, record the actual fee; 0 means you verified no fee, not that it is unknown.</p>}
+        Enter a verified GBP price per unit. For a trade, enter the actual fee; 0 only if you confirmed no fee.</p>}
       {(kind === "split" || kind === "correction" && recordType === "split") &&
         <label>Split ratio<input required inputMode="decimal" value={ratio}
           aria-label="Split ratio" aria-describedby="record-split-help"
@@ -1251,22 +1256,21 @@ function InvestmentRecording() {
           Do not use this form to turn later information into earlier evidence.</p>
       </>}
       {kind === "correction" && correction && <p className="position-note">
-        Correcting {label(correction.type)} {correction.id} from {timestamp(correction.timestamp)}. The original record and availability remain in the journal. This correction will be appended now, replayed through downstream events, and makes historical performance unavailable; no new baseline is created.
+        Correcting {label(correction.type)} {correction.id} from {timestamp(correction.timestamp)}. The original stays in the journal; this correction is replayed through later records and makes past performance unavailable. No new starting value is created.
       </p>}
       {kind !== "profile_change" && kind !== "scope_addition" && <label>Source available from (local time)
         <input required type="datetime-local" value={availableAt}
           onChange={event => setAvailableAt(event.target.value)} />
       </label>}
-      <p className="form-note" id="record-date-help">Enter dates in {Intl.DateTimeFormat().resolvedOptions().timeZone}.
-        {" "}{kind === "correction" ? "The original transaction date is retained. Enter when the correction applies and when that correction evidence became available; the latter cannot be earlier. You can describe an older supporting source in the source description. " : '"Applies at" is when the transaction happened or the balance or price applied. '}
-        "Source available from" is when the information first became available, not when you typed it.
-        For example, a statement may describe 6 pm on 1 July but be published at 9 am on 2 July.
-        The preview shows local time alongside exact UTC time. Use only dates supported by your source.</p>
+      <p className="form-note" id="record-date-help">Times use {Intl.DateTimeFormat().resolvedOptions().timeZone}; the preview also shows UTC.
+        {kind === "correction"
+          ? " The original transaction date stays. Enter when the correction applies and when its evidence became available; availability cannot be earlier. Describe older supporting sources below."
+          : ' "Applies at" is when it happened or the value applied. "Source available from" is when the information first existed—not when entered—and may be later.'}
+        {" "}Use dates supported by your source.</p>
       <label>Source description / correction reason<textarea required maxLength={200}
         aria-label="Source description / correction reason" aria-describedby="record-source-help"
         value={evidence} onChange={event => setEvidence(event.target.value)} /></label>
-      <p className="form-note" id="record-source-help">Briefly name the statement, receipt or other source and what it covers.
-        Do not paste account numbers, credentials or full statements. For a correction, explain what was wrong and the supporting source.</p>
+      <p className="form-note" id="record-source-help">Name the source and what it covers; do not include account numbers, credentials or full statements. For a correction, explain the error and supporting source.</p>
       <button type="submit" disabled={busy}>Preview record</button>
       </>}
     </form>}
@@ -1285,11 +1289,7 @@ export function InvestmentView({ now }: { now: number }) {
   ] : [];
   return <article className="investment-view">
     <div className="record-toolbar">
-      <NavLink className="text-link" to="/investment-guide">Help</NavLink>
       {data?.source_mode === "recorded" && <NavLink className="record-action" to="/investment/record">Add a record</NavLink>}
-      {data?.source_mode === "recorded" && <span className="position-note recording-access-note">
-        Manual recording must be enabled at startup. If it is off, this page explains how to restart.
-      </span>}
       <button className="icon-button refresh" aria-label="Refresh investment" disabled={query.isFetching} onClick={() => void query.refetch()}>
         <RefreshCw size={19} className={query.isFetching ? "spin" : ""} />
       </button>
@@ -1298,24 +1298,22 @@ export function InvestmentView({ now }: { now: number }) {
       : !data ? <div className="error-state" role="alert"><ShieldAlert size={30} /><h2>Investment data unavailable</h2>
         <p>{query.error instanceof Error ? query.error.message : "The investment source could not be reached."}</p></div>
         : <>
-          <div className="demo-band"><span>{data.source_mode === "demo" ? "SYNTHETIC INVESTMENT DEMO" : "YOUR MANUAL RECORDS"}</span>
+          <div className="demo-band"><span>{data.source_mode === "demo" ? "SYNTHETIC DEMO" : "MANUAL RECORDS"}</span>
             <span>{data.source_mode === "demo"
-              ? "Example data, not your accounts or an investment recommendation."
-              : "Based on what you entered, not verified by your bank or broker."}</span></div>
+              ? "Examples, not your accounts."
+              : "Entered by you; not independently verified."}</span></div>
           <section id="investment-overview" aria-label="Valuation evidence">
-            <p className="position-note">Value recorded for {timestamp(data.as_of)} ({evidenceAge(data.as_of, now)}{data.as_of !== null && Date.parse(data.as_of) <= now ? " ago" : ""}).
-              {" "}{data.complete ? "Complete for that date, not a live value." : "Incomplete: a full portfolio total cannot be shown."}</p>
+            <p className="position-note">Valuation recorded {timestamp(data.as_of)}.
+              {" "}{data.complete ? "Complete for that date; not live." : "Incomplete; full total unavailable."}</p>
             <details className="help-disclosure"><summary>About these figures and dates</summary>
-              <p>Revision {data.revision}. Recorded inputs are not current broker verification. Ages use the browser clock.
-                No freshness threshold or current valuation is inferred.</p>
-              <p>Net contributions means money added minus money withdrawn; transfers between included accounts do not count.
-                The baseline is the first complete, supported starting value. Gains before it are unknown.</p>
+              <p>Net money added is deposits less withdrawals; transfers between tracked accounts do not count.</p>
+              <p>Gain starts at the first complete, supported valuation. Earlier gain is unknown.</p>
             </details>
           </section>
           <section className="metrics" aria-label="Investment totals">
-            <div><span>Portfolio value</span><strong className={metricValues[0].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[0]}</strong><small>GBP, recorded valuation</small></div>
-            <div><span>Net money added</span><strong className={metricValues[1].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[1]}</strong><small>Money in minus money out</small></div>
-            <div><span>Gain since tracking began</span><strong className={metricValues[2].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[2]}</strong><small>Since the starting value; net of recorded fees</small></div>
+            <div><span>Portfolio value</span><strong className={metricValues[0].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[0]}</strong><small>GBP · recorded value</small></div>
+            <div><span>Net money added</span><strong className={metricValues[1].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[1]}</strong><small>Deposits less withdrawals</small></div>
+            <div><span>Gain since tracking began</span><strong className={metricValues[2].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[2]}</strong><small>Net of recorded fees</small></div>
           </section>
           <InvestmentNextSteps data={data} onReviewCashEvidence={() => {
             if (accountsRef.current) accountsRef.current.open = true;
@@ -1328,15 +1326,14 @@ export function InvestmentView({ now }: { now: number }) {
               <div><dt>Largest recorded fall</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>
             </dl>
             <details className="help-disclosure"><summary>About these figures</summary>
-              <p>Returns separate recorded investment growth from money added or withdrawn. They need complete values at key dates.</p>
-              <p>Unavailable does not mean zero. Later prices cannot fill missing past information, and these figures do not predict future results.</p>
+              <p>Returns adjust for recorded deposits and withdrawals and need complete values at key dates. Missing is not zero; later prices cannot fill past gaps.</p>
+              <p>Past results do not predict future results.</p>
             </details>
           </section>
           <details className="investment-detail" id="investment-performance">
             <summary>Detailed growth history</summary>
             <InvestmentGrowthHistory history={data.valuation_history} />
           </details>
-          {data.warnings.length > 0 && <section className="investment-warnings" role="status"><h2>Evidence and valuation warnings</h2><ul>{data.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul></section>}
           <nav className="investment-sections" aria-label="Investment sections">
             <div><span>Portfolio</span><a href="#investment-account-summary">Accounts and investments</a>
               <a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>Performance history</a></div>
@@ -1351,7 +1348,7 @@ export function InvestmentView({ now }: { now: number }) {
               They are not recommended allocations or risk limits.</p>
             <p className="position-note">{data.source_mode === "demo"
               ? "Synthetic role attribution is shown only to demonstrate accounting. It is not a target, approved allocation, or recommendation."
-              : "Roles are operator-attributed independently of account and asset class."} Unassigned funds are not assumed to be core or dynamic. Role-to-role transfers and proposals are unavailable.</p>
+              : "Roles are operator-attributed independently of account and asset class."} Unassigned funds are not assumed to be core or dynamic.</p>
             <p className="position-note">Recorded role balances reflect the latest journal, not necessarily the portfolio valuation clock. Latest role change: {timestamp(data.role_accounting_at, "None")}.</p>
             <div className="table-scroll" tabIndex={0}><table>
               <thead><tr><th>Role</th><th>Cash</th><th>Recorded value</th></tr></thead>
@@ -1521,15 +1518,6 @@ export function InvestmentView({ now }: { now: number }) {
               })}</dl>
             </section>}
           </details>
-          <details className="investment-detail" id="investment-policy">
-            <summary>Proposal status and capability limits</summary>
-          <section className="history-group"><h2>Allocation proposal: {label(data.proposal.status)}</h2>
-            <p>{data.proposal.reason}</p><p className="position-note">No order approval or execution is available here. Proposal expiry: {timestamp(data.proposal.expires_at, "Not issued")}.</p>
-          </section>
-          <section className="history-group"><h2>Capability limits</h2><ul>{data.limitations.map(item => <li key={item}>{item}</li>)}</ul>
-            <p>No market investment guarantees profit or a maximum loss. This is a measurement and discipline tool, not evidence of future outperformance.</p>
-          </section>
-          </details>
         </>}
   </article>;
 }
@@ -1541,8 +1529,7 @@ export function InvestmentRecordingPage() {
     </div>
     <section className="investment-boundary" aria-label="Manual recording boundary">
       <ShieldAlert size={18} />
-      <p>Only figures you enter are recorded. Each change needs a fresh preview checked against the current records, then your confirmation.
-        No bank or broker is contacted, and no order or transfer can be made.</p>
+      <p>Enter completed transactions or source figures, then review the preview before saving. Entries are not independently verified; this page cannot place trades or move money.</p>
     </section>
     <InvestmentRecording />
   </article>;
@@ -1551,61 +1538,58 @@ export function InvestmentRecordingPage() {
 export function InvestmentGuide() {
   const { hash } = useLocation();
   useEffect(() => {
-    if (hash) document.getElementById(hash.slice(1))?.scrollIntoView();
+    if (!hash) return;
+    const target = document.getElementById(hash.slice(1));
+    if (target instanceof HTMLDetailsElement) target.open = true;
+    target?.scrollIntoView();
   }, [hash]);
   return <article className="trading-guide">
-    <p className="guide-intro">GoldScout keeps a local record of the GBP accounts you choose. It does not connect to your bank or broker, move money or place trades.</p>
+    <p className="guide-intro">Your portfolio shows records you enter, not live account balances. GoldScout cannot move money or place trades.</p>
     <section><h2>Common tasks</h2>
       <ul>
         <li><NavLink to="/investment#investment-account-summary">See your accounts and investments</NavLink>.</li>
-        <li><NavLink to="/investment/record">Record something that has already happened</NavLink>, such as money added, interest or a completed purchase.</li>
-        <li><a href="#recording-prices">Add a checked investment price</a>.</li>
-        <li><a href="#performance-gaps">Understand a missing value or return</a>.</li>
-        <li><a href="#monitoring-setup">Learn about optional checks</a> or <a href="#backup-recovery">protect your records</a>.</li>
+        <li><NavLink to="/investment/record">Record a completed transaction</NavLink>.</li>
+        <li><NavLink to="/investment-guide#recording-prices">Add a checked investment price</NavLink>.</li>
+        <li><NavLink to="/investment-guide#performance-gaps">Understand a missing value or return</NavLink>.</li>
+        <li><NavLink to="/investment-guide#monitoring-setup">Learn about optional checks</NavLink> or
+          {" "}<NavLink to="/investment-guide#backup-recovery">back up your records</NavLink>.</li>
       </ul>
     </section>
-    <section id="recording-prices"><h2>Add an investment price</h2>
-      <p>This records a price you have checked; it does not record a purchase or change your cash or units.</p>
+    <details className="help-disclosure" id="recording-prices"><summary>Add a checked investment price</summary>
+      <p>A price record does not change cash or units. Confirm the price and source before saving.</p>
       <ol>
-        <li>Find the exact investment, its price in pounds and the date the price applied in a statement or other source.</li>
-        <li>Open <NavLink to="/investment/record">Add a record</NavLink>, choose <strong>An investment</strong>, then <strong>Update an investment price</strong>.</li>
-        <li>Enter when the price applied and when the source became available. A price quoted in pence must be converted to pounds using your source.</li>
-        <li>Review the preview and save only if the investment, price, dates and source are correct.</li>
+        <li>Open <NavLink to="/investment/record">Add a record</NavLink> and choose <strong>Update an investment price</strong>.</li>
+        <li>Enter the checked price in pounds, when it applied, when the source became available, and where you checked it.</li>
+        <li>Review the investment, price, dates and source in the preview before saving.</li>
       </ol>
-    </section>
-    <section id="performance-gaps"><h2>When a value or return is missing</h2>
-      <p>A complete portfolio value needs a price for every holding at the same recorded time. If a price is missing, the total is unavailable rather than a partial sum.</p>
-      <p>Returns need a complete starting value and complete values around recorded deposits and withdrawals. A later price cannot fill an earlier gap or recreate missing past returns.</p>
-      <p>Corrections keep the original record and may make historical performance unavailable. GoldScout does not automatically create a new starting point.</p>
-    </section>
-    <section id="monitoring-setup"><h2>Optional checks and market context</h2>
-      <p>Optional checks compare saved information and can help you review differences. A comparison does not change your portfolio records or verify an account.</p>
-      <p>Market context shows separate public information. It is not needed to use your portfolio and does not make decisions or trade. Neither view starts provider collection when opened.</p>
-      <p>To enable local checks, ask the person who set up GoldScout to follow the local profile and dashboard steps in <code>docs/monitoring.md</code>.
-        It requires a separate monitoring profile and explicitly selected stores; this page cannot enable them. Snapshot comparisons need extra setup.
-        The dashboard reads saved local evidence; provider collection, if configured, is a separate explicit operation.</p>
-      <p>Market context also needs its own optional local configuration. Private account records must never be sent to hosted AI.</p>
-    </section>
-    <section id="backup-recovery"><h2>Backup and recovery</h2>
-      <p>GoldScout does not create or check backups. Only the person responsible for this workspace should arrange one.
-        Before copying, stop the dashboard and any other process that can write to the journal. Keep source documents and setup receipts separately.</p>
-      <details className="help-disclosure"><summary>Backup steps for a source checkout</summary>
+    </details>
+    <details className="help-disclosure" id="performance-gaps"><summary>When a value or return is missing</summary>
+      <p>A complete value needs prices for every holding at the same time. If one is missing, the total is unavailable, not a partial sum.</p>
+      <p>Returns also need a complete starting value and values around deposits and withdrawals. Later prices cannot fill earlier gaps.</p>
+      <p>Corrections preserve the original record and may make past returns unavailable. GoldScout does not create a new starting point automatically.</p>
+    </details>
+    <details className="help-disclosure" id="monitoring-setup"><summary>Optional checks and market context</summary>
+      <p>These separate views use saved evidence; opening them does not collect provider data, verify accounts or change records.</p>
+      <p>Ask the person managing your workspace to configure separate local monitoring and Market context stores. Snapshot comparisons and any provider collection need separate setup and permission.</p>
+      <p>Market context is public information, not investment advice. Never send private account evidence to hosted AI.</p>
+    </details>
+    <details className="help-disclosure" id="backup-recovery"><summary>Backup and recovery</summary>
+      <p>Backups are not automatic. Do not copy an active journal as an ordinary file. Ask the person responsible for this workspace to arrange a verified backup.</p>
+      <details className="help-disclosure"><summary>Steps for a source checkout</summary>
         <ol>
-          <li>Use the exact journal path selected when GoldScout was started. Choose an existing protected destination folder and a new filename.</li>
-          <li>Run the validated backup command. It refuses to replace an existing file:</li>
+          <li>Confirm the exact journal path. Stop the dashboard and every process that could write to it.</li>
+          <li>Choose an existing protected destination folder and a new filename. The backup command refuses to replace an existing file:</li>
         </ol>
         <pre>python -m investment backup --database .\investment.sqlite3 --destination .\backups\investment-backup.sqlite3</pre>
-        <p>These paths are examples: replace them with your actual journal path and a new destination. Do not copy the command unchanged.
-          The backup is not encrypted automatically.</p>
-        <ol start={3}><li>Follow <code>docs/investment-journal.md</code> to verify the receipt and test a restore to a fresh path.
-          Never restore over your active journal.</li></ol>
+        <p>Replace both example paths with the actual journal and a new destination. Backups are not encrypted automatically.</p>
+        <ol start={3}><li>Verify the backup and test restoration to a new path. Never restore over the active journal.</li></ol>
       </details>
-      <p>If you did not install GoldScout from a source checkout, ask the person who set it up to arrange a verified backup.
-        Keep a protected copy away from this computer.</p>
-    </section>
-    <section><h2>About your records</h2>
+      <p>Keep source documents and setup receipts separately, and store a protected backup away from this computer.</p>
+    </details>
+    <details className="help-disclosure"><summary>About your records</summary>
       <p>Figures are entered by you and are not checked with a bank or broker. The dashboard is read-only unless manual recording is explicitly enabled when it starts. Keep it on this computer; there is no sign-in.</p>
+      <p>GoldScout does not recommend allocations or approve orders. It cannot place trades or move money.</p>
       <p>Investment values can fall, and no return is guaranteed. Account type does not confirm tax treatment, eligibility or deposit protection.</p>
-    </section>
+    </details>
   </article>;
 }

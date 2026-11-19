@@ -15,7 +15,6 @@
 @media (max-width: 640px) { .setup-row { grid-template-columns: 1fr; } }
 .record-toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 22px; }
 .record-toolbar > .refresh { margin-left: auto; }
-.recording-access-note { margin: 0; }
 .history-chart { margin: 0 0 28px; padding: 16px 0; border-block: 1px solid var(--line); }
 .history-group[id] { scroll-margin-top: 20px; }
 .investment-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0 0 18px; }
@@ -59,6 +58,27 @@
 .history-heading { margin-top: 30px; }
 .history-group { margin-top: 28px; }
 .investment-next-steps { padding: 14px 16px; border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
+.etoro-panel { max-width: 1200px; min-width: 0; overflow-wrap: anywhere; }
+.etoro-panel-embedded { margin-block: 20px; padding: 16px; border: 1px solid var(--line); background: #fff; }
+.etoro-intro, .etoro-panel .position-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.etoro-form { display: grid; gap: 14px; max-width: 680px; }
+.etoro-form label { display: grid; gap: 6px; font-size: 12px; }
+.etoro-form fieldset { display: grid; gap: 10px; border: 1px solid var(--line); padding: 14px; }
+.etoro-panel .setup-check { display: flex; align-items: start; gap: 10px; line-height: 1.6; font-size: 12px; }
+.etoro-panel .setup-check input { width: auto; margin-top: 5px; flex: 0 0 auto; }
+.etoro-panel button { margin: 6px 8px 6px 0; }
+.etoro-panel button:disabled { opacity: .6; cursor: not-allowed; }
+.etoro-warning { margin-block: 14px; padding: 12px 14px; border-left: 3px solid var(--amber); background: #fffdf3; font-size: 12px; line-height: 1.6; }
+.etoro-section { margin-block: 18px; padding-block: 4px; }
+.etoro-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.etoro-totals > div { min-width: 0; padding: 10px; border: 1px solid var(--line); background: #fff; }
+.etoro-totals dt { color: var(--muted); font-size: 11px; }
+.etoro-totals dd { margin: 5px 0 0; font: 13px "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
+.etoro-panel .table-scroll { overflow-x: auto; }
+.etoro-panel table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.etoro-panel th, .etoro-panel td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.etoro-panel th { color: var(--muted); font-weight: 500; }
+.etoro-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .investment-next-steps h2 { margin-top: 0; }
 .investment-next-steps li { margin-block: 8px; line-height: 1.5; }
 .investment-next-steps a { color: #78e1b0; text-decoration: underline; }

@@ -3,7 +3,7 @@ from dataclasses import replace
 import unittest
 from market_intelligence.analysis import AnalysisBrief, AnalysisLimits, EvidenceClaim, analysis_input
 from market_intelligence.store import IntelligenceStore, StoreError, initialize, upgrade
-from unittest.mock import Mock,patch
+from unittest.mock import Mock,call,patch
 import io
 import json
 import threading
@@ -145,7 +145,10 @@ class RuntimeProviderTests(unittest.TestCase):
             import os
             self.assertEqual(os.environ["TRADER_AI_TEST"], "environment-key")
         self.assertEqual(connection.request.call_args.args[3]["Authorization"], "Bearer file-key")
-        read.assert_called_once_with(("TRADER_AI_TEST",))
+        self.assertEqual(read.call_args_list, [
+            call(("TRADER_AI_TEST",)),
+            call(("TRADER_DNS_IPV4",)),
+        ])
 
     def test_blank_or_malformed_dotenv_key_never_dispatches(self):
         for result in ({"TRADER_AI_TEST": ""}, ProxyConfigurationError("Invalid connection settings")):

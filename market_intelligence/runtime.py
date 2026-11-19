@@ -9,6 +9,7 @@ import re
 import socket
 import threading
 
+from dns_config import resolve_host
 from market_intelligence.analysis import (
     DailyAnalysisBudget, JSONSummaryProvider, ProviderResponse, AnalysisError, strict_json_loads,
 )
@@ -160,7 +161,7 @@ class ProviderProfile:
                 raise AnalysisError("analysis_cancelled")
             if self.kind in _HOSTED_ENDPOINTS:
                 host = _HOSTED_ENDPOINTS[self.kind]
-                addresses=socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)
+                addresses=resolve_host(host,443,type=socket.SOCK_STREAM)
                 if not addresses or len(addresses)>32:
                     raise AnalysisError("provider_unavailable")
                 for address in addresses:

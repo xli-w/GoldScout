@@ -11,16 +11,16 @@ test("synthetic intelligence controls and briefs work without account data",asyn
   await page.reload();
   await expect(page.getByRole("heading",{name:"Market context",exact:true})).toBeVisible();
   await expect(page.getByText("Synthetic intelligence",{exact:true})).toBeVisible();
-  await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("U.S.-focused: BLS/BEA calendars and Federal Reserve monetary-policy RSS.");
-  await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("UK/global calendars and issuer coverage are not established");
-  await expect(page.getByText("Last request: applied / Settings applied",{exact:true})).toBeVisible();
+  await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("U.S.-focused calendars and Federal Reserve policy news.");
+  await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("UK/global calendars and issuer coverage are unverified");
+  await expect(page.getByText("Applied / Settings applied",{exact:true})).toBeVisible();
   await page.getByText("Settings revisions",{exact:true}).click();
   const appliedChange=async action=>{
     const revisions=page.locator("#intelligence-controls details").filter({hasText:"Settings revisions"});
     const revision=Number((await revisions.locator("p").innerText()).match(/Applied revision (\d+)/)[1]);
     await action();
     await expect(revisions).toContainText(`Applied revision ${revision+1}`);
-    await expect(page.getByText("Last request: applied / Settings applied",{exact:true})).toBeVisible();
+    await expect(page.getByText("Applied / Settings applied",{exact:true})).toBeVisible();
   };
   let accountRequests=0;
   await page.route("**/api/v1/overview",route=>{accountRequests++;return route.abort();});
@@ -67,11 +67,13 @@ test("intelligence header uses its own source instead of cached account status",
   await expect(page.getByRole("heading",{name:"Your portfolio",exact:true})).toBeVisible();
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.source_mode="recorded";
-  await page.getByRole("link",{name:"Intelligence",exact:true}).click();
+  await page.getByRole("navigation",{name:"Optional tools navigation"})
+    .getByRole("link",{name:"Market context",exact:true}).click();
   await expect(page.getByRole("heading",{name:"Economic calendar"})).toBeVisible();
   await expect(page.locator(".topbar-status")).toContainText("RECORDED INTELLIGENCE");
   await expect(page.locator(".topbar-status")).not.toContainText("Runtime");
-  await expect(page.locator(".page-heading")).toContainText("INTELLIGENCE WORKSPACE");
+  await expect(page.locator(".page-heading")).toContainText("Market context");
+  await expect(page.locator(".page-heading")).not.toContainText("INTELLIGENCE WORKSPACE");
   await page.route("**/api/v1/intelligence",route=>route.abort());
   await page.getByRole("button",{name:"Refresh data"}).click();
   await expect(page.locator(".topbar-status")).toContainText("Source unknown");
@@ -90,19 +92,20 @@ test("intelligence empty states distinguish disabled collection from missing evi
   const calendar=page.getByRole("heading",{name:"No calendar events recorded"}).locator("..");
   const briefs=page.getByRole("heading",{name:"No AI briefs recorded"}).locator("..");
   const news=page.getByRole("heading",{name:"No news evidence recorded"}).locator("..");
-  await expect(calendar).toContainText("Calendar collection is off in the applied settings");
-  await expect(briefs).toContainText("Brief generation requires Market intelligence, News collection, and AI summaries");
-  await expect(news).toContainText("News collection is off in the applied settings");
-  await expect(calendar).toContainText("does not establish that no events are scheduled");
-  await expect(news).toContainText("does not establish that no relevant news exists");
+  await expect(calendar).toContainText("Calendar collection is off in applied settings");
+  await expect(briefs).toContainText("Brief generation is off in applied settings");
+  await expect(news).toContainText("News collection is off in applied settings");
+  await expect(calendar).toContainText("does not show whether events are scheduled");
+  await expect(news).toContainText("does not show whether relevant news exists");
+  await expect(page.getByText("Usage unavailable",{exact:true})).toBeVisible();
 
   snapshot.settings={...snapshot.settings,enabled:true,ai_enabled:true,ai_profile:"demo"};
   snapshot.source_status={status:"unavailable",available_at:"2026-03-08T09:30:00Z",error_code:"feed_unavailable"};
   await page.reload();
-  await expect(calendar).toContainText("No events are recorded in this snapshot");
-  await expect(briefs).toContainText("Enabled settings do not guarantee a completed analysis");
+  await expect(calendar).toContainText("No events in this snapshot");
+  await expect(briefs).toContainText("Enabled settings do not guarantee analysis completed");
   await expect(news).toContainText("Last source observation: Unavailable");
-  await expect(news).toContainText("News coverage may be incomplete");
+  await expect(news).toContainText("Coverage may be incomplete");
 });
 
 test("service observations distinguish recorded failures from current connectivity",async({page})=>{
@@ -118,13 +121,15 @@ test("service observations distinguish recorded failures from current connectivi
   snapshot.source_status={status:"unavailable",available_at:"2026-03-08T09:30:00Z",error_code:"source_unavailable"};
   snapshot.news_last_success_at="2026-03-08T09:20:00Z";
   await page.goto(new URL("/intelligence",mockedFrontendURL).href);
-  const service=page.getByRole("region",{name:"Service observation"});
+  const service=page.getByRole("region",{name:"Source status"});
   await expect(service).toContainText("A recent service observation is recorded");
   await expect(service).toContainText("AI summaries: Provider Unavailable");
   await expect(service).toContainText("This may be historical");
-  await expect(service).toContainText("does not prove that the service is currently running");
+  await expect(service).toContainText("does not prove that the service is running now");
+  await service.getByText("Observation details",{exact:true}).click();
+  await expect(service).toContainText("Reported capabilities: network permitted");
   await expect(page.getByLabel("Calendar source observations")).toContainText("BLS last saved source check");
-  await expect(page.getByLabel("Calendar source observations")).toContainText("A later failed attempt may be shown");
+  await expect(page.getByLabel("Calendar source observations")).toContainText("A later failure may appear in Source status");
   await expect(page.getByText("Last error: Source Unavailable")).toBeVisible();
   await expect(page.getByText("Last saved news evidence:",{exact:false})).toBeVisible();
 
@@ -132,11 +137,11 @@ test("service observations distinguish recorded failures from current connectivi
   snapshot.service_status.observed_at="2026-03-08T09:18:00Z";
   snapshot.service_status.failures[0].observed_at="2026-03-08T09:17:00Z";
   await page.reload();
-  await expect(service).toContainText("last service observation is stale");
+  await expect(service).toContainText("last observation is stale");
   snapshot.service_status_state="superseded";
   snapshot.settings.revision=2;
   await page.reload();
-  await expect(service).toContainText("predates the applied settings");
+  await expect(service).toContainText("predates applied settings");
   snapshot.service_status_state="unsupported";
   snapshot.service_status_capable=false;
   snapshot.service_status=null;
@@ -162,8 +167,9 @@ test("intelligence briefs link only loaded evidence and show their validity wind
   snapshot.briefs=[{brief_id:"brief-1",available_at:"2026-03-08T09:31:00Z",expires_at:"2026-03-08T10:00:00Z",claims:[{text:"A cited synthetic claim.",evidence_ids:["evidence-1","missing-evidence"]}],interpretation:"Synthetic interpretation.",uncertainties:["Synthetic uncertainty."],recommendation:"review",verification:"unverified",provider:"synthetic",model:"test"}];
   await page.goto(new URL("/intelligence",mockedFrontendURL).href);
 
-  await expect(page.locator(".page-description")).toHaveText("Optional calendar, news, and analysis. Advisory only and separate from account records.");
-  await expect(page.getByRole("navigation",{name:"Advisory navigation"})).toContainText("Intelligence");
+  await expect(page.locator(".page-description")).toHaveCount(0);
+  await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("Optional public information");
+  await expect(page.getByRole("navigation",{name:"Optional tools navigation"})).toContainText("Market context");
   const sections=page.getByRole("navigation",{name:"Intelligence sections"});
   await expect(sections.getByRole("link",{name:"Source evidence"})).toHaveAttribute("href","#intelligence-news");
   await expect(sections.getByRole("link",{name:"Analysis controls"})).toHaveAttribute("href","#intelligence-controls");
@@ -209,16 +215,20 @@ test("intelligence leads with evidence and separates request from application",a
   snapshot.controls=[{request_id:"request-7",status:"applied",reason:"Settings applied",effective_revision:7}];
   await page.goto(new URL("/intelligence",mockedFrontendURL).href);
 
-  await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("cannot change your records or make trades");
+  await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("cannot change records or make trades");
   expect(await page.evaluate(()=>Array.from(document.querySelectorAll(".intelligence-advisory, .position-section, .intelligence-controls")).map(section=>
     section.classList.contains("intelligence-advisory")?"advisory":section.classList.contains("intelligence-controls")?"controls":section.querySelector("h2")?.textContent?.trim()
   ))).toEqual(["advisory","Economic calendar","AI briefs","Source evidence","controls"]);
   const revisions=page.getByLabel("Analysis settings status");
+  await expect(revisions.locator("> div")).toHaveCount(3);
+  await expect(revisions.locator("> div").nth(0)).toContainText("Latest request");
+  await expect(revisions.locator("> div").nth(1)).toContainText("Applied settings");
+  await expect(revisions.locator("> div").nth(2)).toContainText("Service");
   await expect(revisions).toContainText("Applied / Settings applied");
   await page.getByText("Settings revisions",{exact:true}).click();
   await expect(page.locator("#intelligence-controls details").filter({hasText:"Settings revisions"})).toContainText("Applied revision 7");
   await expect(revisions).not.toContainText("Bot observed");
-  await expect(page.getByText("Enabled for this local session",{exact:true})).toBeVisible();
+  await expect(page.getByText("Settings controls enabled for this session",{exact:true})).toBeVisible();
   await expect(page.getByRole("textbox",{name:"Analysis-control password"})).toHaveCount(0);
 });
 
@@ -288,7 +298,7 @@ for(const {scenario,label,profiles,masterEnabled} of [
     await expect(control).toBeChecked();
     await control.uncheck();
     await expect(page.getByLabel("Analysis settings status").locator("> div").nth(1)).toContainText("Revision 2");
-    await expect(page.getByText("Last request: applied / Settings applied",{exact:true})).toBeVisible();
+    await expect(page.getByText("Applied / Settings applied",{exact:true})).toBeVisible();
     expect(requests[0].settings).toMatchObject({enabled:masterEnabled,ai_enabled:false,ai_profile:null,calendar_enabled:true,news_enabled:true});
   });
 }
@@ -299,7 +309,7 @@ test("safe recovery clears a rejected profile while both controls are off",async
   await page.goto(new URL("/intelligence",mockedFrontendURL).href);
   const master=page.getByRole("checkbox",{name:"Market intelligence",exact:true});
   await master.click();
-  await expect(page.getByText("Last request: rejected / AI profile is not registered",{exact:true})).toBeVisible();
+  await expect(page.getByText("Rejected / AI profile is not registered",{exact:true})).toBeVisible();
   await expect(master).not.toBeChecked();
   expect(requests[0].settings.ai_profile).toBe("demo");
   const clear=page.getByRole("button",{name:"Clear saved AI profile",exact:true});

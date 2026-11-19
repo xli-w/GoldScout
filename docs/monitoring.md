@@ -233,7 +233,9 @@ A provider deletion/termination request may require deleting all relevant local
 cache copies, not just waiting for expiry. Do not initialize/activate a cache if
 the permitted data handling is unresolved. Purging never changes accounting.
 
-## eToro Read adapter: engineering implemented, live unvalidated
+## eToro reads: engineering implemented, live unvalidated
+
+### Existing monitoring CLI summary
 
 The adapter implements one documented account snapshot GET:
 `https://public-api.etoro.com/api/v1/trading/info/real/pnl`.
@@ -243,9 +245,13 @@ were checked against eToro's official
 and [API conventions](https://github.com/etoro-builders/etoro-cursor-plugin/blob/a18e511a7226df46a9a7587c6ce92582c3592ab2/rules/etoro-api-conventions.mdc).
 Account-specific compatibility remains unverified.
 
-The transport fixes host/path and GET, validates and pins public DNS addresses,
-uses TLS hostname verification, bounded requests/response sizes, refuses
-redirects and honors the configured proxy without direct fallback. Failures are
+The transport fixes the host and allowlists only documented GET paths for the
+P&L summary, Real/Demo aggregate portfolio, and validated Trading-account GBP
+display balance. It validates and pins public DNS addresses, uses TLS hostname
+verification, bounds requests/response sizes, refuses redirects and honors
+the configured proxy without direct fallback. It also honors
+the optional [IPv4 DNS-server override](intelligence.md#ipv4-dns-server-override),
+which makes direct DNS queries only when explicitly configured. Failures are
 sanitized. No order/write functions, arbitrary URLs or automatic retries exist.
 This route is a snapshot, not paginated transaction history. History/window
 collection remains gated rather than inventing unsupported coverage.
@@ -259,8 +265,12 @@ No source clock means freshness remains unavailable even after a successful GET.
 The raw response and private instrument/position identifiers are discarded.
 
 Activation requires separate task-specific approval plus operator verification
-of account eligibility, actual Read-only scope, account binding and permitted
-retention. Merely making GET requests does not prove a key is read-only.
+of account eligibility, account binding and permitted retention. Prefer a key
+with verified Read-only scope. A supervised read may also use a broader key if
+the operator explicitly accepts that the credential could place, modify or
+cancel orders if exposed or misused. That acknowledgement does not verify
+read-only permission or reduce the credential's actual authority. The adapter
+has no order/write methods or arbitrary URL support.
 Resolve [provider gates](provider-feasibility.md) first; never request keys or
 statements in chat or test permissions by attempting a trade.
 
@@ -273,15 +283,21 @@ profile hash and selected local account alias:
   "account_id": "broker",
   "approved_at": "2026-11-17T12:00:00Z",
   "expires_at": "2026-11-17T13:00:00Z",
-  "read_scope_verified": true,
+  "read_scope_verified": false,
+  "trade_capable_key_risk_accepted": true,
   "eligibility_verified": true,
   "retention_rights_verified": true,
   "account_binding_verified": true,
   "supervised_read_approved": true,
-  "evidence": "Operator-verified permissions, rights and explicit supervised-read approval"
+  "evidence": "Operator-verified eligibility, binding and retention; accepts trade-capable key risk for one supervised GET"
 }
 ```
 
+Set exactly one of `read_scope_verified` or
+`trade_capable_key_risk_accepted` to `true`. If scope is unknown or broader than
+read-only, do not claim it was verified: set `read_scope_verified` to `false`
+and explicitly accept the broader-key risk instead. Approval files must include
+the new `trade_capable_key_risk_accepted` field; older files fail closed.
 Approval has a maximum one-day lifetime and is an operator attestation, not an
 authenticated approval service or proof of permissions. The operator supplies
 `GOLDSCOUT_ETORO_API_KEY` and `GOLDSCOUT_ETORO_USER_KEY` privately through their
@@ -308,6 +324,33 @@ this is not unattended standing authority. Ctrl+C stops the foreground loop.
 No OS task/service is installed and no collection process starts with the
 dashboard. Concurrent publications serialize through SQLite; the in-process
 transport permits only one active request and bounds unresolved DNS workers.
+
+### Startup wizard portfolio view
+
+The local setup wizard has a separate eToro view using the documented
+aggregate-portfolio read for the explicitly selected Real or Demo environment,
+plus a separate Trading-account balance read with GBP display currency. The
+dashboard keeps the normalized provider observation in process memory only.
+Its `.etoro/connection.json` stores consent, account identity and expiry, not
+keys, raw responses or portfolio history. The separate GBP balance is
+provider-reported, lacks a source timestamp, and is not combined with the
+portfolio snapshot or used to value holdings.
+
+The initial read requires explicit consent, eligibility and retention checks,
+then confirmation of the returned account ID. A trade-capable key may be
+accepted only for that supervised one-time read. Automatic refresh requires
+verified Read-only scope, separate opt-in, an expiry of 1-30 days, and remains
+revocable. It attempts one read set on each server startup while permission is
+active; it does not retry failures. Status checks and page loads never collect.
+The dashboard routes are protected by loopback host, same-origin and short-lived
+CSRF defenses, which are not user authentication.
+
+The aggregate endpoint reports net instrument aggregates, not individual
+position legs or complete product classifications. Copy groups remain separate
+to avoid summing them with direct aggregates. Pending-order detail is
+unavailable; only reserved cash is shown. No provider values are imported into
+the GBP accounting journal, and no custodial, buying-power or complete
+portfolio-sync claim follows from this partial view.
 
 No live provider validation, custody verification, reconciliation approval,
 profitability or execution readiness is established by offline tests.

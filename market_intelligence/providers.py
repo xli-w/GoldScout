@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Tuple
 
+from dns_config import DNSConfigurationError, resolve_host
 from market_intelligence.contracts import CalendarEvent, SourceCoverage, SYMBOLS, utc_time
 from proxy_config import configured_proxy_url, parse_proxy_url
 
@@ -100,7 +101,7 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
             self.set_tunnel(address, 443, headers=headers)
 
     def _connect_proxy(self, cancelled):
-        records = socket.getaddrinfo(self.proxy.host, self.proxy.port, type=socket.SOCK_STREAM)
+        records = resolve_host(self.proxy.host, self.proxy.port, type=socket.SOCK_STREAM)
         last_error = None
         for family, kind, protocol, _, address in records:
             if cancelled is not None and cancelled.is_set():
@@ -167,7 +168,7 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 class CalendarTransport:
     def __init__(self, resolver=None, connection_factory=None, monotonic=None, proxy_url=None):
-        self.resolver = resolver or socket.getaddrinfo
+        self.resolver = resolver or resolve_host
         self.connection_factory = connection_factory or PinnedHTTPSConnection
         self.monotonic = monotonic or time.monotonic
         self.proxy = parse_proxy_url(configured_proxy_url() if proxy_url is None else proxy_url)
@@ -272,6 +273,8 @@ class CalendarTransport:
         except (OSError, ValueError, http.client.HTTPException) as exc:
             if isinstance(exc, socket.gaierror):
                 category = "dns"
+            elif isinstance(exc, DNSConfigurationError):
+                category = "dns_configuration"
             elif isinstance(exc, ssl.SSLError):
                 category = "tls"
             elif isinstance(exc, TimeoutError):

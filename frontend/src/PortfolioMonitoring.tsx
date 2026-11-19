@@ -36,7 +36,7 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
   const mismatch = data?.enabled && (data.portfolio_id !== portfolioId || data.portfolio_revision !== revision);
   return <section className="history-group portfolio-monitoring" aria-label="Portfolio monitoring">
     <h2>Checks from saved information</h2>
-    <p className="position-note">These checks read saved information only. They do not contact providers or change your accounts.</p>
+    <p className="position-note">Optional checks use saved evidence only; they do not verify accounts or change records.</p>
     {query.isError || mismatch ? <p role="alert">{mismatch && !query.isError
       ? "Investment revision changed. Refresh both views before interpreting findings."
       : "Saved checks are unavailable. Previous findings are not current."}
@@ -50,34 +50,37 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
           <label><input type="checkbox" checked={poll} onChange={event => setPoll(event.target.checked)} /> Refresh checks every minute</label>
         </div>
         <p>{data.source_mode === "demo" ? "Synthetic monitoring demonstration" : "Recorded local evidence"}; checked {timestamp(data.generated_at)}.</p>
-        <p>Experimental (dynamic) share: {data.dynamic_pct === null ? "Unavailable"
-          : `${new Decimal(data.dynamic_pct).toFixed(2)}%`} of eligible non-LISA investment holdings. Savings, LISA and cash excluded.
-          The illustrative 10-20% range is not a target or limit.</p>
         <p>Provider connections are not verified. These checks use saved evidence only.</p>
-        {data.providers.length > 0 && <ul aria-label="Provider evidence status">{data.providers.map(item =>
-          <li key={item.account_id}><strong>{item.account_id} / {item.provider}</strong>: {label(item.readiness)};
-            freshness {label(item.freshness)}; coverage {label(item.coverage)}.</li>)}</ul>}
-        <details className="help-disclosure"><summary>Provider status and source details</summary>
-        <p>Journal revision {data.portfolio_revision}; cache revision {data.cache_revision ?? "not selected"}. Readiness is not verified connectivity.</p>
-        <ul>{data.providers.map(item => <li key={item.account_id}>
-          <strong>{item.account_id} / {item.provider}</strong>: {item.readiness}; {item.freshness}; coverage {item.coverage}; currency {item.currency ?? "unknown"}.
-          Last attempt {timestamp(item.last_attempt_at)} ({item.last_attempt_status ?? "none"});
-          last success {timestamp(item.last_success_at)}; source as-of {timestamp(item.source_as_of)}.
-          {item.native_summary && <> Source credit field (USD): {item.native_summary.credit_usd};
-            observed positions: {item.native_summary.position_count}. Not verified cash, GBP value or complete holdings.</>}
-        </li>)}</ul>
-        </details>
-        <h3>Findings for review</h3>
+        <h3>Findings</h3>
         <p><NavLink className="text-link" to="/investment/reviews">Open the separate review inbox</NavLink>
-          {" "}to track what you have reviewed. Marking something reviewed does not resolve it or change the journal.</p>
-        <ul>{data.findings.map(item => <li key={item.id}>
-          <strong>{item.subject}: {item.status}</strong> - {item.explanation}
-          {item.calculation !== null && <> Calculation: {item.calculation}.</>}
-          <details><summary>Evidence and next check</summary><p>{item.evidence}</p>
-            <p>Rule {item.rule}, action: {item.recommendation}. No accounting change or trade is approved.</p>
-          </details>
-        </li>)}</ul>
-        <details><summary>Monitoring coverage and limitations</summary>
+          {" "}to track your review. This does not resolve a finding.</p>
+        {data.findings.length === 0
+          ? <p>No findings in this report. These checks do not verify every account or provider.</p>
+          : <ul>{data.findings.map(item => <li key={item.id}>
+            <strong>{item.subject}: {label(item.status)}</strong> - {item.explanation}
+            {item.calculation !== null && <> Calculation: {item.calculation}.</>}
+            <p>Next check: {item.recommendation}</p>
+            <details><summary>Evidence</summary><p>{item.evidence}</p>
+              <p>Rule {item.rule}. No accounting change or trade is approved.</p>
+            </details>
+          </li>)}</ul>}
+        <details className="help-disclosure"><summary>Source status</summary>
+          <p>Journal revision {data.portfolio_revision}; cache revision {data.cache_revision ?? "not selected"}.
+            Readiness does not confirm provider connectivity.</p>
+          <p>Dynamic-role share: {data.dynamic_pct === null ? "Unavailable"
+            : `${new Decimal(data.dynamic_pct).toFixed(2)}%`} of eligible non-LISA investment holdings
+            {data.eligible_holdings_gbp !== null && <> (GBP {data.eligible_holdings_gbp})</>}. It is not a target.
+            Savings, LISA and cash are excluded.</p>
+          {data.providers.length > 0 && <ul aria-label="Provider evidence status">{data.providers.map(item =>
+            <li key={item.account_id}><strong>{item.account_id} / {item.provider}</strong>: {label(item.readiness)};
+              freshness {label(item.freshness)}; coverage {label(item.coverage)}; currency {item.currency ?? "unknown"}.
+              Last attempt {timestamp(item.last_attempt_at)} ({item.last_attempt_status ?? "none"});
+              last success {timestamp(item.last_success_at)}; source as-of {timestamp(item.source_as_of)}.
+              {item.native_summary && <> Source credit field (USD): {item.native_summary.credit_usd};
+                observed positions: {item.native_summary.position_count}. Not verified cash, GBP value or complete holdings.</>}
+            </li>)}</ul>}
+        </details>
+        <details className="help-disclosure"><summary>Coverage and limitations</summary>
           <ul>{data.limitations.map(item => <li key={item}>{item}</li>)}</ul>
         </details>
       </>}

@@ -37,7 +37,8 @@ class MonitoringRuntimeTests(unittest.TestCase):
         self.approval = {
             "profile_hash": digest(canonical(self.profile)), "account_id": "broker",
             "approved_at": iso(NOW), "expires_at": iso(NOW + timedelta(hours=1)),
-            "read_scope_verified": True, "eligibility_verified": True,
+            "read_scope_verified": True, "trade_capable_key_risk_accepted": False,
+            "eligibility_verified": True,
             "retention_rights_verified": True, "account_binding_verified": True,
             "supervised_read_approved": True, "evidence": "synthetic approval only",
         }
@@ -64,17 +65,52 @@ class MonitoringRuntimeTests(unittest.TestCase):
         collector, credentials = Mock(), Mock()
         with self.assertRaises(InvestmentError):
             self.collect(collector=collector, credential_accessor=credentials)
-        for key in ("read_scope_verified", "eligibility_verified", "retention_rights_verified",
+        for key in ("eligibility_verified", "retention_rights_verified",
                     "account_binding_verified", "supervised_read_approved"):
             self.approval[key] = False
             with self.assertRaises(InvestmentError):
                 self.collect(allow_network=True, collector=collector, credential_accessor=credentials)
             self.approval[key] = True
+        for read_scope, risk_accepted in ((False, False), (True, True)):
+            self.approval["read_scope_verified"] = read_scope
+            self.approval["trade_capable_key_risk_accepted"] = risk_accepted
+            with self.assertRaises(InvestmentError):
+                self.collect(allow_network=True, collector=collector, credential_accessor=credentials)
+        self.approval["read_scope_verified"] = False
+        self.approval.pop("trade_capable_key_risk_accepted")
+        with self.assertRaises(InvestmentError):
+            self.collect(allow_network=True, collector=collector, credential_accessor=credentials)
+        self.approval["trade_capable_key_risk_accepted"] = False
+        self.approval["read_scope_verified"] = True
         self.approval["expires_at"] = iso(NOW)
         with self.assertRaises(InvestmentError):
             self.collect(allow_network=True, collector=collector, credential_accessor=credentials)
         collector.assert_not_called()
         credentials.assert_not_called()
+
+    def test_trade_capable_key_requires_explicit_risk_acceptance_and_remains_get_only(self):
+        payload = (b'{"clientPortfolio":{"credit":42,"positions":[],"mirrors":[],'
+                   b'"orders":[],"ordersForOpen":[]}}')
+        transport = Mock(return_value=payload)
+        credentials = Mock(return_value={"x-api-key": "trade-capable-key",
+                                         "x-user-key": "synthetic-user-key"})
+        self.approval["read_scope_verified"] = False
+        self.approval["trade_capable_key_risk_accepted"] = False
+        with self.assertRaisesRegex(InvestmentError, "trade-capable key"):
+            self.collect(allow_network=True, transport=transport,
+                         credential_accessor=credentials)
+        transport.assert_not_called()
+        credentials.assert_not_called()
+
+        self.approval["trade_capable_key_risk_accepted"] = True
+        result = self.collect(allow_network=True, transport=transport,
+                             credential_accessor=credentials)
+        self.assertEqual(result["status"], "partial_observation")
+        self.assertFalse(result["accounting_writes"])
+        self.assertFalse(result["affects_trading"])
+        transport.assert_called_once()
+        self.assertEqual(transport.call_args.args[0], "/api/v1/trading/info/real/pnl")
+        credentials.assert_called_once()
 
     def test_default_credentials_use_file_values_only_after_collection_gates(self):
         payload = (b'{"clientPortfolio":{"credit":42,"positions":[],"mirrors":[],'

@@ -10,6 +10,7 @@ from investment import InvestmentError
 DATABASE = "investment.sqlite3"
 PROFILE = "profile.json"
 SETUP = ".investment-setup"
+ETORO = ".etoro"
 
 
 def resolve_workspace(explicit=None):

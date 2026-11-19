@@ -99,7 +99,7 @@ def _matches(spec, events, claim, allow_empty=False):
 
 def inspect_workspace(path, now=None):
     """Internal read-only inspection; called by dashboard.workspace."""
-    from dashboard.workspace import directory_entries, path_identity
+    from dashboard.workspace import ETORO, directory_entries, path_identity
     path, database, exported, operation = _paths(path)
     now = clock(now)
     path_identity(path)
@@ -108,8 +108,16 @@ def inspect_workspace(path, now=None):
     names = directory_entries(path)
     if not names:
         return {"state": "empty", "reason": "Workspace is empty"}
-    if names - {database.name, exported.name, operation.name}:
+    if ETORO in names:
+        etoro_directory = path / ETORO
+        if not etoro_directory.is_dir():
+            raise InvestmentError("The recognized eToro state location is not a directory")
+        if directory_entries(etoro_directory) - {"connection.json", "startup.lock"}:
+            raise InvestmentError("Unexpected eToro state entries; preserve and inspect them")
+    if names - {database.name, exported.name, operation.name, ETORO}:
         raise InvestmentError("Unexpected workspace entries; preserve and inspect them")
+    if names <= {ETORO}:
+        return {"state": "empty", "reason": "Workspace has no journal; eToro connection is separate"}
     claim = None
     if operation.name in names:
         entries = directory_entries(operation)
@@ -189,7 +197,7 @@ def _binding(path):
             info = item.lstat()
             result["entries"].append([name, info.st_dev, info.st_ino,
                                       info.st_size, info.st_mtime_ns])
-            if name == ".investment-setup":
+            if name in (".investment-setup", ".etoro"):
                 for child in sorted(directory_entries(item)):
                     info = (item / child).lstat()
                     result["entries"].append([name + "/" + child, info.st_dev,

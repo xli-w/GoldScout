@@ -106,9 +106,17 @@ profitability or live readiness. [README](../README.md) defines current scope.
 ## Monitoring, reconciliation and awareness
 
 - Monitoring is local and read-only; provider collection requires explicit
-  activation and account/permission/retention approval, never page refresh.
-  Failed collection cannot refresh source clocks or repair journal differences.
-  Native-currency evidence cannot manufacture GBP valuation.
+  activation and account/retention approval, never page refresh. The fixed eToro
+  GET adapter may use a trade-capable key only after explicit operator acceptance
+  that the credential can place, modify or cancel orders if exposed or misused.
+  The optional eToro wizard read requires explicit account/retention consent.
+  Startup refresh additionally requires verified Read-only scope, an expiring
+  1-30 day permission and revocation; it attempts one read set per server
+  startup and does not retry failures. Status/page loads never collect, and the
+  provider observation remains separate from journal accounting.
+  This acceptance does not verify read-only scope; the adapter has no order
+  methods. Failed collection cannot refresh source clocks or repair journal
+  differences. Native-currency evidence cannot manufacture GBP valuation.
 - Dynamic-share monitoring uses completely valued, fresh, role-attributed
   non-LISA investment holdings, excluding savings, LISA and all cash.
   Unassigned/missing classification or marks makes it unavailable. The

@@ -6,6 +6,7 @@ import { IntelligenceView, useIntelligence } from "./IntelligenceView";
 import { InvestmentGuide, InvestmentRecordingPage, InvestmentView } from "./InvestmentView";
 import { MonitoringWorkflowPage } from "./MonitoringWorkflow";
 import { InvestmentSetup } from "./InvestmentSetup";
+import { EToroPortfolioPanel } from "./EToroPortfolio";
 import { timestamp } from "./api";
 
 export function App() {
@@ -40,6 +41,9 @@ export function App() {
     <button onClick={() => void workspace.refetch()}>Retry</button>
   </main>;
   if (workspace.isPending) return <main className="loading" role="status">Loading portfolio workspace</main>;
+  if (workspace.data === "setup" && location.pathname === "/etoro-portfolio") return <div className="setup-shell">
+    <main><EToroPortfolioPanel /><NavLink to="/setup">Return to portfolio setup</NavLink></main>
+  </div>;
   if (workspace.data === "setup" || location.pathname === "/setup") return <div className="setup-shell">
     <main><InvestmentSetup onComplete={() => {
       void Promise.all([
@@ -55,6 +59,7 @@ export function App() {
     "/investment/record": "Add a record",
     "/investment/reviews": "Review checks",
     "/investment-guide": "Help",
+    "/etoro-portfolio": "eToro portfolio",
     "/intelligence": "Market context",
   };
   const pageName = pages[location.pathname];
@@ -72,6 +77,7 @@ export function App() {
         <div className="nav-section"><span className="nav-section-label">PORTFOLIO</span>
           <nav aria-label="Portfolio navigation">
             <NavLink to="/investment" end><Wallet size={18} /><span>Your portfolio</span></NavLink>
+            <NavLink to="/etoro-portfolio"><Wallet size={18} /><span>eToro portfolio</span></NavLink>
             <NavLink to="/investment-guide"><CircleHelp size={18} /><span>Help</span></NavLink>
           </nav>
         </div>
@@ -93,9 +99,7 @@ export function App() {
       <main>
         <span className="sr-only" id="table-scroll-instructions">Scroll horizontally to see all columns.</span>
         <div className="page-heading"><div>
-          <p className="eyebrow">{intelligencePage ? "INTELLIGENCE WORKSPACE" : workspace.data === "demo" ? "DEMO WORKSPACE" : "INVESTMENT WORKSPACE"}</p>
           <h1>{pageName || "Page not found"}</h1>
-          {intelligencePage && <p className="page-description">Optional public calendar, news and analysis. Separate from your account records.</p>}
         </div>{intelligencePage && <button className="icon-button refresh" aria-label="Refresh data" title="Refresh data"
           disabled={intelligence.isFetching} onClick={() => {
             void client.invalidateQueries({ queryKey: ["intelligence"] });
@@ -104,6 +108,7 @@ export function App() {
         {location.pathname === "/investment" ? <InvestmentView now={now} />
           : location.pathname === "/investment/record" ? <InvestmentRecordingPage />
           : location.pathname === "/investment/reviews" ? <MonitoringWorkflowPage />
+          : location.pathname === "/etoro-portfolio" ? <EToroPortfolioPanel />
           : location.pathname === "/investment-guide" ? <InvestmentGuide />
           : intelligencePage ? <IntelligenceView data={intelligence} />
           : <div className="error-state" role="alert"><p>This page is not part of GoldScout.</p><NavLink to="/investment">Open investment records</NavLink></div>}

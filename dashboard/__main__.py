@@ -27,6 +27,8 @@ def main(argv=None):
                         help="Existing explicitly initialized local monitoring review store")
     parser.add_argument("--monitoring-workflow", action="store_true",
                         help="Enable local review actions and observation staging")
+    parser.add_argument("--etoro-connection", type=Path,
+                        help="Separate local eToro read-consent file for an explicitly selected journal")
     args = parser.parse_args(argv)
     setup_options = {}
     setup_state = None
@@ -50,6 +52,8 @@ def main(argv=None):
         }
     if args.intelligence_demo and (not args.demo or args.intelligence_database):
         parser.error("--intelligence-demo requires --demo without an intelligence database")
+    if args.demo and args.etoro_connection is not None:
+        parser.error("Synthetic demo cannot use an eToro connection")
     if args.analysis_controls and args.intelligence_database is None:
         parser.error("--analysis-controls requires an existing intelligence database")
     if args.investment_recording and args.investment_database is None:
@@ -87,7 +91,8 @@ def main(argv=None):
                          awareness_profile=args.awareness_profile,
                          monitoring_profile=args.monitoring_profile, monitoring_cache=args.monitoring_cache,
                          monitoring_reviews=args.monitoring_reviews,
-                         monitoring_workflow_enabled=args.monitoring_workflow, **setup_options)
+                         monitoring_workflow_enabled=args.monitoring_workflow,
+                         etoro_connection_path=args.etoro_connection, **setup_options)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
     except ValueError as exc:

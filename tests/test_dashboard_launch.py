@@ -168,7 +168,8 @@ class DashboardLaunchTests(unittest.TestCase):
                                         analysis_controls_enabled=False, analysis_profiles=(), investment_database=None,
                                         investment_recording_enabled=False, awareness_profile=None,
                                         monitoring_profile=None, monitoring_cache=None,
-                                        monitoring_reviews=None, monitoring_workflow_enabled=False)
+                                        monitoring_reviews=None, monitoring_workflow_enabled=False,
+                                        etoro_connection_path=None)
         server.assert_called_once_with("synthetic-app", host="127.0.0.1", port=8766, proxy_headers=False, access_log=False)
 
     def test_invalid_modes_and_ports_fail_before_runtime_imports(self):

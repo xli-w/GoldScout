@@ -6,9 +6,10 @@ transport callable takes (path, headers) and returns bytes (not decoded JSON).
 EToroTransport instances and their .get methods both satisfy that contract.
 Injected callables are trusted dependencies, not sandboxed network clients.
 
-Caller MUST gate account eligibility, rights, permission and collection approval
-before invoking this function. GET success does not prove a read-only key scope.
-There is no account discovery, credential storage, retry, accounting or execution.
+Caller MUST gate account eligibility, rights, key permissions or explicit
+acceptance of broader key risk, and collection approval before invoking this
+function. GET success does not prove a read-only key scope. There is no account
+discovery, credential storage, retry, accounting or execution.
 
 Public reference checked 2026-11-17 (portal itself was Cloudflare-blocked):
 https://github.com/etoro-builders/etoro-cursor-plugin/blob/
@@ -38,7 +39,9 @@ import socket
 import threading
 import time
 import uuid
+import re
 
+from dns_config import resolve_host
 from market_intelligence.providers import PinnedHTTPSConnection, abort_connection
 from proxy_config import configured_proxy_url, parse_proxy_url
 
@@ -46,6 +49,13 @@ from proxy_config import configured_proxy_url, parse_proxy_url
 HOST = "public-api.etoro.com"
 PORTFOLIO_PATH = "/api/v1/trading/info/real/pnl"
 PORTFOLIO_URL = "https://" + HOST + PORTFOLIO_PATH
+AGGREGATE_PORTFOLIO_PATHS = {
+    "real": "/api/v1/trading/info/aggregate-portfolio",
+    "demo": "/api/v1/trading/info/demo/aggregate-portfolio",
+}
+_BALANCE_PATH = re.compile(
+    r"/api/v1/balances/trading/[1-9][0-9]{0,18}"
+    r"\?displayCurrency=GBP&expand=equityDetails")
 MAX_BYTES = 1024 * 1024
 MAX_ITEMS = 1000
 _DEADLINE_SECONDS = 15.0
@@ -104,7 +114,7 @@ class EToroTransport:
 
     def __init__(self, *, resolver=None, connection_factory=None, proxy_url=None,
                  before_request=None):
-        self._resolver = resolver or socket.getaddrinfo
+        self._resolver = resolver or resolve_host
         self._connection_factory = connection_factory or PinnedHTTPSConnection
         if before_request is not None and not callable(before_request):
             raise ValueError("The request approval check must be callable")
@@ -118,8 +128,14 @@ class EToroTransport:
     def __call__(self, path, headers):
         return self.get(path, headers)
 
+    @staticmethod
+    def _allowed_path(path):
+        return (path == PORTFOLIO_PATH
+                or path in AGGREGATE_PORTFOLIO_PATHS.values()
+                or type(path) is str and _BALANCE_PATH.fullmatch(path) is not None)
+
     def get(self, path, headers):
-        if path != PORTFOLIO_PATH:
+        if not self._allowed_path(path):
             raise EToroError("endpoint_refused")
         if not _headers_valid(headers):
             raise EToroError("headers_invalid")
@@ -143,7 +159,8 @@ class EToroTransport:
 
         def run():
             try:
-                result["payload"] = self._get_one(request_headers, cancelled, register_connection, abort)
+                result["payload"] = self._get_one(
+                    path, request_headers, cancelled, register_connection, abort)
             except Exception as exc:
                 code = (exc.code if isinstance(exc, EToroError)
                         and type(exc.code) is str and exc.code in _TRANSPORT_CODES
@@ -167,7 +184,7 @@ class EToroTransport:
             raise EToroError(result["error"])
         return result["payload"]
 
-    def _get_one(self, headers, cancelled, register_connection, abort):
+    def _get_one(self, path, headers, cancelled, register_connection, abort):
         connection = response = None
         started = time.monotonic()
 
@@ -213,7 +230,7 @@ class EToroTransport:
             if self._before_request is not None:
                 self._before_request()
                 check_deadline()
-            connection.request("GET", PORTFOLIO_PATH, headers={
+            connection.request("GET", path, headers={
                 **headers, "Host": HOST, "Accept": "application/json",
                 "Accept-Encoding": "identity", "Connection": "close",
                 "Cache-Control": "no-store", "User-Agent": "GoldScoutPortfolioMonitor/1",

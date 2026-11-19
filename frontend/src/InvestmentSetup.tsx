@@ -5,6 +5,7 @@ import {
   setupConfirm, setupPreview, setupRecoveryPreview, setupSession,
   type SetupConfirmation, type SetupOpening, type SetupPreview, type SetupProfile, type SetupSession,
 } from "./setup-api";
+import { EToroPortfolioPanel } from "./EToroPortfolio";
 
 type Account = { id: string; binding: string; name: string; kind: "" | "broker" | "deposit"; cash: string };
 type Product = { id: string; name: string; sleeve: "" | "equity" | "bond";
@@ -294,30 +295,32 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     (session?.state !== "recoverable" || index >= 2));
 
   return <section className="investment-setup" aria-label="Investment setup" aria-busy={busy}>
-    <p className="eyebrow">WELCOME TO GOLDSCOUT</p>
     <h1 ref={heading} tabIndex={-1}>Let's set up your portfolio</h1>
-    <p className="setup-intro">{session?.state === "recoverable"
-      ? "Use the recovery options below to check or exactly reconstruct the original setup. Do not start a replacement portfolio."
-      : "Keep a record of your savings and investments in pounds. Add your accounts, list each investment you hold, then enter how much you hold in each account. Portfolios with only savings / deposit accounts skip the investment steps."}</p>
-    {!receipt && <p className="setup-draft-note">{session?.state === "recoverable"
-      ? "Leaving or reloading loses any re-entered figures. Existing setup files may already contain saved records."
-      : "Your draft is not saved until you confirm. Leaving or reloading this page loses your progress."}</p>}
-    {!receipt && session?.state !== "recoverable" && <section className="setup-preflight" aria-labelledby="setup-preflight-title">
+    {!receipt && session && !blocked && <p className="setup-draft-note">{session.state === "recoverable"
+      ? "Re-entered figures are lost if you leave or reload. Existing setup files may already contain saved records."
+      : "Your draft is not saved until you confirm. Leaving or reloading loses your progress."}</p>}
+    {!receipt && !preview && !blocked && !recoveryEntry && session?.state === "recoverable" && step === 0 && <p className="setup-intro">
+      Check or exactly reconstruct the original setup. Do not start a replacement portfolio.</p>}
+    {!receipt && !preview && !blocked && session?.state === "empty" && step === 0 && <>
+      <p className="setup-intro">Add the GBP accounts you want to track, then enter their current cash and holdings.</p>
+      <section className="setup-preflight" aria-labelledby="setup-preflight-title">
       <h2 id="setup-preflight-title">Have these ready</h2>
       <ul>
-        <li>Current cash balances and, for investment accounts, a complete list of holdings and quantities from one current point in time.</li>
-        <li>For each investment, check your provider's rules for its price in pounds, the smallest unit amount it supports and the minimum purchase. Look in dealing rules or product documents; if you cannot verify a detail, pause rather than guess.</li>
-        <li>A brief note naming the dated sources you used. Do not paste account numbers, passwords or full statements.</li>
+        <li>Cash balances and a complete list of holdings and quantities for the same date and time.</li>
+        <li>For each investment, its GBP pricing, supported quantity step and minimum purchase, checked with your provider.</li>
+        <li>The dated sources you used. Do not enter account numbers, passwords or full statements.</li>
       </ul>
-    </section>}
+      </section>
+    </>}
     <details className="help-disclosure">
       <summary>Before you start</summary>
-      <p>Use account nicknames, not account numbers, passwords or credentials.</p>
+      <p>Use nicknames, not account numbers, passwords or credentials.</p>
       <p>{fixedWarning}</p>
-      <p>Nothing is saved until you confirm. Setup does not enable later recording. If a previous setup was interrupted, use only the recovery options shown.</p>
       {session && <p className="setup-workspace">Saved on this computer in: <strong>{session.workspace}</strong>.</p>}
-      <p>Keep this computer private and make separate backups. GoldScout has no sign-in and is intended for use on this computer only.</p>
+      <p>Keep this computer private and arrange separate backups. GoldScout has no sign-in.</p>
     </details>
+    {!receipt && !preview && session && (session.state === "empty" || session.state === "ready") &&
+      <EToroPortfolioPanel embedded />}
     {error && <div role="alert" tabIndex={-1} ref={errorSummary} className="investment-warnings">
       <p>{error}</p>
       {Object.entries(fieldErrors).length > 0 && <ul aria-label="Fields to correct">
@@ -332,7 +335,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       </ul>}
     </div>}
     {receipt ? <div role="status" className="recording-preview">
-      <h2>{receipt.status === "completed" ? "Setup completed — read-only" : "Setup partially completed — preserve the workspace"}</h2>
+      <h2>{receipt.status === "completed" ? "Setup completed" : "Setup partially completed — preserve the workspace"}</h2>
       <p>{receipt.committed
         ? "Your starting records were saved. Do not repeat setup or delete its files."
         : "Saving your starting records has not been confirmed. Some setup files may remain; do not replace them."}</p>
@@ -341,16 +344,17 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
         <p>Journal committed: {receipt.committed ? "yes" : "no"}.</p>
       </details>
       {receipt.status === "completed" ? <>
-        <p>Your portfolio is saved and will open read-only. This protects the starting records; setup does not enable later changes.</p>
-        <h3>To record future updates</h3>
-        <ol>
-          <li>Stop GoldScout in the terminal window where it is running by pressing <kbd>Ctrl</kbd> + <kbd>C</kbd>.</li>
-          <li>Restart it with <code>--investment-recording</code>, keeping the same workspace or journal selection.</li>
-        </ol>
-        <p>For a standard Windows source checkout, run this from the GoldScout folder:</p>
-        <pre className="command-example"><code>.\.venv\Scripts\python.exe -m dashboard --investment-recording</code></pre>
-        <p>If you used a different startup command or folder, add the option to that same command. If unsure, ask the person who set up GoldScout rather than choosing a different workspace. This enables manual record-entry only; it does not place trades or move money.</p>
-        <button type="button" onClick={onComplete}>Open read-only investment view</button>
+        <p>Your portfolio opens read-only.</p>
+        <details className="help-disclosure"><summary>How to add records later</summary>
+          <ol>
+            <li>Stop GoldScout in its terminal window with <kbd>Ctrl</kbd> + <kbd>C</kbd>.</li>
+            <li>Restart it with <code>--investment-recording</code>, keeping the same workspace or journal.</li>
+          </ol>
+          <p>For a standard Windows source checkout, run this from the GoldScout folder:</p>
+          <pre className="command-example"><code>.\.venv\Scripts\python.exe -m dashboard --investment-recording</code></pre>
+          <p>Otherwise, add the option to your original command. If unsure, ask the person who set up GoldScout. This enables manual record entry only—not trades or money movement.</p>
+        </details>
+        <button type="button" onClick={onComplete}>Open portfolio</button>
       </>       : <p>Setup did not finish completely. Keep the whole setup folder unchanged and reload this page for recovery guidance.
         Do not recreate, delete, overwrite or manually repair any files.</p>}
     </div> : blocked ? <div className="investment-warnings">
@@ -381,28 +385,25 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
             <h3>Check before saving</h3>
             <ul>{preview.report.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
           </div>}
-          <h3>Accounts and cash (GBP)</h3>
-          <ul>{preview.profile.accounts.map(a => <li key={a.id}>{a.name} — {a.kind === "deposit" ? "Savings / deposit" : "Investment / broker"};
-            cash GBP {preview.opening.balances_gbp[a.id] ?? "Unavailable"}</li>)}</ul>
-          {(session.state !== "recoverable" || recoveryEntry) &&
-            preview.profile.accounts.some(account => account.kind === "broker") && <>
-              <h3>Investment holdings check</h3>
-              <ul>{preview.profile.accounts.filter(account => account.kind === "broker").map(account => {
-                const hasHoldings = preview.opening.holdings.some(holding => holding.account_id === account.id);
-                return <li key={account.id}>{account.name}: {hasHoldings
-                  ? "You confirmed all holdings are listed."
-                  : "You confirmed there are no holdings."}</li>;
-              })}</ul>
-            </>}
-          <h3>What you already own</h3>
-          {preview.opening.holdings.length === 0 ? <p>No investment holdings declared.</p> : <ul>{preview.opening.holdings.map((h, index) =>
-            <li key={index}>{preview.profile.accounts.find(a => a.id === h.account_id)?.name ?? h.account_id} /
-              {" "}{preview.profile.products.find(p => p.id === h.product_id)?.name ?? h.product_id}:
-              quantity {h.quantity}; unit price {h.price_gbp === null ? "Unknown — not zero" : `GBP ${h.price_gbp}`}</li>)}</ul>}
-          <h3>Investment details</h3>
-          {preview.profile.products.length === 0 ? <p>No investments included.</p> : <ul>{preview.profile.products.map(p =>
-            <li key={p.id}>{p.name} — {p.sleeve === "equity" ? "Shares / equity" : "Bonds"}, {p.currency};
-              smallest quantity step {p.quantity_increment}; minimum purchase GBP {p.minimum_notional_gbp}</li>)}</ul>}
+          <h3>Accounts, cash and holdings (GBP)</h3>
+          <ul>{preview.profile.accounts.map(account => {
+            const holdings = preview.opening.holdings.filter(holding => holding.account_id === account.id);
+            const showCoverage = (session.state !== "recoverable" || recoveryEntry) && account.kind === "broker";
+            return <li key={account.id}><strong>{account.name}</strong> — {account.kind === "deposit" ? "Savings / deposit" : "Investment / broker"};
+              {" "}cash {preview.opening.balances_gbp[account.id] ?? "Unavailable"}
+              {showCoverage && `; holdings ${holdings.length ? "confirmed complete" : "confirmed none"}`}
+              {holdings.length > 0 && <ul>{holdings.map((holding, index) => <li key={index}>
+                {preview.profile.products.find(product => product.id === holding.product_id)?.name ?? holding.product_id}:
+                {" "}{holding.quantity} units; price {holding.price_gbp === null ? "unknown (not zero)" : `GBP ${holding.price_gbp}`}
+              </li>)}</ul>}
+            </li>;
+          })}</ul>
+          {preview.profile.products.length > 0 && <>
+            <h3>Investment rules</h3>
+            <ul>{preview.profile.products.map(p =>
+              <li key={p.id}>{p.name} — {p.sleeve === "equity" ? "Shares / equity" : "Bonds"}, {p.currency};
+                smallest quantity step {p.quantity_increment}; minimum purchase GBP {p.minimum_notional_gbp}</li>)}</ul>
+          </>}
           <dl className="review-dates">
             <div><dt>{session.state === "recoverable" ? "Balances and prices as of" : "Starting figures recorded at"}</dt>
               <dd>{reviewTimestamp(preview.opening.timestamp)}</dd></div>
@@ -412,21 +413,16 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
           <p>Where these figures came from: {preview.opening.evidence}</p>
           <p>Performance tracking starts from: {preview.report.baseline_as_of === null ? "Not available yet" : reviewTimestamp(preview.report.baseline_as_of)}.
             Profit or loss before this date is unknown.</p>
-          <details className="help-disclosure"><summary>How starting values and performance are recorded</summary>
-            <p>All opening roles are unassigned: you have not labelled funds as core (long-term) or dynamic (experimental).
-              No allocation policy is set and proposals remain blocked.</p>
-            <ul>{preview.report.limitations.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
-          </details>
+          <p>Starting funds are unassigned; you can add optional roles later.</p>
           <details className="recording-event">
             <summary>Technical details: exact profile and starting record</summary>
             <p>Portfolio: {preview.profile.portfolio_id}; profile inception (UTC): {preview.profile.created_at}.
               Opening record: {preview.opening.id}. Account IDs and bindings are included below.</p>
             <pre>{JSON.stringify({ profile: preview.profile, opening: preview.opening }, null, 2)}</pre>
           </details>
-          <p>{fixedWarning}</p>
           <label className="setup-check"><input type="checkbox" checked={reviewed} disabled={busy || confirmAttempted}
             onChange={event => setReviewed(event.target.checked)} />
-            I reviewed every account, investment, amount, date and source. I understand the starting records cannot be edited after saving.</label>
+            I reviewed every account, holding, amount, date and source. I understand these starting records cannot be edited after saving.</label>
           {expired && !confirmAttempted && <p role="alert">Preview expired. Edit and request a fresh preview before confirming.</p>}
           <div className="setup-actions">
             <button type="button" disabled={busy || confirmAttempted} onClick={() => { setPreview(null); setReviewed(false); setStep(2); }}>
@@ -458,8 +454,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
           <fieldset disabled={busy}>
             <legend>{steps[step]}</legend>
             {step === 0 && <>
-              <p>Add only the GBP savings and investment accounts you want this portfolio to cover.</p>
-              <p className="position-note">Use a nickname such as "House savings" or "Investment account" — never an account number or password.</p>
+              <p>Add the GBP savings and investment accounts you want to track. Use nicknames, never account numbers or passwords.</p>
               {accounts.map((a, index) => <div className="setup-row" key={a.id}>
                 <label>Account {index + 1} name<input required maxLength={120} value={a.name}
                   placeholder="e.g. House savings"
@@ -488,10 +483,9 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
               </details>
             </>}
             {step === 1 && <>
-              <p>Add each different share, fund or bond you already hold once. On the next step, enter the quantity held in each account. If the same fund is in two accounts, list it once here and add one holding for each account.</p>
+              <p>Add each share, fund or bond once. If you hold it in multiple accounts, enter it once per account on the next step.</p>
               <p>If your investment accounts only hold cash, continue without adding an investment.</p>
-              <p className="position-note">Only GBP-priced equity and bond investments are supported. Copy the details from your provider; don't guess.</p>
-              <p className="example-note"><strong>Example:</strong> Add “Global fund” once here. If you hold it in two accounts, enter its units twice on the next step—once for each account.</p>
+              <p className="position-note">Only GBP-priced shares, funds and bonds are supported. Verify details with your provider.</p>
               <details className="help-disclosure"><summary>Help with investment types and quantity rules</summary>
                 <p>Equity means shares or share-based funds. Bonds are debt investments, not protected savings.
                   GBP pricing does not remove any underlying foreign-currency risk.</p>
@@ -560,9 +554,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
               </section>}
               <p>{recoveryEntry
                 ? "Re-enter the original cash, holdings and dates exactly as they were recorded. Recovery will reject approximate matches."
-                : "Enter current cash and holdings. All accounts and quantities must reflect the same current point in time. GoldScout records them at the moment you request the preview; setup cannot be backdated. If a source is too old to reflect the figures now, do not treat it as current or guess."}</p>
-              <h3>1. Starting figures</h3>
-              <p className="position-note">The review shows when you request the preview in your local timezone and UTC.</p>
+                : "Enter current cash and holdings for the same point in time. Setup timestamps the preview and cannot be backdated."}</p>
               {recoveryEntry && <details className="help-disclosure" open>
                 <summary>Re-enter the original opening time</summary>
                 <p>Recovery must reproduce the original record exactly. Enter its original dates and source details; approximate values are refused.</p>
@@ -573,8 +565,8 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                 <label>Source available from (local time)<input required type="datetime-local" value={available}
                   onChange={event => { changed(); setAvailable(event.target.value); }} /></label>
               </>}
-              <h3>2. Cash in each account</h3>
-              <p>Enter cash only, not the value of investments held in the account. Enter 0 if your source confirms no cash. Don't leave a cash balance blank.</p>
+              <h3>Cash in each account</h3>
+              <p>Enter cash only, not investment value. Enter 0 only if your source confirms no cash.</p>
               {accounts.map(a => <label key={a.id}>Cash for {a.name} (GBP)<input required inputMode="decimal" maxLength={34}
                 id={fieldTarget(`account-${a.id}-cash`)} value={a.cash}
                 aria-invalid={Boolean(fieldErrors[`account-${a.id}-cash`])}
@@ -586,8 +578,8 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
               {investmentAccounts.length === 0
                 ? <p>This setup contains only savings / deposit accounts; no investment holdings are needed.</p>
                 : <>
-              <h3>3. Investments you own</h3>
-              <p>Add every investment holding in the accounts you chose. Leave only the unit price blank if unknown; it is not treated as zero.</p>
+              <h3>Investments you own</h3>
+              <p>List every holding. A unit price may be blank if unknown; it will not be treated as zero.</p>
               {holdings.map((h, index) => <div className="setup-row" key={h.id}>
                 <label>Holding {index + 1} account<select required value={h.account} onChange={event => changeHolding(h.id, { account: event.target.value })}>
                   <option value="">Choose investment account</option>{investmentAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
@@ -616,19 +608,19 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                   disabled={!products.length || !investmentAccounts.length || holdings.length >= 5000}
                   onClick={() => { changed(investmentAccounts.map(account => account.id)); setHoldings(rows => [...rows, { id: identifier("holding"), account: "", product: "", quantity: "", price: "" }]); }}>Add holding</button>
                 </>}
-              <h3>{investmentAccounts.length > 0 ? 4 : 3}. Your source</h3>
+              <h3>Your source</h3>
               <label>Where did these figures come from?<textarea required maxLength={200} value={evidence}
                 placeholder="e.g. Savings statement and investment statement, 1 November"
                 onChange={event => { changed(); setEvidence(event.target.value); }} /></label>
-              <p>Briefly name the source and accounts covered (up to 200 characters). Do not paste account numbers, passwords or full statements.</p>
+              <p>Name the dated source and accounts covered. Do not include account numbers, passwords or full statements.</p>
               <label className="setup-check"><input type="checkbox" required checked={openingContextConfirmed}
                 onChange={event => { setOpeningContextConfirmed(event.target.checked); setDirty(true); setError(""); }} />
                 {recoveryEntry
                   ? "I checked that the re-entered figures, source and dates match the original opening record exactly."
                   : "I checked that every starting figure is current and all accounts and holdings reflect the same point in time."}</label>
               {investmentAccounts.length > 0 && <section aria-label="Investment account holdings check">
-                <h3>5. Check every investment account</h3>
-                <p>Confirm that you have listed all shares, funds and bonds in each account, including any account with none.</p>
+                <h3>Confirm holdings</h3>
+                <p>For each account, confirm every holding is listed, or that it has none.</p>
                 {investmentAccounts.map(account => <label className="setup-check" key={account.id}>
                   <input type="checkbox" checked={Boolean(holdingsCoverage[account.id])}
                     onChange={event => setHoldingsCoverage(current => ({
@@ -636,7 +628,6 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                     }))} />
                   {account.name}: I have listed all holdings, or confirmed there are none.
                 </label>)}
-                <p className="field-help">Changing cash, quantities, prices or source keeps these checks. Adding/removing accounts or holdings, changing an account type or investment list, or changing a holding's account or investment clears the affected checks so you can confirm them again.</p>
               </section>}
             </>}
           </fieldset>

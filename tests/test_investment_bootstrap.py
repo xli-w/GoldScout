@@ -67,6 +67,19 @@ class BootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(InvestmentError, "--workspace"):
                 resolve_workspace()
 
+    def test_etoro_state_is_separate_and_unexpected_entries_stay_blocked(self):
+        state = self.path / ".etoro"
+        state.mkdir(parents=True)
+        (state / "connection.json").write_text("{}", encoding="utf-8")
+        (state / "startup.lock").write_bytes(b"0")
+        self.assertEqual(workspace_status(self.path, NOW)["state"], "empty")
+        self.preview()
+        self.assertEqual(
+            {item.name for item in state.iterdir()}, {"connection.json", "startup.lock"})
+
+        (state / "unexpected.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(workspace_status(self.path, NOW)["state"], "blocked")
+
     def test_confirm_closed_validated_journal_exact_retry_and_restart(self):
         preview = self.preview()
         result = self.confirm(preview)

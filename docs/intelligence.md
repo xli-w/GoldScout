@@ -136,12 +136,11 @@ requires separate operator-approved validation, not offline mocks.
 
 ### Connection configuration
 
-The operator can privately configure the proxy and hosted-AI and eToro
-credentials in the project-root `.env` file. See the commented
-[connection settings example](../environment.example); do not overwrite an
-existing private file or put real values in the example, chat, source control
-or command arguments. The private file is Git-ignored but is plaintext: restrict
-access to the file and machine.
+The operator can privately configure the proxy, DNS override and hosted-AI and
+eToro credentials in the project-root `.env` file or process environment. Do
+not overwrite an existing private file or put real settings in chat, source
+control or command arguments. The private file is Git-ignored but is plaintext:
+restrict access to the file and machine.
 
 For these GoldScout connection settings, an entry in `.env` takes precedence
 over the process environment, including an explicitly empty value. An absent
@@ -196,6 +195,29 @@ print("BLS response received through the configured proxy.")
 This makes a live public request, not an offline test. It does not parse or
 save the calendar, establish complete coverage, or validate broker or AI access.
 Keep the URL and any diagnostic output private.
+
+#### IPv4 DNS-server override
+
+`TRADER_DNS_IPV4` is optional and must be a single operator-approved unicast
+IPv4 DNS-server address, without a port. Set it privately in the connection
+file or process environment. An absent or blank value keeps the system DNS
+resolver; a blank value in the connection file overrides a nonblank environment
+value. The selected Python environment must have the declared `dnspython`
+dependency installed.
+
+The override resolves public feed, hosted-AI and eToro destination hostnames
+and configured proxy hostnames. Local-loopback AI does not use it. It queries
+both A and AAAA records through the IPv4 DNS server, with IPv4 answers first.
+Each query has a bounded lifetime. Invalid settings, DNS failures and excessive
+answers fail closed without falling back to system DNS or another server.
+Destination address validation and pinning, TLS hostname verification, proxy
+requirements and provider approval gates are unchanged.
+
+DNS traffic goes **directly** to the selected server on UDP port 53, or TCP
+port 53 for a truncated response; it does not pass through `TRADER_PROXY_URL`.
+Use this only where that direct DNS route is permitted and the resolver is
+trusted to see queried hostnames. HTTPS still follows the configured proxy, if
+any, with no direct-connection fallback.
 
 ## Run And Controls
 

@@ -18,6 +18,38 @@ a wizard; startup, status and preview never write files. Review accounts,
 products, cash and long holdings with explicit opening evidence, then confirm
 the bound preview. No login or hand-written profile is required.
 
+## Optional eToro connection
+
+The startup wizard offers a separate eToro portfolio panel. Connecting is
+optional and requires an explicit one-time read, account-eligibility and
+permitted-retention attestations, and confirmation that the returned account ID
+matches the account selected. The eToro snapshot is displayed separately; it
+does not create or populate a GBP journal account, balance, holding or mark.
+Keys are read only by the local server from its private connection settings or
+environment after the read is requested, never from browser fields.
+
+The panel shows provider account totals in their account currency, direct
+instrument aggregates and separate copy groups. It also shows a separate
+provider-reported GBP balance when validated; that balance has no source
+timestamp and is not synchronized to the portfolio snapshot. The documented
+portfolio response does not identify every instrument class or individual
+position leg, and pending-order details are unavailable beyond the provider's
+reserved-cash total. No FX, holdings valuation, or journal import is inferred.
+The portfolio observation exists only in dashboard memory and is not saved as
+history; `.etoro/connection.json` holds consent and account identity, not keys or
+portfolio data.
+
+Startup collection is off unless separately enabled after the initial preview.
+It requires the operator to verify Read-only key scope and expires within
+1-30 days; at most one read set is attempted on each server startup while that
+permission remains active. A broader key may be accepted for a supervised
+one-time read, but cannot enable startup refresh. Status and page loads never
+collect. The operator can revoke startup refresh or explicitly request a
+one-time refresh while permission is active. Failed startup reads are not
+retried automatically. The provider integration is engineering-only and has
+not been live-validated; eligibility, account-specific response behavior and
+data-retention rights remain the operator's responsibility.
+
 The wizard walks through **Accounts**, **Investments held (if any)**, **Starting
 balances**, and **Review and save**. Setups with only savings / deposit accounts
 go directly to starting balances. In investment setups, list each different
@@ -62,8 +94,8 @@ fall (drawdown). A missing-price link identifies the affected account and
 investment and opens a mark-record draft with those fields selected only when
 that holding still appears in the current saved records. Verify the source,
 price and dates; a later price cannot complete an earlier valuation. **Add a
-record** first asks for a category and then the record type; it still requires
-a reviewed preview. Recording dates and purchase/sale
+record** presents record types in one grouped selection; it still requires a
+reviewed preview. Recording dates and purchase/sale
 fees start blank: enter source-supported values, including zero only when
 verified. Corrections reject a source-availability time earlier than the
 correction clock instead of silently changing it. Monitoring snapshots remain separate comparisons,

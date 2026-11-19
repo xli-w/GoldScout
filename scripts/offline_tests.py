@@ -27,6 +27,7 @@ def offline_environment():
         "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
         "CONFIRM_LIVE_TRADING": "",
         "TRADER_PROXY_URL": "",
+        "TRADER_DNS_IPV4": "",
         "PYTHON_DOTENV_DISABLED": "1",
         "MPLBACKEND": "Agg",
     }

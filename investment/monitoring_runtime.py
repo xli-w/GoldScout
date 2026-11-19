@@ -13,14 +13,21 @@ from .store import canonical, digest, read_with_clock
 
 def validate_approval(value, profile, account_id, now):
     fields(value, ("profile_hash", "account_id", "approved_at", "expires_at",
-                   "read_scope_verified", "eligibility_verified", "retention_rights_verified",
+                   "read_scope_verified", "trade_capable_key_risk_accepted",
+                   "eligibility_verified", "retention_rights_verified",
                    "account_binding_verified", "supervised_read_approved", "evidence"))
     if value["profile_hash"] != digest(canonical(profile)) or value["account_id"] != account_id:
         raise InvestmentError("Collection approval does not match the monitoring profile/account")
     approved, expires = explicit_clock(value["approved_at"]), explicit_clock(value["expires_at"])
     if not approved <= now < expires or not timedelta(0) < expires - approved <= timedelta(days=1):
         raise InvestmentError("Collection approval expired or outside its maximum one-day window")
-    for key in ("read_scope_verified", "eligibility_verified", "retention_rights_verified",
+    read_scope_verified = value["read_scope_verified"]
+    trade_capable_key_risk_accepted = value["trade_capable_key_risk_accepted"]
+    if (type(read_scope_verified) is not bool or type(trade_capable_key_risk_accepted) is not bool
+            or read_scope_verified == trade_capable_key_risk_accepted):
+        raise InvestmentError(
+            "Verify read-only key scope or explicitly accept the risks of a trade-capable key")
+    for key in ("eligibility_verified", "retention_rights_verified",
                 "account_binding_verified", "supervised_read_approved"):
         if value[key] is not True:
             raise InvestmentError("Read access, identity, rights and supervised-read approval are required")

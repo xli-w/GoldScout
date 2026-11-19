@@ -1,5 +1,6 @@
 """Local portfolio dashboard; importing this module never opens a journal."""
 
+from contextlib import asynccontextmanager
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,9 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                intelligence_database=None, intelligence_demo=False, analysis_controls_enabled=False, analysis_profiles=(), investment_database=None,
                investment_recording_enabled=False, awareness_profile=None,
                monitoring_profile=None, monitoring_cache=None, monitoring_reviews=None,
-               monitoring_workflow_enabled=False, setup_workspace=None, setup_enabled=False):
+               monitoring_workflow_enabled=False, setup_workspace=None, setup_enabled=False,
+               etoro_connection_path=None, etoro_transport_factory=None,
+               etoro_credential_accessor=None):
     if setup_enabled and setup_workspace is None:
         raise ValueError("Setup requires a selected workspace")
     if setup_workspace is not None and (
@@ -45,10 +48,40 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             or monitoring_cache is not None
             and Path(monitoring_reviews).resolve() == Path(monitoring_cache).resolve()):
         raise ValueError("Monitoring review, cache and investment stores must be separate")
+    if setup_workspace is not None:
+        default_etoro_path = Path(setup_workspace).absolute() / ".etoro" / "connection.json"
+        if etoro_connection_path is not None and Path(etoro_connection_path).absolute() != default_etoro_path:
+            raise ValueError("The eToro connection file must remain separate under the selected workspace")
+        etoro_connection_path = default_etoro_path
+    if etoro_connection_path is not None:
+        etoro_connection_path = Path(etoro_connection_path).absolute()
+        if (investment_database is not None
+                and etoro_connection_path == Path(investment_database).absolute()):
+            raise ValueError("eToro consent and the investment journal must use separate files")
     if serve_frontend:
         static_directory = verify_frontend(static_directory)
     clock = clock or (lambda: datetime.now(timezone.utc))
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    etoro_connection = None
+    etoro_sessions = None
+    if etoro_connection_path is not None:
+        from dashboard.etoro_connection import EToroConnection
+        from dashboard.monitoring_workflow import MonitoringWorkflowSessions
+        etoro_connection = EToroConnection(
+            etoro_connection_path, clock, transport_factory=etoro_transport_factory,
+            credential_accessor=etoro_credential_accessor)
+        etoro_sessions = MonitoringWorkflowSessions()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        if etoro_connection is not None:
+            etoro_connection.start_once()
+        try:
+            yield
+        finally:
+            if etoro_connection is not None:
+                etoro_connection.stop()
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     setup = None
     setup_validator = None
     if setup_workspace is not None:
@@ -86,6 +119,11 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         "/api/investment/v1/setup/preview",
         "/api/investment/v1/setup/recovery-preview",
         "/api/investment/v1/setup/confirm",
+        "/api/investment/v1/etoro/connect",
+        "/api/investment/v1/etoro/confirm",
+        "/api/investment/v1/etoro/discard",
+        "/api/investment/v1/etoro/revoke",
+        "/api/investment/v1/etoro/refresh",
     }
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
@@ -115,7 +153,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                     (monitoring_workflow and
                      request.url.path.startswith("/api/investment/v1/monitoring-workflow/")) or
                     (setup and setup.security is not None and
-                     request.url.path.startswith("/api/investment/v1/setup/")))):
+                     request.url.path.startswith("/api/investment/v1/setup/")) or
+                    (etoro_sessions and request.url.path.startswith("/api/investment/v1/etoro/")))):
             response = error("invalid_request", 405)
         elif request.method == "POST" and (origin != f"{request.url.scheme}://{host}" or request.headers.get("sec-fetch-site") not in (None,"same-origin")):
             response = error("invalid_request", 403)
@@ -338,6 +377,153 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             return JSONResponse(status_code=409, content={"error": "setup_rejected", "message": str(exc)})
         except (ValueError, RecursionError):
             return JSONResponse(status_code=400, content={"error": "invalid_request"})
+
+    def etoro_authorized(request):
+        return bool(etoro_sessions and etoro_sessions.authorize(
+            request.cookies.get("etoro_session"),
+            request.headers.get("x-csrf-token"), clock()))
+
+    def etoro_public_status():
+        if etoro_connection is None:
+            return {"enabled": False, "state": "not_selected",
+                    "last_status": "not_selected", "snapshot_available": False}
+        value = etoro_connection.status(clock())
+        return {
+            "enabled": True, "state": value["state"],
+            "connection": value.get("connection"),
+            "last_status": value["last_status"],
+            "snapshot_available": value.get("snapshot") is not None,
+            "message": value.get("message", ""),
+        }
+
+    @app.get("/api/investment/v1/etoro/session")
+    def etoro_session(request: Request):
+        from dashboard.monitoring_workflow import WorkflowError
+        from investment import InvestmentError
+        if etoro_sessions is None:
+            return {"enabled": False, "csrf": None,
+                    "state": "not_selected", "last_status": "not_selected",
+                    "snapshot_available": False}
+        try:
+            session = etoro_sessions.session_payload(
+                request.cookies.get("etoro_session"), clock())
+            token = session.pop("_token", None)
+            session.update(etoro_public_status())
+            response = JSONResponse(session)
+            if token is not None:
+                response.set_cookie(
+                    "etoro_session", token, httponly=True, samesite="strict",
+                    secure=request.url.scheme == "https",
+                    path="/api/investment/v1/etoro", max_age=900)
+            return response
+        except (WorkflowError, InvestmentError, OSError):
+            return JSONResponse(status_code=503, content={"error": "etoro_status_unavailable"})
+
+    @app.get("/api/investment/v1/etoro/portfolio")
+    def etoro_portfolio_status():
+        if etoro_connection is None:
+            return {"state": "not_selected", "snapshot": None,
+                    "last_status": "not_selected"}
+        value = etoro_connection.status(clock())
+        return {"state": value["state"], "connection": value.get("connection"),
+                "snapshot": value.get("snapshot"), "last_status": value["last_status"],
+                "message": value.get("message", "")}
+
+    @app.post("/api/investment/v1/etoro/connect")
+    async def etoro_connect(request: Request):
+        from investment.etoro import EToroError
+        if etoro_connection is None or not etoro_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
+        try:
+            payload = await bounded_json(request, maximum=16384, strict=True)
+            if type(payload) is not dict or set(payload) != {
+                    "request_id", "environment", "read_scope_verified",
+                    "trade_capable_key_risk_accepted", "eligibility_verified",
+                    "retention_rights_verified"}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            token = request.cookies.get("etoro_session")
+            consent = {key: payload[key] for key in (
+                "environment", "read_scope_verified", "trade_capable_key_risk_accepted",
+                "eligibility_verified", "retention_rights_verified")}
+            return etoro_connection.begin(token, payload["request_id"], consent, clock())
+        except EToroError as exc:
+            return JSONResponse(status_code=409, content={
+                "error": "etoro_read_failed", "error_code": exc.code})
+        except (ValueError, RecursionError):
+            return JSONResponse(status_code=400, content={"error": "invalid_request"})
+        except (OSError, RuntimeError) as exc:
+            return JSONResponse(status_code=409, content={
+                "error": "etoro_read_failed", "message": str(exc)[:300]})
+
+    @app.post("/api/investment/v1/etoro/confirm")
+    async def etoro_confirm(request: Request):
+        from investment import InvestmentError
+        if etoro_connection is None or not etoro_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
+        try:
+            payload = await bounded_json(request, maximum=16384, strict=True)
+            if (type(payload) is not dict or set(payload) != {
+                    "preview_id", "account_binding_confirmed", "startup_refresh", "refresh_days"}
+                    or not isinstance(payload["preview_id"], str)
+                    or not 1 <= len(payload["preview_id"]) <= 256
+                    or type(payload["account_binding_confirmed"]) is not bool
+                    or type(payload["startup_refresh"]) is not bool
+                    or (payload["refresh_days"] is not None
+                        and type(payload["refresh_days"]) is not int)):
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            etoro_connection.confirm(
+                request.cookies.get("etoro_session"), payload["preview_id"],
+                payload["account_binding_confirmed"], payload["startup_refresh"],
+                payload["refresh_days"], clock())
+            return etoro_public_status()
+        except InvestmentError as exc:
+            return JSONResponse(status_code=409, content={
+                "error": "etoro_confirmation_rejected", "message": str(exc)})
+        except (ValueError, RecursionError):
+            return JSONResponse(status_code=400, content={"error": "invalid_request"})
+
+    @app.post("/api/investment/v1/etoro/discard")
+    async def etoro_discard(request: Request):
+        if etoro_connection is None or not etoro_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
+        try:
+            payload = await bounded_json(request, maximum=1024, strict=True)
+            if (type(payload) is not dict or set(payload) != {"preview_id"}
+                    or not isinstance(payload["preview_id"], str)
+                    or not 1 <= len(payload["preview_id"]) <= 256):
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            discarded = etoro_connection.discard(
+                request.cookies.get("etoro_session"), payload["preview_id"])
+            return {"discarded": discarded}
+        except (ValueError, RecursionError):
+            return JSONResponse(status_code=400, content={"error": "invalid_request"})
+
+    @app.post("/api/investment/v1/etoro/revoke")
+    async def etoro_revoke(request: Request):
+        from investment import InvestmentError
+        if etoro_connection is None or not etoro_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
+        try:
+            if await bounded_json(request, maximum=1024, strict=True) != {}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            etoro_connection.revoke(clock())
+            return etoro_public_status()
+        except (InvestmentError, OSError) as exc:
+            return JSONResponse(status_code=409, content={
+                "error": "etoro_revoke_failed", "message": str(exc)[:300]})
+
+    @app.post("/api/investment/v1/etoro/refresh")
+    async def etoro_refresh(request: Request):
+        from investment import InvestmentError
+        if etoro_connection is None or not etoro_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
+        try:
+            if await bounded_json(request, maximum=1024, strict=True) != {}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            return etoro_connection.refresh_explicitly(clock())
+        except InvestmentError as exc:
+            return JSONResponse(status_code=409, content={
+                "error": "etoro_refresh_rejected", "message": str(exc)})
 
     def workflow_sources():
         from investment.monitoring import project, validate_profile

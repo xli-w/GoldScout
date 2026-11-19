@@ -31,12 +31,44 @@ async function setupRoutes(page, options = {}) {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
   const calls = [];
   const sessions = [];
+  let etoroSessionReads = 0;
+  let etoroPortfolioReads = 0;
   let completed = false;
   let previewRequest;
   let confirmationCount = 0;
   await page.route("**/api/v1/settings", route => route.fulfill({
     json: { mode: "recorded", scenario: null, workspace: completed ? "investment" : "setup" },
   }));
+  await page.route("**/api/investment/v1/etoro/session", route => {
+    if (!options.startupRefresh) return route.fulfill({ json: {
+      enabled: false, csrf: null, state: "not_selected", last_status: "not_selected",
+      snapshot_available: false,
+    } });
+    etoroSessionReads++;
+    const refreshed = etoroSessionReads > 2;
+    return route.fulfill({ json: {
+      enabled: true, csrf: "synthetic-etoro-csrf",
+      state: "startup_refresh_enabled", last_status: refreshed ? "success" : "not_collected",
+      snapshot_available: refreshed,
+      connection: { environment: "real", account_id: 12345,
+        expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 },
+    } });
+  });
+  await page.route("**/api/investment/v1/etoro/portfolio", route => {
+    etoroPortfolioReads++;
+    const snapshot = options.startupRefresh && etoroPortfolioReads > 2 ? {
+      schema_version: 1, environment: "real", account_id: 12345,
+      source_as_of: "2026-01-01T10:00:00.000000Z", account_currency: "USD",
+      account_totals: { accountAvailableCash: "100", accountFrozenCash: "0",
+        accountCurrentPnl: "0", accountTotalValue: "100", accountTotalUsedMargin: "0",
+        accountBalance: "100" },
+      direct_positions: [], mirrors: [], coverage: {}, gbp_balance: null,
+    } : null;
+    return route.fulfill({ json: {
+      state: options.startupRefresh ? "startup_refresh_enabled" : "not_selected",
+      snapshot, last_status: snapshot ? "success" : "not_collected",
+    } });
+  });
   await page.route("**/api/investment/v1/setup/**", async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").at(-1);
@@ -120,6 +152,16 @@ async function depositPreview(page) {
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
 }
 
+test("startup refresh result appears without reloading the setup wizard", async ({ page }) => {
+  await setupRoutes(page, { startupRefresh: true });
+  await unlock(page);
+  await expect(page.getByText("Waiting for the one authorized startup read. This screen does not initiate a request."))
+    .toBeVisible();
+  await expect(page.getByRole("heading", { name: "Latest in-memory portfolio read" }))
+    .toBeVisible({ timeout: 5000 });
+  await expect(page.getByText("Account ID 12345")).toBeVisible();
+});
+
 test("cash-only setup skips investments in both directions", async ({ page }) => {
   await setupRoutes(page);
   await unlock(page);
@@ -164,11 +206,11 @@ test("guided deposit setup requires review and creates only on explicit confirma
   const api = await setupRoutes(page);
   await page.clock.setFixedTime(new Date("2026-01-01T10:00:00.000Z"));
   await unlock(page);
-  await expect(page.getByText(/list each investment you hold, then enter how much you hold in each account/)).toBeVisible();
+  await expect(page.locator(".setup-intro")).toContainText("Add the GBP accounts you want to track");
   const preflight = page.getByRole("region", { name: "Have these ready" });
-  await expect(preflight).toContainText("one current point in time");
-  await expect(preflight).toContainText("smallest unit amount it supports and the minimum purchase");
-  await expect(preflight).toContainText("Look in dealing rules or product documents");
+  await expect(preflight).toContainText("same date and time");
+  await expect(preflight).toContainText("supported quantity step and minimum purchase");
+  await expect(preflight).toContainText("checked with your provider");
   await expect(page.getByText(/Manual records only/)).toHaveCount(0);
   await expect(page.getByLabel("Balances as of (local time)")).toHaveCount(0);
   await expect(page.getByLabel("Source available from (local time)")).toHaveCount(0);
@@ -179,20 +221,26 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await page.keyboard.press("Enter");
   await expect(disclosure).toHaveAttribute("open", "");
   await expect(disclosure).toContainText("synthetic-temporary-workspace");
-  await expect(disclosure).toContainText("make separate backups");
+  await expect(disclosure).toContainText("arrange separate backups");
   await expect(disclosure).toContainText("Starting accounts and figures cannot be edited in place");
   await help.click();
-  await depositPreview(page);
+  await accountStep(page);
+  await expect(page.locator(".setup-intro")).toHaveCount(0);
+  await expect(preflight).toHaveCount(0);
+  await expect(page.getByText(/Your draft is not saved until you confirm/)).toBeVisible();
+  await evidenceStep(page);
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   const preview = page.getByRole("group", { name: "Review setup before confirmation" });
   await expect(preview).toContainText("1234.56");
-  await expect(preview.getByRole("heading", { name: "Accounts and cash (GBP)" })).toBeVisible();
+  await expect(preview.getByRole("heading", { name: "Accounts, cash and holdings (GBP)" })).toBeVisible();
+  await expect(preview).toContainText("Synthetic savings");
+  await expect(preview).toContainText("cash 1234.56");
   await expect(preview.getByText(/Where these figures came from/)).toBeVisible();
   await expect(preview.locator(".review-dates")).toContainText("Europe/London");
   await expect(preview.locator(".review-dates")).toContainText("UTC: 2026-01-01T10:00:00.000Z");
   await expect(preview.locator(".review-dates")).toContainText("Starting figures recorded at");
   await expect(preview.locator(".review-dates")).not.toContainText("Source available from");
-  await preview.getByText("How starting values and performance are recorded", { exact: true }).click();
-  await expect(preview.getByText(/All opening roles are unassigned/)).toBeVisible();
+  await expect(preview.getByText("Starting funds are unassigned; you can add optional roles later.")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect(api.calls.map(call => call.path)).toEqual(["preview"]);
   const request = api.preview();
@@ -209,12 +257,15 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await expect(confirm).toBeDisabled();
   await page.getByRole("checkbox", { name: /I reviewed every account/ }).check();
   await confirm.click();
-  await expect(page.getByRole("heading", { name: "Setup completed — read-only" })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("Restart it with");
-  await expect(page.getByRole("status")).toContainText(".\\.venv\\Scripts\\python.exe -m dashboard --investment-recording");
+  await expect(page.getByRole("heading", { name: "Setup completed" })).toBeVisible();
+  const futureRecording = page.locator("details").filter({ hasText: "How to add records later" });
+  await expect(futureRecording).not.toHaveAttribute("open", "");
+  await futureRecording.locator("summary").click();
+  await expect(futureRecording).toContainText("Restart it with");
+  await expect(futureRecording).toContainText(".\\.venv\\Scripts\\python.exe -m dashboard --investment-recording");
   await expect(page.getByText(/Your draft is not saved until you confirm/)).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Have these ready" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Open read-only investment view" }).click();
+  await page.getByRole("button", { name: "Open portfolio" }).click();
   await expect(page).toHaveURL(/\/investment$/);
   await expect(page.getByRole("heading", { name: "Your portfolio", exact: true })).toBeVisible();
   await expect.poll(() => api.calls.filter(call => call.path === "confirm").length).toBe(1);
@@ -233,8 +284,9 @@ test("investment accounts require an explicit completeness confirmation when lef
   await page.getByRole("checkbox", { name: /Synthetic savings: I have listed all holdings/ }).check();
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   expect(api.preview().opening.holdings).toEqual([]);
-  await expect(page.getByRole("group", { name: "Review setup before confirmation" }))
-    .toContainText("Synthetic savings: You confirmed there are no holdings.");
+  const preview = page.getByRole("group", { name: "Review setup before confirmation" });
+  await expect(preview).toContainText("Synthetic savings");
+  await expect(preview).toContainText("holdings confirmed none");
 });
 
 test("investment rules are validated on their step and explain why a holding cannot yet be added", async ({ page }) => {
@@ -286,8 +338,9 @@ test("every investment account needs its own holdings completeness confirmation"
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   expect(api.preview().opening.holdings).toEqual([]);
   const preview = page.getByRole("group", { name: "Review setup before confirmation" });
-  await expect(preview).toContainText("First brokerage: You confirmed there are no holdings.");
-  await expect(preview).toContainText("Second brokerage: You confirmed there are no holdings.");
+  await expect(preview).toContainText("First brokerage");
+  await expect(preview).toContainText("Second brokerage");
+  await expect(preview).toContainText("holdings confirmed none");
 });
 
 test("holding completeness checks survive amount edits but clear when a holding moves accounts", async ({ page }) => {
@@ -399,7 +452,15 @@ test("broker holdings preserve exact decimal strings and unknown unit prices", a
   await page.getByRole("checkbox", { name: /Synthetic savings: I have listed all holdings/ }).check();
   await confirmOpeningContext(page);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
-  await expect(page.getByText("Unknown — not zero", { exact: false })).toBeVisible();
+  const groupedAccount = page.getByRole("group", { name: "Review setup before confirmation" })
+    .locator("li").filter({ hasText: "Synthetic savings" });
+  await expect(groupedAccount).toContainText("Synthetic equity");
+  await expect(groupedAccount).toContainText("2.345 units");
+  await expect(page.getByRole("group", { name: "Review setup before confirmation" }))
+    .toContainText("smallest quantity step 0.001");
+  await expect(page.getByRole("group", { name: "Review setup before confirmation" }))
+    .toContainText("minimum purchase GBP 1.00");
+  await expect(page.getByText("unknown (not zero)", { exact: false })).toBeVisible();
   expect(api.preview().opening.holdings[0]).toMatchObject({ quantity: "2.345", price_gbp: null });
   expect(api.preview().profile.products[0]).toMatchObject({ quantity_increment: "0.001", minimum_notional_gbp: "1.00" });
   await page.getByRole("button", { name: "Edit evidence" }).click();
@@ -555,7 +616,7 @@ test("retained recovery evidence is reviewed without reconstructing or replacing
   await preview.getByText("Technical details: exact profile and starting record", { exact: true }).click();
   await expect(preview.getByText(/Opening record:/)).toContainText(originalOpening.id);
   await expect(preview.getByText(/Opening record:/)).toContainText(originalProfile.portfolio_id);
-  await expect(preview).toContainText("Unknown — not zero");
+  await expect(preview).toContainText("unknown (not zero)");
   await expect(page.getByRole("button", { name: "Confirm and create local records" })).toBeDisabled();
   expect(api.calls.map(call => call.path)).toEqual(["recovery-preview"]);
 });
