@@ -7,7 +7,9 @@ from unittest.mock import Mock,patch
 import json
 import threading
 import socket
-from market_intelligence.runtime import ProviderProfile
+import tempfile
+import traceback
+from market_intelligence.runtime import ProviderProfile, load_profiles
 from market_intelligence.analysis import SummaryRequest,AnalysisError
 from test_intelligence_providers import FakeResponse
 from test_intelligence_controls import IntelligenceStoreFixture
@@ -121,15 +123,223 @@ class DurableCompletionTests(IntelligenceStoreFixture,unittest.TestCase):
 
 
 class RuntimeProviderTests(unittest.TestCase):
+    def test_anthropic_and_gemini_use_provider_specific_requests(self):
+        examples = (
+            ("anthropic", "claude-test", "api.anthropic.com", "/v1/messages",
+             {"type": "message", "role": "assistant", "stop_reason": "end_turn",
+              "content": [{"type": "text", "text": "{}"}],
+              "usage": {"input_tokens": 10, "output_tokens": 5}}),
+            ("gemini", "gemini-test", "generativelanguage.googleapis.com",
+             "/v1beta/models/gemini-test:generateContent",
+             {"candidates": [{"content": {"role": "model", "parts": [{"text": "{}"}]},
+                              "finishReason": "STOP"}],
+              "usageMetadata": {"totalTokenCount": 15}}),
+            ("openai", "gpt-test", "api.openai.com", "/v1/chat/completions",
+             {"choices": [{"finish_reason": "stop",
+                           "message": {"role": "assistant", "content": "{}", "refusal": None}}],
+              "usage": {"total_tokens": 15}}),
+        )
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        for kind, model, host, path, payload in examples:
+            with self.subTest(kind=kind):
+                connection = Mock(sock=None)
+                encoded_response = json.dumps(payload).encode()
+                connection.getresponse.return_value = FakeResponse(
+                    encoded_response, headers={"Content-Length": str(len(encoded_response))})
+                with patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+                     patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses) as resolve, \
+                     patch("market_intelligence.runtime.configured_proxy_url", return_value=""), \
+                     patch("market_intelligence.runtime.PinnedHTTPSConnection", return_value=connection) as factory:
+                    result = ProviderProfile("test", kind, model, "TRADER_AI_TEST").complete(
+                        SummaryRequest("system", '{"evidence":[]}', 64), threading.Event())
+                resolve.assert_called_once_with(host, 443, type=socket.SOCK_STREAM)
+                factory.assert_called_once_with(host, "93.184.216.34", 3.0, proxy=None)
+                method, actual_path, encoded, headers = connection.request.call_args.args
+                self.assertEqual((method, actual_path), ("POST", path))
+                self.assertNotIn("synthetic-key", actual_path)
+                self.assertNotIn("synthetic-key", encoded.decode())
+                body = json.loads(encoded)
+                if kind == "anthropic":
+                    self.assertEqual(headers["x-api-key"], "synthetic-key")
+                    self.assertEqual(headers["anthropic-version"], "2023-06-01")
+                    self.assertEqual(body["system"], "system")
+                    self.assertEqual(body["messages"][0]["content"], '{"evidence":[]}')
+                    self.assertEqual(body["max_tokens"], 64)
+                elif kind == "gemini":
+                    self.assertEqual(headers["x-goog-api-key"], "synthetic-key")
+                    self.assertEqual(body["system_instruction"]["parts"][0]["text"], "system")
+                    self.assertEqual(body["contents"][0]["parts"][0]["text"], '{"evidence":[]}')
+                    self.assertEqual(body["generationConfig"]["maxOutputTokens"], 64)
+                    self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+                else:
+                    self.assertEqual(headers["Authorization"], "Bearer synthetic-key")
+                    self.assertEqual(body["messages"][0]["content"], "system")
+                    self.assertEqual(body["messages"][1]["content"], '{"evidence":[]}')
+                    self.assertEqual(body["max_tokens"], 64)
+                self.assertNotIn("tools", body)
+                self.assertEqual((result.text, result.tokens_used), ("{}", 15))
+
+    def test_gemini_model_cannot_escape_the_fixed_endpoint(self):
+        for model in ("../model", "models/model", "model?key=secret", "model%2fother", "https://example.com"):
+            with self.subTest(model=model), self.assertRaises(ValueError):
+                ProviderProfile("test", "gemini", model, "TRADER_AI_TEST")
+
+    def test_new_provider_profiles_load_without_reading_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.json"
+            path.write_text(json.dumps([
+                {"name": "claude", "kind": "anthropic", "model": "claude-test",
+                 "key_env": "TRADER_AI_CLAUDE"},
+                {"name": "gemini", "kind": "gemini", "model": "gemini-test",
+                 "key_env": "TRADER_AI_GEMINI"},
+            ]), encoding="utf-8")
+            with patch("market_intelligence.runtime.os.getenv", side_effect=AssertionError("unexpected credential read")):
+                profiles = load_profiles(path)
+            self.assertEqual(set(profiles), {"claude", "gemini"})
+
+    def test_profile_file_rejects_ambiguous_or_incomplete_provider_selection(self):
+        examples = (
+            '[{"name":"test","kind":"local","kind":"gemini","model":"model",'
+            '"key_env":"TRADER_AI_TEST"}]',
+            '[{"name":"test","kind":"anthropic"}]',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.json"
+            for content in examples:
+                with self.subTest(content=content):
+                    path.write_text(content, encoding="utf-8")
+                    with patch("market_intelligence.runtime.os.getenv", side_effect=AssertionError("unexpected credential read")):
+                        with self.assertRaises(ValueError):
+                            load_profiles(path)
+
+    def test_incomplete_or_tool_provider_output_fails_closed(self):
+        examples = (
+            ("anthropic", {"type": "message", "role": "assistant", "stop_reason": "max_tokens",
+                           "content": [{"type": "text", "text": "{}"}]}),
+            ("gemini", {"candidates": [{"finishReason": "STOP",
+                                        "content": {"parts": [{"functionCall": {"name": "tool"}}]}}]}),
+            ("openai", {"choices": [{"finish_reason": "length",
+                                     "message": {"role": "assistant", "content": "{}"}}]}),
+            ("openai", {"choices": [{"finish_reason": "stop",
+                                     "message": {"role": "assistant", "content": "{}",
+                                                 "refusal": "refused"}}]}),
+            ("openai", {"choices": [{"finish_reason": "stop",
+                                     "message": {"role": "assistant", "content": "{}",
+                                                 "tool_calls": [{"id": "tool"}]}}]}),
+            ("openai", {"choices": [{"message": {"role": "assistant", "content": "{}"}}]}),
+        )
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        for kind, payload in examples:
+            with self.subTest(kind=kind):
+                connection = Mock(sock=None)
+                connection.getresponse.return_value = FakeResponse(json.dumps(payload).encode())
+                with patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+                     patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses), \
+                     patch("market_intelligence.runtime.configured_proxy_url", return_value=""), \
+                     patch("market_intelligence.runtime.PinnedHTTPSConnection", return_value=connection):
+                    with self.assertRaises(AnalysisError):
+                        ProviderProfile("test", kind, "model", "TRADER_AI_TEST").complete(
+                            SummaryRequest("system", "{}", 64), threading.Event())
+
+    def test_truncated_provider_http_body_is_rejected(self):
+        body = json.dumps({"type": "message", "role": "assistant", "stop_reason": "end_turn",
+                           "content": [{"type": "text", "text": "{}"}]}).encode()
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        for declared in (str(len(body) + 10), "-1", "131073"):
+            with self.subTest(declared=declared):
+                connection = Mock(sock=None)
+                connection.getresponse.return_value = FakeResponse(body, headers={"Content-Length": declared})
+                with patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+                     patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses), \
+                     patch("market_intelligence.runtime.configured_proxy_url", return_value=""), \
+                     patch("market_intelligence.runtime.PinnedHTTPSConnection", return_value=connection):
+                    with self.assertRaises(AnalysisError):
+                        ProviderProfile("test", "anthropic", "model", "TRADER_AI_TEST").complete(
+                            SummaryRequest("system", "{}", 64), threading.Event())
+
+    def test_ambiguous_provider_envelope_is_rejected(self):
+        body = (b'{"candidates":[],"candidates":[{"finishReason":"STOP",'
+                b'"content":{"parts":[{"text":"{}"}]}}]}')
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        connection = Mock(sock=None)
+        connection.getresponse.return_value = FakeResponse(body)
+        with patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+             patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses), \
+             patch("market_intelligence.runtime.configured_proxy_url", return_value=""), \
+             patch("market_intelligence.runtime.PinnedHTTPSConnection", return_value=connection):
+            with self.assertRaises(AnalysisError):
+                ProviderProfile("test", "gemini", "model", "TRADER_AI_TEST").complete(
+                    SummaryRequest("system", "{}", 64), threading.Event())
+
+    def test_new_provider_refuses_malformed_or_private_dns_results(self):
+        records = (
+            [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))],
+            [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:4700:4700::1111%1", 443, 0, 0))],
+            [(99999, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
+            [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))],
+        )
+        for addresses in records:
+            with self.subTest(addresses=addresses), \
+                 patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+                 patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses), \
+                 patch("market_intelligence.runtime.configured_proxy_url", return_value=""), \
+                 patch("market_intelligence.runtime.PinnedHTTPSConnection") as factory:
+                with self.assertRaises(AnalysisError):
+                    ProviderProfile("test", "anthropic", "model", "TRADER_AI_TEST").complete(
+                        SummaryRequest("system", "{}", 64), threading.Event())
+                factory.assert_not_called()
+
+    def test_new_provider_never_bypasses_a_failed_configured_proxy(self):
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        with patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+             patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses), \
+             patch("market_intelligence.runtime.configured_proxy_url", return_value="http://127.0.0.1:8080"), \
+             patch("market_intelligence.runtime.PinnedHTTPSConnection", side_effect=OSError("proxy failed")) as factory, \
+             patch("market_intelligence.runtime.http.client.HTTPConnection") as direct:
+            with self.assertRaises(AnalysisError):
+                ProviderProfile("test", "gemini", "model", "TRADER_AI_TEST").complete(
+                    SummaryRequest("system", "{}", 64), threading.Event())
+        factory.assert_called_once()
+        self.assertEqual(factory.call_args.kwargs["proxy"].port, 8080)
+        direct.assert_not_called()
+
+    def test_provider_transport_failure_never_exposes_key_in_traceback(self):
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        connection = Mock(sock=None)
+        connection.request.side_effect = OSError("synthetic-key should not be exposed")
+        with patch.dict("os.environ", {"TRADER_AI_TEST": "synthetic-key"}), \
+             patch("market_intelligence.runtime.socket.getaddrinfo", return_value=addresses), \
+             patch("market_intelligence.runtime.configured_proxy_url", return_value=""), \
+             patch("market_intelligence.runtime.PinnedHTTPSConnection", return_value=connection):
+            try:
+                ProviderProfile("test", "openai", "model", "TRADER_AI_TEST").complete(
+                    SummaryRequest("system", "{}", 64), threading.Event())
+            except AnalysisError as exc:
+                rendered = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            else:
+                self.fail("A failed provider request must not succeed")
+        self.assertNotIn("synthetic-key", rendered)
+
     def test_local_provider_uses_fixed_loopback_and_output_limit(self):
         profile=ProviderProfile("local","local","model")
         connection=Mock(sock=None)
-        connection.getresponse.return_value=FakeResponse(json.dumps({"choices":[{"message":{"content":"{}"}}],"usage":{"total_tokens":10}}).encode(),headers={"Content-Type":"application/json"})
+        connection.getresponse.return_value=FakeResponse(json.dumps({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}],"usage":{"total_tokens":10}}).encode(),headers={"Content-Type":"application/json"})
         with patch("market_intelligence.runtime.http.client.HTTPConnection",return_value=connection) as factory:
             response=profile.complete(SummaryRequest("system","{}",64),threading.Event())
         factory.assert_called_once_with("127.0.0.1",11434,timeout=3.0)
         self.assertEqual(response.text,"{}")
         self.assertEqual(json.loads(connection.request.call_args.args[2])["max_tokens"],64)
+
+    def test_local_provider_rejects_an_explicit_truncated_completion(self):
+        connection = Mock(sock=None)
+        connection.getresponse.return_value = FakeResponse(json.dumps({
+            "choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": "{}"}}],
+        }).encode())
+        with patch("market_intelligence.runtime.http.client.HTTPConnection", return_value=connection):
+            with self.assertRaises(AnalysisError):
+                ProviderProfile("local", "local", "model").complete(
+                    SummaryRequest("system", "{}", 64), threading.Event())
 
     def test_cancelled_hosted_dns_never_connects_or_posts(self):
         cancelled=threading.Event()

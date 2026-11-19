@@ -151,12 +151,21 @@ class AdvisoryAnalysisTests(unittest.TestCase):
         self.callback.assert_not_called()
 
     def test_late_provider_output_is_discarded_without_refunding_reservation(self):
+        self.analyzer.monotonic = Mock(side_effect=(0.0, 0.0, 31.0))
+        with self.assertRaises(AnalysisError) as result:
+            self.analyze()
+        self.assertEqual(result.exception.code, "analysis_expired")
+        self.callback.assert_called_once()
+        self.assertEqual(self.analyzer.budget.calls, 1)
+        self.assertEqual(self.analyzer.cache, {})
+
+    def test_expired_pre_dispatch_validation_does_not_call_provider(self):
         self.analyzer.monotonic = Mock(side_effect=(0.0, 31.0))
         with self.assertRaises(AnalysisError) as result:
             self.analyze()
         self.assertEqual(result.exception.code, "analysis_expired")
+        self.callback.assert_not_called()
         self.assertEqual(self.analyzer.budget.calls, 1)
-        self.assertEqual(self.analyzer.cache, {})
 
     def test_provider_can_be_swapped_only_to_registered_profile(self):
         other = JSONSummaryProvider("other", "other-model", Mock(return_value=ProviderResponse(json.dumps(self.output))))

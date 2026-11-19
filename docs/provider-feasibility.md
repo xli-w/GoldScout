@@ -24,6 +24,21 @@ configurable; no account values or personal identifiers belong in these docs.
 No universal approved connector for all three locations has been established.
 New integration code is offline engineering, not verified account connectivity.
 
+## Connection and scheduling status
+
+The eToro collector is separately gated and live-unvalidated; its current
+retained output is a partial native-currency summary, not a GBP account sync.
+NatWest and Moneybox remain operator-normalized manual evidence until a
+supported route, the exact account fields and permitted retention are verified.
+A manual or partial route must not be labelled a complete live connection.
+
+No unattended account collection is approved. The eToro watch loop still needs
+an explicit, account/profile-bound approval expiring within one day; it does
+not renew authority. Any future recurring collection needs separately approved
+scope, permissions, source-specific rate/retention terms, revocation and stop
+controls, and a failure/restart policy. No scheduler or standing authority is
+created by the current collector.
+
 ## What the recovered public research supports
 
 ### NatWest

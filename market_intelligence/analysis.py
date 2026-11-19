@@ -189,19 +189,23 @@ class DailyAnalysisBudget:
         return self.reserve(now, input_bytes)
 
 
-def response_object(payload):
+def strict_json_loads(payload):
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("Duplicate model output fields")
+                raise ValueError("Duplicate JSON object fields")
             result[key] = value
         return result
 
     def refuse_constant(value):
-        raise ValueError("Nonfinite model output")
+        raise ValueError("Nonfinite JSON value")
 
-    result = json.loads(payload, object_pairs_hook=unique_object, parse_constant=refuse_constant)
+    return json.loads(payload, object_pairs_hook=unique_object, parse_constant=refuse_constant)
+
+
+def response_object(payload):
+    result = strict_json_loads(payload)
     expected = {"claims", "interpretation", "uncertainties", "symbols", "recommendation"}
     if type(result) is not dict or set(result) != expected:
         raise ValueError("Model output does not match the advisory contract")
@@ -305,6 +309,8 @@ class AdvisoryAnalyzer:
         })
         started = self.monotonic()
         guard(self.clock())
+        if not 0 <= self.monotonic() - started <= self.limits.max_latency_seconds:
+            raise AnalysisError("analysis_expired")
         try:
             response = provider.complete(request, cancelled)
         except Exception as exc:

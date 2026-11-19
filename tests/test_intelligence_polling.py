@@ -15,6 +15,7 @@ from dashboard.app import create_app
 from dashboard.intelligence import IntelligenceWorkspace
 from fastapi.testclient import TestClient
 from market_intelligence.analysis import JSONSummaryProvider, ProviderResponse
+from market_intelligence.contracts import ServiceFailure
 from market_intelligence.news import NewsObservation, parse_fed_news
 from market_intelligence.providers import BEA_CALENDAR_URL, BLS_CALENDAR_URL, ProviderError
 from market_intelligence.store import IntelligenceStore, StoreBusy, StoreError
@@ -83,6 +84,23 @@ class NewsObservationStoreTests(IntelligenceStoreFixture, unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["last_news_observation"], json.loads(encode(status)))
         self.assertIsNone(payload["providers_connected"])
+
+    def test_cli_check_reports_the_committed_news_observation(self):
+        self.success()
+        transport = Mock()
+        transport.fetch.return_value = feed()
+        later = self.now + timedelta(minutes=6)
+        with patch("market_intelligence.service.CalendarTransport", return_value=transport), \
+             patch("market_intelligence.service.datetime") as service_clock, \
+             patch("market_intelligence.__main__.datetime") as cli_clock, redirect_stdout(io.StringIO()) as output:
+            service_clock.now.return_value = later
+            cli_clock.now.return_value = later
+            result = main(["check", "--database", str(self.path), "--allow-network", "--collect-news",
+                           "--check-source", "fed_monetary"])
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["check"]["status"], "succeeded")
+        self.assertEqual(payload["last_news_observation"], json.loads(encode(self.store.news_status())))
 
     def test_cli_status_pins_settings_through_observation_time(self):
         self.store.observe_service("observation", "service", 1, self.now, False, ("bls", "bea"),
@@ -194,6 +212,31 @@ class ScheduledNewsTests(IntelligenceStoreFixture, unittest.TestCase):
                 main([action, "--database", str(self.path), "--collect-news"])
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             main(["run", "--database", str(self.path), "--collect-news"])
+
+    def test_cli_supervised_check_requires_explicit_source_and_network(self):
+        for extra in ([], ["--allow-network"], ["--check-source", "bls"],
+                      ["--allow-network", "--check-source", "bls", "--check-source", "bea"]):
+            with self.subTest(extra=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(["check", "--database", str(self.path), *extra])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = main(["check", "--database", str(self.path), "--allow-network",
+                           "--check-source", "bls"])
+        self.assertEqual(result, 1)
+        snapshot = json.loads(output.getvalue())
+        self.assertEqual(snapshot["check"]["status"], "not_started")
+        self.assertIsNone(snapshot["providers_connected"])
+
+    def test_supervised_news_check_does_not_fetch_due_calendars(self):
+        self.store.enqueue(self.request(enabled=True, calendar_enabled=True, news_enabled=True), self.now)
+        with self.service() as service:
+            result, _ = service.check_once("fed_monetary")
+            self.assertEqual(result["status"], "succeeded")
+            self.elapsed = 7200.0
+            service.step()
+        self.assertEqual([call.args[0] for call in self.transport.fetch.call_args_list], [FED_NEWS_URL])
+        self.assertEqual(self.store.news_status().status, "successful")
+        self.assertIsNone(self.store.calendar())
 
     def test_news_requires_explicit_capability_network_and_persisted_flags(self):
         self.enable()
@@ -401,6 +444,96 @@ class ServiceDashboardIntegrationTests(IntelligenceStoreFixture, unittest.TestCa
             "uncertainties": ["Market reaction is unknown."],
             "symbols": ["SPY"], "recommendation": "watch",
         }), 10)
+
+    def test_supervised_analysis_uses_one_completion_and_no_feed_fetch(self):
+        provider = Mock(side_effect=self.complete)
+        service = self.service(provider, calendar_enabled=True)
+        self.store.apply_pending(self.now, profiles=("fixture",))
+        batch = parse_fed_news(feed(), self.now)
+        self.store.complete_news_attempt("attempt-1", 1, self.now, self.now, self.now,
+                                         batch=batch, raw=feed())
+        with service:
+            result, _ = service.check_once("analysis")
+            self.assertEqual(result["status"], "succeeded")
+            self.elapsed = 7200.0
+            service.step()
+        provider.assert_called_once()
+        self.transport.fetch.assert_not_called()
+        self.assertEqual(self.store.analysis_usage(self.now)["calls"], 1)
+        self.assertEqual(len(self.store.recent_briefs()), 1)
+
+    def test_check_expiring_during_reservation_does_not_dispatch_analysis(self):
+        provider = Mock(side_effect=self.complete)
+        service = self.service(provider, calendar_enabled=True)
+        self.store.apply_pending(self.now, profiles=("fixture",))
+        batch = parse_fed_news(feed(), self.now)
+        self.store.complete_news_attempt("attempt-1", 1, self.now, self.now, self.now,
+                                         batch=batch, raw=feed())
+        current = [100.0]
+        reserve = service.analyzer.budget.reserve_request
+
+        def reserve_then_expire(*args):
+            reservation = reserve(*args)
+            current[0] = 146.0
+            return reservation
+
+        with service, patch.object(service.analyzer.budget, "reserve_request", side_effect=reserve_then_expire), \
+             patch("market_intelligence.service.time.monotonic", side_effect=lambda: current[0]), \
+             patch("market_intelligence.service.threading.Thread.start", new=lambda worker: worker.run()):
+            result, _ = service.check_once("analysis")
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(self.store.analysis_usage(self.now)["calls"], 1)
+        provider.assert_not_called()
+        self.transport.fetch.assert_not_called()
+        self.assertEqual(self.store.recent_briefs(), ())
+
+    def test_check_limits_busy_storage_retry_to_remaining_deadline(self):
+        provider = Mock(side_effect=self.complete)
+        service = self.service(provider, calendar_enabled=True)
+        self.store.apply_pending(self.now, profiles=("fixture",))
+        batch = parse_fed_news(feed(), self.now)
+        self.store.complete_news_attempt("attempt-1", 1, self.now, self.now, self.now,
+                                         batch=batch, raw=feed())
+        current, waits = [100.0], []
+
+        def busy_reservation(*args):
+            current[0] = 144.75
+            raise StoreBusy()
+
+        def wait_until_deadline(event, timeout):
+            waits.append(timeout)
+            current[0] = 145.0
+            return False
+
+        with service, patch.object(service.analyzer.budget, "reserve_request", side_effect=busy_reservation), \
+             patch("market_intelligence.service.time.monotonic", side_effect=lambda: current[0]), \
+             patch("market_intelligence.service.threading.Event.wait", new=wait_until_deadline), \
+             patch("market_intelligence.service.threading.Thread.start", new=lambda worker: worker.run()):
+            result, _ = service.check_once("analysis")
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(waits, [0.25])
+        self.assertEqual(self.store.analysis_usage(self.now)["calls"], 0)
+        provider.assert_not_called()
+        self.transport.fetch.assert_not_called()
+
+    def test_failed_analysis_check_reports_error_without_masking_prior_failure(self):
+        provider = Mock(side_effect=RuntimeError("private-debug-detail"))
+        service = self.service(provider, calendar_enabled=True)
+        self.store.apply_pending(self.now, profiles=("fixture",))
+        batch = parse_fed_news(feed(), self.now)
+        self.store.complete_news_attempt("attempt-1", 1, self.now, self.now, self.now,
+                                         batch=batch, raw=feed())
+        previous = self.store.observe_service(
+            "previous", "service-previous", 1, self.now, True, ("bls", "bea"), True, True,
+            (ServiceFailure("bea", "source_unavailable", self.now),))
+        with service:
+            result, _ = service.check_once("analysis")
+        self.assertEqual(result, {"source": "analysis", "status": "failed",
+                                  "error_code": "provider_unavailable"})
+        self.assertEqual(self.store.service_status(), previous)
+        self.assertEqual(self.store.analysis_usage(self.now)["calls"], 1)
+        self.assertEqual(self.store.recent_briefs(), ())
+        self.assertNotIn("private-debug-detail", json.dumps(result))
 
     def test_mocked_collection_analysis_and_dashboard_round_trip(self):
         provider = Mock(side_effect=self.complete)

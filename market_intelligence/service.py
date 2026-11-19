@@ -47,6 +47,28 @@ class ServiceLock:
             self.handle = None
 
 
+class _DeadlineEvent(threading.Event):
+    def __init__(self, deadline):
+        super().__init__()
+        self.deadline = deadline
+
+    def is_set(self):
+        if time.monotonic() >= self.deadline:
+            self.set()
+        return super().is_set()
+
+    def wait(self, timeout=None):
+        if self.is_set():
+            return True
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            self.set()
+            return True
+        if timeout is None or timeout > remaining:
+            timeout = remaining
+        return super().wait(timeout) or self.is_set()
+
+
 @dataclass(frozen=True)
 class NewsJobResult:
     attempt_id: str
@@ -111,6 +133,10 @@ class IntelligenceService:
         self.reported_failures: dict[str, ServiceFailure] = {}
         self.status_dirty = True
         self.next_heartbeat_at = 0.0
+        self._check_source = None
+        self._check_started = False
+        self._check_result = None
+        self._check_deadline = None
 
     @property
     def last_provider_error(self):
@@ -170,6 +196,15 @@ class IntelligenceService:
             self.job_cancel.set()
         self.calendar_transport.cancel()
 
+    def _check_timed_out(self):
+        return (self._check_source is not None and self._check_result is None
+                and time.monotonic() >= self._check_deadline)
+
+    def _interrupt_check(self):
+        self._cancel_job()
+        self._check_result = {"source": self._check_source, "status": "interrupted",
+                              "error_code": "check_timeout"}
+
     @staticmethod
     def _retry_analysis_storage(operation, cancelled):
         while True:
@@ -183,7 +218,7 @@ class IntelligenceService:
                     raise AnalysisError("analysis_cancelled")
 
     def _observe_service(self, settings):
-        if self.store.schema_version < 5:
+        if self.store.schema_version < 5 or self._check_source is not None:
             return
         elapsed = self.monotonic()
         if not self.status_dirty and elapsed < self.next_heartbeat_at:
@@ -240,13 +275,24 @@ class IntelligenceService:
         if not self.allow_network:
             self._observe_service(settings)
             return receipts
+        if self._check_started and self._check_timed_out():
+            self._interrupt_check()
+            return receipts
         if self.worker is not None and not self.worker.is_alive():
+            if self._check_timed_out():
+                self._interrupt_check()
+                return receipts
             if self.pending_result is None:
                 self.pending_result = self.results.get_nowait()
             batch, error, revision, generation, source_name = self.pending_result
             permitted = settings.ai_enabled and settings.news_enabled if source_name == "analysis" else settings.news_enabled if source_name == "fed_monetary" else settings.calendar_enabled
-            if settings.revision == revision and self.generation == generation and settings.enabled and permitted:
+            eligible = (settings.revision == revision and self.generation == generation and settings.enabled
+                        and permitted and (self._check_source != source_name or self._check_result is None))
+            if eligible:
                 now = self.clock()
+                if self._check_timed_out():
+                    self._interrupt_check()
+                    return receipts
                 record_result = True
                 if source_name == "analysis":
                     brief, generated = batch
@@ -264,18 +310,38 @@ class IntelligenceService:
                                                      batch=batch.batch, raw=batch.raw, error_code=error)
                 else:
                     error = self._publish_calendar_result(batch, error, revision, source_name, now)
+                    if self._check_result is not None:
+                        return receipts
                 if record_result:
                     self._record_result(source_name, error, now)
                 if source_name != "analysis":
                     self.provider_errors[source_name] = error
                     self.next_fetch_at[source_name] = self.monotonic() + (300.0 if error or source_name == "fed_monetary" else 3600.0)
+            if self._check_source == source_name and self._check_result is None:
+                if not eligible:
+                    status, code = "discarded", "settings_changed"
+                elif error is not None:
+                    failure = self.reported_failures.get(source_name)
+                    status = "failed"
+                    code = failure.error_code if failure is not None else (
+                        "analysis_failed" if source_name == "analysis" else "source_unavailable")
+                elif source_name == "analysis" and not generated:
+                    status, code = "cached", None
+                else:
+                    status, code = "succeeded", None
+                self._check_result = {"source": source_name, "status": status, "error_code": code}
             self.pending_result = None
             self.worker = None
         if self.worker is None or self.status_dirty:
             self._observe_service(settings)
+        if not self._check_started and self._check_timed_out():
+            self._interrupt_check()
+            return receipts
         elapsed = self.monotonic()
         due = [name for name in self.fetch_sources if elapsed >= self.next_fetch_at[name]
-               and (settings.news_enabled if name == "fed_monetary" else settings.calendar_enabled)]
+               and (settings.news_enabled if name == "fed_monetary" else settings.calendar_enabled)
+               and (self._check_source is None or
+                    (self._check_source == name and not self._check_started and self._check_result is None))]
         if settings.enabled and self.worker is None and due:
             source_name = min(due, key=lambda name: (self.next_fetch_at[name], self.fetch_sources.index(name)))
             news_job = source_name == "fed_monetary"
@@ -286,7 +352,7 @@ class IntelligenceService:
             revision, generation = settings.revision, self.generation
             started_at = self.clock()
             attempt_id = "attempt-" + uuid.uuid4().hex
-            cancelled = threading.Event()
+            cancelled = threading.Event() if self._check_source is None else _DeadlineEvent(self._check_deadline)
             self.job_cancel = cancelled
 
             def fetch():
@@ -301,6 +367,7 @@ class IntelligenceService:
                 except ProviderError as exc:
                     error = exc.code if not news_job or exc.code in NEWS_ERROR_CODES else "source_unavailable"
                 except Exception:
+                    logger.warning("Public feed worker failed unexpectedly.")
                     error = "source_unavailable"
                 if news_job:
                     batch = NewsJobResult(attempt_id, started_at, self.clock(),
@@ -308,10 +375,15 @@ class IntelligenceService:
                 self.results.put_nowait((batch, error, revision, generation, source_name))
 
             self.worker = threading.Thread(target=fetch, name="intelligence-calendar", daemon=True)
+            if self._check_source is not None:
+                self._check_started = True
             self.worker.start()
         else:
             analyzer=self.analyzer
-            if settings.enabled and settings.news_enabled and settings.ai_enabled and analyzer is not None and self.worker is None:
+            if (settings.enabled and settings.news_enabled and settings.ai_enabled and analyzer is not None
+                    and self.worker is None and (self._check_source is None
+                    or (self._check_source == "analysis" and not self._check_started
+                        and self._check_result is None))):
                 status = self.store.news_status()
                 if status is not None and status.status == "successful":
                     archive = self.store.news_acquisition(status.acquisition_id)
@@ -324,7 +396,7 @@ class IntelligenceService:
                         self.ai_due[key] = elapsed + 300.0
                         if len(self.ai_due) > 256:
                             self.ai_due.pop(next(iter(self.ai_due)))
-                        cancelled = threading.Event()
+                        cancelled = threading.Event() if self._check_source is None else _DeadlineEvent(self._check_deadline)
                         self.job_cancel = cancelled
                         revision, generation = settings.revision, self.generation
                         def analyze():
@@ -349,9 +421,37 @@ class IntelligenceService:
                                 error = "analysis_failed"
                             self.results.put_nowait(((brief, generated), error, revision, generation, "analysis"))
                         self.worker = threading.Thread(target=analyze, name="intelligence-analysis", daemon=True)
+                        if self._check_source is not None:
+                            self._check_started = True
                         self.worker.start()
                         break
         return receipts
+
+    def check_once(self, source):
+        if (self.lock is None or self.generation != 1 or self.last_settings_revision is not None
+                or self.worker is not None or self._check_source is not None):
+            raise ValueError("A supervised check requires a fresh, owned service")
+        if (not self.allow_network or source not in (*self.calendar_sources, "fed_monetary", "analysis")
+                or (source == "fed_monetary" and not self.collect_news)
+                or (source == "analysis" and self.analyzer is None)):
+            raise ValueError("The selected source requires its explicit capability")
+        self._check_source = source
+        receipts = []
+        deadline = time.monotonic() + 45.0
+        self._check_deadline = deadline
+        while True:
+            receipts.extend(self.step())
+            if self._check_result is not None:
+                return self._check_result, tuple(receipts)
+            if not self._check_started:
+                self._check_result = {"source": source, "status": "not_started",
+                                      "error_code": "unavailable_or_disabled"}
+                return self._check_result, tuple(receipts)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._interrupt_check()
+                return self._check_result, tuple(receipts)
+            self.worker.join(timeout=min(remaining, 0.2))
 
     def _publish_calendar_result(self, batch, error, revision, source_name, now):
         previous = self.store.calendar()
@@ -385,6 +485,9 @@ class IntelligenceService:
         sources = tuple(source for source in old_sources if source.source != source_name) + (source,)
         combined = tuple(event for event in old_events if event.source != source_name) + events
         snapshot = CalendarSnapshot(previous.revision + 1 if previous else 1, now, sources, combined)
+        if self._check_timed_out():
+            self._interrupt_check()
+            return error
         self.store.publish_calendar(snapshot, revision, now)
         return error
 

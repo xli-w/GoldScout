@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 import proxy_config
 
 from market_intelligence.providers import BEA_CALENDAR_URL, BLS_CALENDAR_URL, FED_NEWS_URL, CalendarTransport, PinnedHTTPSConnection, ProviderError, parse_bea_calendar, parse_bls_calendar
+from market_intelligence.contracts import ServiceFailure
 from market_intelligence.service import IntelligenceService
 from market_intelligence.__main__ import main
 from proxy_config import ProxyConfigurationError
@@ -344,6 +345,170 @@ class IntelligenceCalendarServiceTests(IntelligenceStoreFixture, unittest.TestCa
         for sources in ((), ("unknown",), ("bls", "bls"), ["bls"], ("bls", [])):
             with self.subTest(sources=sources), self.assertRaises(ValueError):
                 self.service(sources=sources)
+
+    def test_supervised_check_fetches_only_the_selected_source_once(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        self.transport.fetch.return_value = calendar(title="Gross Domestic Product", uid="bea-release")
+        with self.service(sources=("bls", "bea")) as service:
+            result, receipts = service.check_once("bea")
+            self.assertEqual(result, {"source": "bea", "status": "succeeded", "error_code": None})
+            self.assertEqual(len(receipts), 1)
+            self.elapsed = 7200.0
+            service.step()
+        self.assertEqual([call.args[0] for call in self.transport.fetch.call_args_list], [BEA_CALENDAR_URL])
+        self.assertEqual({source.source for source in self.store.calendar().sources}, {"bea"})
+
+    def test_supervised_check_does_not_dispatch_when_disabled(self):
+        with self.service(sources=("bls", "bea")) as service:
+            result, _ = service.check_once("bls")
+            self.store.enqueue(self.request(enabled=True), self.now)
+            service.step()
+        self.assertEqual(result["status"], "not_started")
+        self.transport.fetch.assert_not_called()
+        self.assertIsNone(self.store.calendar())
+
+    def test_supervised_check_records_failure_without_retry(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        self.transport.fetch.side_effect = ProviderError("http_unavailable")
+        with self.service(sources=("bls", "bea")) as service:
+            result, _ = service.check_once("bls")
+            self.assertEqual(result, {"source": "bls", "status": "failed",
+                                      "error_code": "http_unavailable"})
+            self.elapsed = 7200.0
+            service.step()
+        self.assertEqual(self.transport.fetch.call_count, 1)
+        self.assertEqual(self.store.calendar().sources[0].status, "unavailable")
+
+    def test_supervised_check_does_not_hide_another_sources_failure(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        self.store.apply_pending(self.now)
+        previous = self.store.observe_service(
+            "previous", "service-previous", 1, self.now, True, ("bls", "bea"), False, False,
+            (ServiceFailure("bea", "source_unavailable", self.now),))
+        with self.service(sources=("bls",)) as service:
+            result, _ = service.check_once("bls")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(self.store.service_status(), previous)
+        with self.service(sources=("bls", "bea")) as restarted:
+            restarted.step()
+            self.complete(restarted)
+            self.assertEqual(self.store.service_status().failures[0].source, "bea")
+            self.complete(restarted)
+        self.assertEqual(self.store.service_status().failures, ())
+
+    def test_supervised_check_discards_result_after_settings_change(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+
+        def fetch(url, cancel_event=None):
+            self.store.enqueue(self.request("disable", 1, enabled=False), self.now)
+            return calendar()
+
+        self.transport.fetch.side_effect = fetch
+        with self.service(sources=("bls",)) as service:
+            result, _ = service.check_once("bls")
+        self.assertEqual(result["status"], "discarded")
+        self.assertIsNone(self.store.calendar())
+        self.assertEqual(self.transport.fetch.call_count, 1)
+
+    def test_supervised_check_does_not_dispatch_after_deadline(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        ticks = iter((100.0, 146.0))
+        with self.service(sources=("bls",)) as service:
+            with patch("market_intelligence.service.time.monotonic", side_effect=lambda: next(ticks, 146.0)):
+                result, _ = service.check_once("bls")
+                service.step()
+        self.assertEqual(result["status"], "interrupted")
+        self.transport.fetch.assert_not_called()
+        self.assertIsNone(self.store.calendar())
+
+    def test_check_worker_started_after_deadline_does_not_fetch(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        current = [100.0]
+
+        def start_late(worker):
+            current[0] = 146.0
+            worker.run()
+
+        with self.service(sources=("bls",)) as service, \
+             patch("market_intelligence.service.time.monotonic", side_effect=lambda: current[0]), \
+             patch("market_intelligence.service.threading.Thread.start", new=start_late):
+            result, _ = service.check_once("bls")
+        self.assertEqual(result["status"], "interrupted")
+        self.transport.fetch.assert_not_called()
+        self.assertIsNone(self.store.calendar())
+
+    def test_timed_out_check_does_not_publish_a_late_result(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        current = [100.0]
+
+        def late_fetch(*args, **kwargs):
+            current[0] = 146.0
+            return calendar()
+
+        self.transport.fetch.side_effect = late_fetch
+        with self.service(sources=("bls",)) as service, \
+             patch("market_intelligence.service.time.monotonic", side_effect=lambda: current[0]), \
+             patch("market_intelligence.service.threading.Thread.start", new=lambda worker: worker.run()):
+            result, _ = service.check_once("bls")
+            service.step()
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(self.transport.fetch.call_count, 1)
+        self.assertIsNone(self.store.calendar())
+
+    def test_check_does_not_publish_when_deadline_passes_during_worker_join(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        current = [100.0]
+
+        def join_after_deadline(worker, timeout=None):
+            self.assertFalse(worker.is_alive())
+            current[0] = 146.0
+
+        with self.service(sources=("bls",)) as service, \
+             patch("market_intelligence.service.time.monotonic", side_effect=lambda: current[0]), \
+             patch("market_intelligence.service.threading.Thread.start", new=lambda worker: worker.run()), \
+             patch("market_intelligence.service.threading.Thread.join", new=join_after_deadline):
+            result, _ = service.check_once("bls")
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(self.transport.fetch.call_count, 1)
+        self.assertIsNone(self.store.calendar())
+
+    def test_check_does_not_publish_when_worker_finishes_after_deadline_check(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        current = [100.0]
+
+        def finish_after_deadline(worker):
+            current[0] = 146.0
+            return False
+
+        with self.service(sources=("bls",)) as service, \
+             patch("market_intelligence.service.time.monotonic", side_effect=lambda: current[0]), \
+             patch("market_intelligence.service.threading.Thread.start", new=lambda worker: worker.run()), \
+             patch("market_intelligence.service.threading.Thread.join", new=lambda worker, timeout=None: None), \
+             patch("market_intelligence.service.threading.Thread.is_alive", new=finish_after_deadline):
+            result, _ = service.check_once("bls")
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(self.transport.fetch.call_count, 1)
+        self.assertIsNone(self.store.calendar())
+
+    def test_check_does_not_publish_when_calendar_read_crosses_deadline(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        current = [100.0]
+        read_calendar = self.store.calendar
+
+        def read_after_deadline():
+            previous = read_calendar()
+            current[0] = 146.0
+            return previous
+
+        with self.service(sources=("bls",)) as service, \
+             patch.object(self.store, "calendar", side_effect=read_after_deadline), \
+             patch("market_intelligence.service.time.monotonic", side_effect=lambda: current[0]), \
+             patch("market_intelligence.service.threading.Thread.start", new=lambda worker: worker.run()), \
+             patch("market_intelligence.service.threading.Thread.join", new=lambda worker, timeout=None: None):
+            result, _ = service.check_once("bls")
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(self.transport.fetch.call_count, 1)
+        self.assertIsNone(self.store.calendar())
 
     def test_bls_and_bea_publish_independent_evidence_for_same_uid(self):
         def fetch(url, cancel_event=None):

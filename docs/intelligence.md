@@ -97,21 +97,93 @@ Create an operator-owned JSON profile file with no secrets. Example:
 
 ```json
 [
-  {"name":"local","kind":"local","model":"llama3.2","port":11434},
-  {"name":"hosted","kind":"openai","model":"gpt-4.1-mini","key_env":"TRADER_AI_OPENAI_KEY"}
+  {"name":"local","kind":"local","model":"replace-with-local-model","port":11434},
+  {"name":"openai","kind":"openai","model":"replace-with-openai-model","key_env":"TRADER_AI_OPENAI_KEY"},
+  {"name":"anthropic","kind":"anthropic","model":"replace-with-claude-model","key_env":"TRADER_AI_ANTHROPIC_KEY"},
+  {"name":"gemini","kind":"gemini","model":"replace-with-gemini-model","key_env":"TRADER_AI_GEMINI_KEY"}
 ]
 ```
 
+Replace the example model names with models the operator has verified for the
+selected account and response requirements. A file can contain up to ten
+named profiles. Hosted profiles reference operator-owned `TRADER_AI_`
+environment variables, not key values; multiple profiles can reference
+different keys. Gemini profiles use a bare model identifier, not a URL or
+`models/` path. Only one registered profile is selected for analysis at a time.
+Ambiguous JSON fields and incomplete profile entries are rejected.
+Before live use, independently confirm model permissions, public-data and
+provider retention terms, rate limits and possible charges; the existing
+request caps are not a currency spending limit.
+
 The local adapter uses the explicitly configured loopback OpenAI-compatible server;
-it does not install or start a model. Hosted credentials must be entered by the
-operator outside chat into the named environment variable. They are never read by
-the browser or included in evidence. Hosted traffic uses the fixed OpenAI HTTPS
-endpoint, DNS/address checks, TLS verification and the configured `TRADER_PROXY_URL`
-without a direct fallback. Local loopback operation is an explicit profile kind,
-not a fallback for a failed remote request. Provider calls are bounded and have no
-automatic retries or tools. Cancellation is cooperative; a request already being
-dispatched cannot be retracted. Actual provider compatibility still requires
-separate operator-approved validation, and cannot be established by offline mocks.
+it does not install or start a model. It must support the requested
+OpenAI-compatible JSON completion shape, including an assistant role and normal
+stop reason. Hosted credentials must be entered by
+the operator outside chat into the named environment variable. They are never
+read by the browser or included in evidence. OpenAI, Anthropic and Gemini use
+their own fixed HTTPS hosts and request/response formats, DNS/address checks,
+TLS verification and the configured `TRADER_PROXY_URL` without a direct fallback.
+No arbitrary hosted URLs are accepted. Anthropic must return the requested JSON
+object in a completed text response; Gemini must support JSON response mode.
+Blocked, truncated, tool or invalid outputs fail rather than becoming briefs.
+Local loopback is an explicit profile kind, not a fallback for a failed remote
+request. Provider dispatches are bounded and have no internal retries or tools;
+the separately enabled long-running service can schedule another attempt and
+reserve more budget. Cancellation is cooperative; a request already being
+dispatched cannot be retracted. Actual provider and model compatibility still
+requires separate operator-approved validation, not offline mocks.
+
+### Proxy configuration
+
+`TRADER_PROXY_URL` configures the shared HTTP CONNECT proxy for public feeds,
+hosted AI and the separately approved eToro read adapter. It does not affect
+local-loopback AI or configure other applications. See the blank
+[connection parameter reference](../connection-parameters.example); do not
+source it, since its blank values would override existing settings.
+
+On Windows, the operator can open **Edit environment variables for your
+account**, create or edit a user variable named `TRADER_PROXY_URL`, and enter the
+proxy URL privately. Do not put an authenticated URL in chat, the example,
+source control or command arguments. For HTTP Basic authentication, its form is
+`http://<username>:<password>@<proxy-host>:<port>`; percent-encode reserved
+characters in the username and password. Restart the application and any parent
+terminal or VS Code instance so new processes inherit the setting.
+
+Windows user environment variables are stored in plaintext and inherited by
+processes, so use that persistent scope only on a trusted account and machine.
+Only HTTP proxies, either unauthenticated or using Basic authentication, are
+supported; integrated Windows authentication is not supported. Basic credentials
+are sent to the proxy without transport encryption; use a trusted network.
+HTTPS to the destination still uses certificate and hostname verification.
+
+A nonempty `TRADER_PROXY_URL` has no direct-connection fallback. An explicitly
+empty process value disables the proxy and overrides the operator-managed dotenv
+setting; `HTTP_PROXY` and `HTTPS_PROXY` are not substitutes. Destination DNS
+must resolve locally and the proxy must allow CONNECT to the validated IP
+address. Configuring the proxy does not start collection or authorize broker
+access. For an approved live check, see
+[supervised single-source checks](#supervised-single-source-checks).
+
+An operator can instead perform one approved BLS transport check without
+opening an intelligence store. Run this in a fresh terminal that has inherited
+the private proxy setting; it refuses to connect when the variable is blank:
+
+```powershell
+@'
+import os
+from market_intelligence.providers import BLS_CALENDAR_URL, CalendarTransport
+
+proxy = os.environ.get("TRADER_PROXY_URL")
+if not proxy or not proxy.strip():
+    raise SystemExit("TRADER_PROXY_URL is missing; no request made.")
+CalendarTransport(proxy_url=proxy).fetch(BLS_CALENDAR_URL)
+print("BLS response received through the configured proxy.")
+'@ | python -
+```
+
+This makes a live public request, not an offline test. It does not parse or
+save the calendar, establish complete coverage, or validate broker or AI access.
+Keep the URL and any diagnostic output private.
 
 ## Run And Controls
 
@@ -158,6 +230,71 @@ AI interpretations are always unverified, factual claims are source quotations,
 and recommendations are only watch/review/wait. Analysis considers recent dated
 articles; unknown publication times are not silently treated as new events. Model
 output, budget exhaustion or intelligence outages cannot affect broker mutations.
+
+### Supervised single-source checks
+
+Only after separate task-specific approval, a `check` invocation can attempt
+one selected source without starting the recurring service loop:
+
+```powershell
+python -m market_intelligence check --database intelligence.sqlite3 --allow-network --check-source bls
+python -m market_intelligence check --database intelligence.sqlite3 --allow-network --collect-news --check-source fed_monetary
+python -m market_intelligence check --database intelligence.sqlite3 --allow-network --collect-news --allow-ai --ai-profiles profiles.json --check-source analysis
+```
+
+Select `bea` instead of `bls` to check that calendar. Each invocation applies
+pending controls, takes the service lock and may write source evidence, a
+durable AI reservation or a brief to the explicitly selected
+intelligence store. It makes at most one source or AI dispatch, never a provider
+fallback or scheduled retry. An analysis check does not fetch news: it needs
+already saved, recent, successfully observed public news and an enabled,
+registered AI profile. Even local AI currently requires the network and news
+capability flags; the model request itself stays on loopback.
+
+Checks do not write service observations, so they do not erase failures previously
+reported for unselected sources. Any returned service observation is from an
+earlier service, not this check. The check outcome is returned in its JSON output;
+an AI check failure is not separately recorded as a service failure. Retain the
+output if a record of that result is needed.
+
+The master and applicable source/AI settings must be enabled. `not_started`,
+`failed`, `discarded`, `cached` and `interrupted` results have a nonzero exit
+status and do not establish connectivity. `succeeded` means that one result
+was validated and committed, not that coverage is complete or the provider
+remains connected. A timeout cancels cooperatively and discards late results;
+an already dispatched request, in-progress publication or committed reservation
+cannot be retracted. System DNS and storage delays can exceed the check's local
+deadline. Inspect recorded state after an uncertain interruption rather than
+assuming rollback.
+
+### US source assessment
+
+The [BEA subscription page](https://www.bea.gov/news/schedule/icalendar)
+identifies the configured calendar feed. The Federal Reserve's
+[RSS directory](https://www.federalreserve.gov/feeds/feeds.htm) identifies the
+configured monetary-policy press-release feed, not general news. The indexed
+official BLS schedule identifies its calendar subscription, but the BLS
+documentation page returned 403 during this assessment. These references do
+not validate current feed contents, parser compatibility, coverage, retention
+rights or rate limits; verify those separately before an approved live check.
+
+### UK source assessment
+
+No UK source is enabled. The official ONS
+[release-search documentation](https://developer.ons.gov.uk/search/search-releases/)
+describes upcoming/cancelled releases, provisional dates and paginated results;
+its [API introduction](https://developer.ons.gov.uk/) labels the API beta. The
+published example does not establish a per-entry revision clock or stable
+multi-page snapshot. Exact release-calendar retention, attribution, AI-use and
+rate-limit terms, date changes and product relevance still need verification
+before an adapter can preserve the existing evidence contract.
+
+The [Bank of England legal terms](https://www.bankofengland.co.uk/legal) permit
+certain personal or internal non-commercial use and distinguish its database
+licence and third-party material. They do not establish blanket permission to
+archive every feed or send its text to hosted AI. Verify the exact source,
+rights, machine-readable coverage and clocks before considering collection.
+Neither assessment is a live feed check or evidence of complete UK coverage.
 
 ### Service observations
 

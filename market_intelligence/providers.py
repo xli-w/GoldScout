@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import http.client
 import ipaddress
+import logging
 import socket
 import ssl
 import threading
@@ -14,6 +15,8 @@ from typing import Tuple
 from market_intelligence.contracts import CalendarEvent, SourceCoverage, SYMBOLS, utc_time
 from proxy_config import configured_proxy_url, parse_proxy_url
 
+
+logger = logging.getLogger(__name__)
 
 BLS_CALENDAR_URL = "https://www.bls.gov/schedule/news_release/bls.ics"
 BEA_CALENDAR_URL = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
@@ -194,6 +197,7 @@ class CalendarTransport:
         with self.state_lock:
             self.active_abort = abort
         timer.start()
+        stage = "resolve"
         try:
             if deadline.is_set():
                 raise ProviderError("request_timeout")
@@ -211,6 +215,7 @@ class CalendarTransport:
                 addresses.append(address)
             if deadline.is_set() or self.monotonic() - started >= 15.0:
                 raise ProviderError("request_timeout")
+            stage = "request"
             if self.proxy is None:
                 connection = self.connection_factory(host, addresses[0], 3.0)
             else:
@@ -224,6 +229,7 @@ class CalendarTransport:
                 "Accept": "application/rss+xml, application/xml, text/xml" if rss else "text/calendar",
                 "Accept-Encoding": "identity", "Connection": "close"})
             active_socket = connection.sock
+            stage = "response"
             response = connection.getresponse()
             if response.status != 200:
                 raise ProviderError("http_unavailable")
@@ -236,6 +242,7 @@ class CalendarTransport:
             if length is not None and (not length.isascii() or not length.isdigit() or len(length) > 7 or int(length) > MAX_DOWNLOAD_BYTES):
                 raise ProviderError("response_too_large")
             chunks, total = [], 0
+            stage = "body"
             while True:
                 if deadline.is_set() or self.monotonic() - started >= 15.0:
                     raise ProviderError("request_timeout")
@@ -254,6 +261,19 @@ class CalendarTransport:
         except ProviderError:
             raise
         except (OSError, ValueError, http.client.HTTPException) as exc:
+            if isinstance(exc, socket.gaierror):
+                category = "dns"
+            elif isinstance(exc, ssl.SSLError):
+                category = "tls"
+            elif isinstance(exc, TimeoutError):
+                category = "timeout"
+            elif isinstance(exc, http.client.HTTPException):
+                category = "http_protocol"
+            elif isinstance(exc, OSError):
+                category = "transport"
+            else:
+                category = "invalid_data"
+            logger.warning("Public feed transport failed: stage=%s category=%s", stage, category)
             if self.proxy is not None:
                 raise ProviderError("request_timeout" if deadline.is_set() else "source_unavailable") from None
             raise ProviderError("request_timeout" if deadline.is_set() else "source_unavailable") from exc
