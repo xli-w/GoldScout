@@ -1,6 +1,6 @@
 """Synthetic-only tests for the eToro portfolio projection."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import unittest
@@ -140,6 +140,22 @@ class PortfolioProjectionTests(unittest.TestCase):
             "real", now=lambda: NOW)
         self.assertEqual(result["gbp_balance"]["status"], "unavailable")
         self.assertEqual(result["gbp_balance"]["error_code"], "schema_invalid")
+
+    def test_balance_receipt_time_is_after_the_balance_request(self):
+        current = [NOW]
+        def transport(path, headers):
+            if "aggregate-portfolio" in path:
+                return encoded(aggregate())
+            current[0] += timedelta(seconds=5)
+            return encoded({"balances": [{
+                "accountId": "12345", "accountType": "Trading", "balance": 105,
+                "currency": "USD", "displayBalance": 82.25, "displayCurrency": "GBP",
+                "exchangeRate": 0.78,
+            }]})
+        result = collect_portfolio(
+            transport, lambda: {"x-api-key": "synthetic-public", "x-user-key": "synthetic-user"},
+            "real", now=lambda: current[0])
+        self.assertEqual(result["gbp_balance"]["received_at"], "2026-11-19T12:00:05.000000Z")
 
 
 if __name__ == "__main__":

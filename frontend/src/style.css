@@ -58,7 +58,13 @@
 .history-heading { margin-top: 30px; }
 .history-group { margin-top: 28px; }
 .investment-next-steps { padding: 14px 16px; border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
+.value-changes { overflow-wrap: anywhere; }
+.value-change-select { display: grid; gap: 6px; max-width: 520px; font-size: 12px; }
 .etoro-panel { max-width: 1200px; min-width: 0; margin-top: 28px; padding: 16px; border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
+.etoro-journal-bridge { margin-top: 20px; padding: 14px; border: 1px solid var(--line); }
+.bridge-field { display: grid; gap: 6px; min-width: 0; margin-block: 10px; font-size: 12px; }
+.bridge-pair-controls { display: grid; gap: 8px; max-width: 650px; }
+.bridge-pair-controls button { justify-self: start; }
 .investment-setup .etoro-panel { margin: 0; padding: 8px 0 0; border: 0; }
 .etoro-intro, .etoro-panel .position-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .etoro-form { display: grid; gap: 14px; max-width: 680px; }
@@ -82,6 +88,31 @@
 .investment-next-steps h2 { margin-top: 0; }
 .investment-next-steps li { margin-block: 8px; line-height: 1.5; }
 .investment-next-steps a { color: #78e1b0; text-decoration: underline; }
+.account-maintenance-card { margin-block: 14px; padding: 14px; border: 1px solid var(--line); background: var(--surface); }
+.account-maintenance-heading { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 8px; }
+.account-maintenance-heading h3 { margin: 0; }
+.account-maintenance-heading span, .account-maintenance-card .position-note { color: var(--muted); font-size: 11px; }
+.account-maintenance-card .health-facts { display: grid; gap: 8px; margin-block: 12px; }
+.account-maintenance-card .health-facts > div { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1fr); gap: 12px; }
+.account-maintenance-card dt { color: var(--muted); font-size: 12px; }
+.account-maintenance-card dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.account-maintenance-card > label { display: grid; gap: 6px; max-width: 360px; font-size: 12px; }
+.account-maintenance-card select { min-height: 36px; padding: 7px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface-raised); color: var(--ink); }
+.account-next-action { padding: 10px 12px; border-left: 3px solid var(--amber); background: var(--surface-raised); font-size: 12px; line-height: 1.5; }
+.account-maintenance-card .recording-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.account-maintenance-card .recording-actions button, .review-checkpoint button,
+.recovery-panel button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-raised); color: var(--ink); }
+.account-maintenance-card button:disabled, .review-checkpoint button:disabled,
+.recovery-panel button:disabled { opacity: .6; cursor: not-allowed; }
+.review-checkpoint { padding: 14px; border: 1px solid var(--line); background: var(--surface); }
+.recovery-panel { padding: 16px; border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
+.recovery-rehearsal { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.recovery-rehearsal label { display: grid; gap: 6px; max-width: 520px; margin-block: 12px; font-size: 12px; }
+.recovery-rehearsal input { max-width: 100%; }
+.recovery-rehearsal .health-facts { display: grid; gap: 8px; margin-block: 14px; }
+.recovery-rehearsal .health-facts > div { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(0, 1fr); gap: 12px; }
+.recovery-rehearsal dt { color: var(--muted); font-size: 12px; }
+.recovery-rehearsal dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .portfolio-monitoring { min-width: 0; overflow-wrap: anywhere; }
 .portfolio-monitoring li { margin-block: 10px; }
 .monitoring-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 14px; }
@@ -99,6 +130,18 @@
 .recording-form button, .recording-preview button { width: fit-content; min-height: 36px; border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; background: #f7faf9; font-size: 12px; }
 .recording-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 10px; align-items: end; }
 .recording-row label { display: grid; gap: 5px; min-width: 0; font-size: 11px; color: var(--muted); }
+.planning-goal { padding-block: 10px; border-bottom: 1px solid var(--line); }
+.planning-boundary, .planning-storage-note, .planning-revision { font-size: 12px; line-height: 1.6; }
+.planning-storage-note { margin-top: 24px; color: var(--muted); }
+.recording-actions { margin-top: 14px; }
+.success-message { color: var(--green); }
+.account-update-steps { display: grid; gap: 18px; }
+.account-update-steps > section, .recording-impact { padding: 16px; border: 1px solid var(--line); border-radius: 6px; margin-block: 14px; }
+.account-update li { margin-block: 10px; }
+.account-attention, .recording-preflight { padding: 12px; border-left: 3px solid var(--amber); font-size: 13px; line-height: 1.6; }
+.recording-preflight { grid-column: 1 / -1; }
+.impact-acknowledgement { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.6; margin-block: 16px; }
+.impact-acknowledgement input { flex-shrink: 0; margin-top: 5px; }
 .recording-preview { border: 1px solid var(--line); border-left: 3px solid var(--green); padding: 14px; }
 .recording-preview h3 { margin: 0; font-size: 14px; }
 .record-review { margin-block: 16px; padding: 14px; background: var(--surface); border-radius: 4px; overflow-wrap: anywhere; }
@@ -149,6 +192,7 @@
   .review-case { grid-template-columns: 1fr; }
   .monitoring-entry-row { grid-template-columns: 1fr; }
   .record-review dl > div, .reconciliation-summary dl > div { grid-template-columns: 1fr; gap: 3px; }
+  .account-maintenance-card .health-facts > div, .recovery-rehearsal .health-facts > div { grid-template-columns: 1fr; gap: 3px; }
 }
 .history-group h3 { margin: 0; font-size: 15px; }
 .record-id { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; font: 10px "IBM Plex Mono", monospace; color: var(--muted); margin-top: 4px; }

@@ -18,6 +18,50 @@ a wizard; startup, status and preview never write files. Review accounts,
 products, cash and long holdings with explicit opening evidence, then confirm
 the bound preview. No login or hand-written profile is required.
 
+## Optional personal goals
+
+The Goals page is a separate, optional local profile for purpose, target and
+access dates, liquidity needs, comfort with losses, and amounts the user chooses
+to earmark or contribute. It does not link to account balances. A simple
+contribution illustration assumes no growth, interest, fees, tax or withdrawals;
+it is not a forecast or investment recommendation. Editing requires a
+revision-bound preview and explicit save confirmation; viewing does not create
+the profile. The profile is local plaintext outside the journal workspace, is
+not included in journal backups, and is not sent to hosted AI. Source-checkout
+and `--workspace` launches choose a sibling `.goldscout-planning/<workspace-name>.json`
+path. With `--investment-database`, use `--planning-profile <path>` to opt in.
+Existing v1 goal profiles are read with new constraints marked unknown and
+upgraded only after a confirmed save. Protect and back up this file separately
+using storage you control.
+
+The portfolio shows one next action per account and lets the user set a local
+browser-only review interval (weekly through yearly). A complete value is
+complete only for its recorded date; an old complete value is overdue under the
+selected interval. Cash, units and price dates remain operator-entered evidence.
+Review intervals and review dates are reminders, not journal records or provider
+checks.
+Savings accounts can surface missing or overdue rate, access, notice and maturity
+terms, and an approaching recorded maturity date. These are prompts to verify
+current provider information, not rate comparisons or claims about obtainable
+returns. Recorded transaction fees omit fund, platform, subscription, FX, tax and
+other costs. Wrapper contribution limits, LISA eligibility/bonus entitlement,
+fund overlap and suitability are not inferred.
+
+The user may mark a complete recorded value as reviewed. GoldScout stores only
+its date and journal revision in browser storage, then compares that dated point
+with later recorded values using the existing evidence-linked attribution,
+including an unexplained remainder. This marker is not a snapshot of the
+journal; if the valuation point is unavailable or history was corrected, the
+comparison fails closed.
+
+The portfolio's **Back up and practise recovery** section downloads an explicitly
+requested verified SQLite copy with its receipt. It displays the selected
+journal path; the browser controls the download destination. The archive is not
+encrypted. Restore rehearsal verifies and copies a selected backup only to a
+temporary new location and removes that copy; it never installs or overwrites
+the active journal. Keep the goals profile, source documents and setup receipts
+separately, and choose a protected off-device destination yourself.
+
 ## Optional eToro connection
 
 The startup wizard offers an optional eToro connection, and the portfolio shows
@@ -28,14 +72,27 @@ matches the account selected. The eToro snapshot is displayed separately; it
 does not create or populate a GBP journal account, balance, holding or mark.
 The provider figures are not included in portfolio totals. On the portfolio
 screen, connection controls remain accessible if its journal snapshot is
-unavailable. The local server reads keys from private connection settings or
-the environment only after a read is requested, never from browser fields.
+unavailable. During interrupted or blocked setup, or after a setup receipt,
+status and revocation are available when the local eToro session is available,
+but new reads and connection confirmations are blocked there. If confirmation
+or a refresh has an uncertain outcome, the current dashboard tab blocks further
+reads, even after revocation; status and revocation remain available when
+possible. Interrupting a connection read or leaving the panel during a read or
+revocation also requires this check. A status or snapshot is not a request-specific
+receipt. This in-memory
+block does not survive reloads or coordinate other tabs or dashboard instances:
+reloading does not resolve the uncertainty. Check the dashboard's logs and
+verify the outcome before another read. The local server reads keys from
+private connection settings or the environment only after a read is requested,
+never from browser fields.
 
 The panel shows provider account totals in their account currency, direct
 instrument aggregates with each asset's currency, and separate copy groups.
 Provider timestamps are displayed in UTC. It also shows a separate
-provider-reported GBP balance when validated; that balance has no source
-timestamp and is not synchronized to the portfolio snapshot. The documented
+provider-reported GBP balance when usable; its coverage and source time are
+unverified, and it is not synchronized to the portfolio snapshot. A missing,
+zero or negative exchange rate makes that balance unavailable in the view.
+The documented
 portfolio response does not identify every instrument class or individual
 position leg, and pending-order details are unavailable beyond the provider's
 reserved-cash total. No FX, holdings valuation, or journal import is inferred.
@@ -43,16 +100,38 @@ The portfolio observation exists only in dashboard memory and is not saved as
 history; `.etoro/connection.json` holds consent and account identity, not keys or
 portfolio data.
 
+For an available real-account read and a recorded journal, **Review this eToro
+account against your records** lets you explicitly choose and confirm a journal
+account, then pair distinct provider rows with recorded holdings for a
+side-by-side review. Pairings are temporary and disappear when the view,
+provider snapshot or journal revision changes. Rows sharing an instrument ID
+across direct/copy groups are not combined or paired. Journal cash and provider
+available cash are shown separately in their own currencies, not reconciled.
+Provider net units and recorded units may refer to different clocks or exposure
+types; neither equality nor a difference establishes a match, transaction or
+error. The account-update link uses the normal manual review flow and does not
+copy provider data. No provider data or mapping is saved by this review.
+
 Startup collection is off unless separately enabled after the initial preview.
 It requires the operator to verify Read-only key scope and expires within
 1-30 days; at most one read set is attempted on each server startup while that
 permission remains active. A broader key may be accepted for a supervised
 one-time read, but cannot enable startup refresh. Status and page loads never
-collect. The operator can revoke startup refresh or explicitly request a
-one-time refresh while permission is active. Failed startup reads are not
-retried automatically. The provider integration is engineering-only and has
-not been live-validated; eligibility, account-specific response behavior and
-data-retention rights remain the operator's responsibility.
+collect. The operator can revoke startup refresh or explicitly confirm a
+one-time refresh even when startup permission is absent or expired. A revoked
+connection requires reconnecting; a broader key's trading risk is repeated at
+each manual confirmation. Revocation remains available while
+a manual read is waiting for the provider. If revoked during a read,
+the tab treats the read outcome as unverified and blocks further reads pending
+the checks described above. Failed startup reads are not retried automatically.
+Known limitations: revocation cannot guarantee cancellation of an already sent
+request or eliminate races across dashboard instances; an expired local session
+or its shared command rate limit can also prevent revocation. Refresh checks
+the account binding before requesting the separate balance. Do not
+rely on the collector when those guarantees are required. The provider
+integration is engineering-only and has not been live-validated; eligibility,
+account-specific response behavior and data-retention rights remain the
+operator's responsibility.
 
 The wizard walks through **Accounts**, **Investments held (if any)**, **Starting
 balances**, and **Review and save**. Setups with only savings / deposit accounts
@@ -106,6 +185,36 @@ correction clock instead of silently changing it. Monitoring snapshots remain se
 not transactions or repairs. Technical identities and provider details remain
 available in expandable panels; errors and missing-data warnings stay visible.
 
+**What changed between recorded values?** compares the latest complete
+portfolio valuation with an earlier complete recorded valuation you select.
+It separates recorded external deposits and withdrawals, newly included
+account value, interest and dividends, and recorded purchase/sale fees.
+The unexplained remainder may include price movements or missing records; it
+is not a verified return. Expand supporting activity to inspect the effective
+and available times and evidence. Internal transfers are not external money
+flows. An incomplete latest value, contradictory or late evidence, or a
+historical correction prevents the comparison; intermediate gaps are shown
+without filling them. GoldScout does not save a last-review date, independently
+verify the records, or know that all activity and fees have been captured.
+
+For a regular account review, choose **Update** beside that account. The guided
+page combines recorded cash, the last cash-check difference and holding price
+dates, then offers plain-language actions for transactions, cash checks and
+price updates. No monitoring configuration is needed. Each action still needs
+its own preview and confirmation; saving returns to the account review, not
+an automatic all-clear. A missing or retired account/holding is never replaced
+with another selection. Provider snapshots are not imported by this workflow.
+
+Before entering a deposit or withdrawal, obtain source-supported prices for
+every portfolio holding at the transaction time, available by that time, and
+record them before the flow. Do not invent prices or alter true dates to keep
+performance available. The preview shows the valuation and performance
+consequences before saving. If a previously available value, return or
+drawdown would disappear, review the warning and explicitly acknowledge it
+before confirmation. Cash-check previews show the historical difference
+without changing cash; neither a match nor acknowledgement resolves earlier
+differences or verifies an account.
+
 After completed setup or recovery, choose **Add a record** for future updates;
 no restart is needed. Normal local launches permit manual recording in the
 selected journal. Add `--investment-read-only` to your original command for
@@ -156,13 +265,11 @@ selects an existing journal and never falls back to setup.
 Same-origin, CSRF, revision and preview checks are mandatory but are not user
 authentication. Keep the dashboard on loopback.
 
-### Provider simplification follow-up (not implemented)
+### Provider simplification follow-up
 
-Manual eToro refresh currently requires active automatic-startup permission.
-The first follow-up should separate **Refresh now** from **Refresh on startup**:
-an explicit manual request should not force the operator to enable automation.
-This needs its own permission scope, expiry/revocation rules and treatment of
-broader keys; removing the current check alone would grant unintended access.
+Manual refresh requires a new one-time confirmation rather than automatic
+startup permission. Expiry disables startup reads but does not prevent a
+confirmed manual read; revocation blocks both until reconnection.
 
 Connection checks record distinct facts: real/demo environment, returned account
 identity, key scope or broader-key risk, API eligibility, and permitted local
@@ -171,15 +278,9 @@ Consolidate repeated explanations rather than silently dropping those facts.
 Keep automatic refresh separately opt-in. Longer expiry and automatic retries
 are separate decisions, not consequences of simpler wording.
 
-Implementation would affect [connection permissions](../dashboard/etoro_connection.py),
-[API validation](../dashboard/app.py), the
-[connection panel](../frontend/src/EToroPortfolio.tsx), existing persisted consent
-compatibility, and the dashboard/eToro connection regressions. Cover manual-only
-refresh, expired/revoked/changed-account permission, broader-key restrictions,
-startup behavior and failure/retry cases. Reassess provider scope semantics,
-eligibility, retention terms and response coverage before live validation.
-No provider permission, retention, expiry, retry or collection behavior changes
-in the local-recording simplification.
+Reassess provider scope semantics, eligibility, retention terms and response
+coverage before live validation. No automatic retry or persistent provider
+history is introduced by manual refresh.
 
 ## Manual CLI and input contract
 
@@ -220,6 +321,9 @@ Financial events include contributions, withdrawals, account transfers,
 buy/sell fills with explicit fees, marks, splits, paid interest and dividends.
 No FX, inferred settlement, automatic interest or distribution entitlement is
 implemented. Missing or unknown facts are not zero.
+The dashboard's recorded-fee total sums only explicitly entered buy/sell fees;
+it is not a full cost-of-ownership measure. Platform/account charges, tax and
+FX may be missing, and spread or slippage are not separately measured.
 
 ## Accounting and reporting
 

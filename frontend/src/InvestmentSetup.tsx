@@ -328,11 +328,11 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       {session && <p className="setup-workspace">Saved on this computer in: <strong>{session.workspace}</strong>.</p>}
       <p>Keep this computer private and arrange separate backups. GoldScout has no sign-in.</p>
     </details>
-    {!receipt && session && (session.state === "empty" || session.state === "ready") &&
-      <details className="help-disclosure" id="setup-etoro">
-        <summary>Optional: connect eToro</summary>
-        <EToroPortfolioPanel />
-      </details>}
+    <details className="help-disclosure" id="setup-etoro">
+      <summary>Optional: eToro connection</summary>
+      <EToroPortfolioPanel revokeOnly={!session || Boolean(blocked) || Boolean(receipt) ||
+        session.state !== "empty" || confirmAttempted || busy} />
+    </details>
     {error && <div role="alert" tabIndex={-1} ref={errorSummary} className="investment-warnings">
       <p>{error}</p>
       {Object.entries(fieldErrors).length > 0 && <ul aria-label="Fields to correct">

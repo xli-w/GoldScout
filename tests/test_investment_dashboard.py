@@ -1,4 +1,6 @@
 import copy
+import io
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -85,6 +87,48 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(client.get("/api/investment/v1/monitoring").status_code, 503)
         self.assertEqual(self.path.read_bytes(), original)
 
+    def test_verified_backup_download_and_restore_rehearsal_are_explicit_and_non_destructive(self):
+        import zipfile
+
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            unauthorized = client.post(
+                "/api/investment/v1/backup/download", json={},
+                headers={"Origin": "http://127.0.0.1"})
+            self.assertEqual(unauthorized.status_code, 403)
+
+            session = client.get("/api/investment/v1/backup/session")
+            self.assertEqual(session.status_code, 200, session.text)
+            self.assertTrue(session.json()["enabled"])
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session.json()["csrf"]}
+            downloaded = client.post(
+                "/api/investment/v1/backup/download", json={}, headers=headers)
+            self.assertEqual(downloaded.status_code, 200, downloaded.text)
+            self.assertEqual(downloaded.headers["content-type"], "application/zip")
+            with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+                self.assertEqual(set(archive.namelist()),
+                                 {"investment.sqlite3", "backup-receipt.json"})
+                receipt = json.loads(archive.read("backup-receipt.json"))
+                self.assertEqual(receipt["revision"], 1)
+
+            rehearsed = client.post(
+                "/api/investment/v1/backup/rehearsal",
+                content=downloaded.content,
+                headers={**headers, "Content-Type": "application/zip"})
+            self.assertEqual(rehearsed.status_code, 200, rehearsed.text)
+            self.assertEqual(rehearsed.json()["status"], "verified")
+            self.assertEqual(rehearsed.json()["revision"], 1)
+            self.assertEqual(self.path.read_bytes(), original)
+
+            malformed = client.post(
+                "/api/investment/v1/backup/rehearsal", content=b"not a zip",
+                headers={**headers, "Content-Type": "application/zip"})
+            self.assertEqual(malformed.status_code, 400)
+            self.assertEqual(self.path.read_bytes(), original)
+
     def test_synthetic_investment_is_valid_and_cannot_mutate_any_account(self):
         with self.client() as client:
             response = client.get("/api/investment/v1/snapshot")
@@ -121,6 +165,38 @@ class InvestmentDashboardTests(unittest.TestCase):
                 self.assertEqual(client.get("/api/v1/overview").status_code, 404)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
+    def test_recorded_value_comparison_evidence_matches_real_replay(self):
+        later = OPENING_NOW + timedelta(days=1)
+        self.now = later
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [
+            opening(),
+            event("equity-price", "mark", later, "broker", product_id="equity", price_gbp="11"),
+            event("bond-price", "mark", later, "broker", product_id="bond", price_gbp="20"),
+            event("deposit", "contribution", later, "bank", amount_gbp="100"),
+            event("withdrawal", "withdrawal", later, "bank", amount_gbp="20"),
+            event("internal", "transfer", later, "bank", amount_gbp="5",
+                  destination_account_id="broker"),
+            event("interest", "interest", later, "bank", amount_gbp="2"),
+            event("buy", "buy", later, "broker", product_id="equity",
+                  quantity="1", price_gbp="11", fee_gbp="1"),
+        ], later)
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path) as client:
+            response = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(response.status_code, 200, response.text)
+            report = response.json()
+        start, end = report["valuation_history"]
+        self.assertEqual((start["equity_gbp"], end["equity_gbp"]), ("2000", "2131"))
+        self.assertEqual((start["net_contributions_gbp"], end["net_contributions_gbp"]), ("0", "80"))
+        self.assertEqual((start["capital_basis_gbp"], end["capital_basis_gbp"]), ("2000", "2080"))
+        self.assertEqual([(item["type"], item["amount_gbp"]) for item in report["recorded_flow_events"]],
+                         [("contribution", "100"), ("withdrawal", "20"), ("transfer", "5")])
+        self.assertEqual(report["recorded_income_events"][0]["amount_gbp"], "2")
+        self.assertEqual(report["recorded_fee_events"][0]["fee_gbp"], "1")
+        self.assertEqual(end["source_available_at"], iso(later))
+        self.assertEqual(self.path.read_bytes(), original)
 
     def test_v2_opening_snapshot_is_read_only_and_preserves_unknown_basis(self):
         self.now = OPENING_NOW
@@ -362,6 +438,56 @@ class InvestmentDashboardTests(unittest.TestCase):
                 headers={"Origin": "http://127.0.0.1"})
             self.assertEqual(no_csrf.status_code, 403)
         self.assertEqual(snapshot(self.path, OPENING_NOW)["recorded_interest_gbp"], "5")
+
+    def test_recording_preview_exposes_flow_time_performance_loss_without_writing(self):
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        self.now = OPENING_NOW + timedelta(days=7)
+        original = self.path.read_bytes()
+        with self.client(investment_database=self.path,
+                         investment_recording_enabled=True) as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            flow = event("weekly-deposit", "contribution", self.now, "bank", amount_gbp="100")
+            response = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "unpriced-flow", "event": flow}, headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            preview = response.json()
+            self.assertEqual(preview["before"]["twr_pct"], "0")
+            self.assertIsNone(preview["after"]["twr_pct"])
+            self.assertIsNone(preview["after"]["max_drawdown_pct"])
+            self.assertEqual(preview["before"]["revision"], 1)
+            self.assertEqual(preview["after"]["revision"], 2)
+            self.assertTrue(preview["after"]["warnings"])
+            self.assertEqual(self.path.read_bytes(), original)
+
+            # Source-supported same-clock marks precede the flow, never follow it.
+            marks = [
+                event("weekly-equity", "mark", self.now, "broker",
+                      product_id="equity", price_gbp="10"),
+                event("weekly-bond", "mark", self.now, "broker",
+                      product_id="bond", price_gbp="20"),
+            ]
+            import_events(self.path, marks, self.now)
+            marked = self.path.read_bytes()
+            response = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "supported-flow", "event": flow}, headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            preview = response.json()
+            self.assertEqual(preview["after"]["twr_pct"], "0")
+            self.assertEqual(preview["after"]["max_drawdown_pct"], "0")
+            self.assertEqual(self.path.read_bytes(), marked)
+            receipt = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview["preview_id"]}, headers=headers)
+            self.assertEqual(receipt.status_code, 200, receipt.text)
+            reloaded = client.get("/api/investment/v1/snapshot")
+            self.assertEqual(reloaded.status_code, 200, reloaded.text)
+            self.assertEqual(reloaded.json(), preview["after"])
+            bank = next(account for account in reloaded.json()["accounts"] if account["id"] == "bank")
+            self.assertEqual(bank["cash_gbp"], "1100")
 
     def test_opt_in_correction_preview_keeps_original_event_and_reports_replacement(self):
         self.now = OPENING_NOW

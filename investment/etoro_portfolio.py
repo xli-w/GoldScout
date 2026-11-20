@@ -217,7 +217,8 @@ def normalize_gbp_balance(payload, account_id, account_currency, received_at):
     }
 
 
-def collect_portfolio(transport, credential_accessor, environment, *, now=None):
+def collect_portfolio(transport, credential_accessor, environment, *, now=None,
+                      expected_account_id=None, before_balance=None):
     """Fetch one fixed portfolio GET and one fixed GBP balance GET without retries."""
     if environment not in etoro.AGGREGATE_PORTFOLIO_PATHS:
         raise etoro.EToroError("environment_invalid")
@@ -237,26 +238,36 @@ def collect_portfolio(transport, credential_accessor, environment, *, now=None):
     except Exception:
         raise etoro.EToroError("collection_unavailable") from None
 
+    if expected_account_id is not None and portfolio["account_id"] != expected_account_id:
+        raise etoro.EToroError("account_binding_changed")
+    if before_balance is not None:
+        before_balance()
+
+    balance_path = (
+        f"/api/v1/balances/trading/{portfolio['account_id']}"
+        "?displayCurrency=GBP&expand=equityDetails")
+    balance_payload = None
+    error_code = None
+    try:
+        balance_payload = transport(balance_path, {
+            **credentials, "x-request-id": str(uuid.uuid4())})
+    except etoro.EToroError as exc:
+        error_code = exc.code
+    except Exception:
+        error_code = "collection_unavailable"
     received_at = (now or (lambda: datetime.now(timezone.utc)))()
     if not isinstance(received_at, datetime) or received_at.utcoffset() != timezone.utc.utcoffset(received_at):
         raise etoro.EToroError("clock_unavailable")
     received_at = received_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
-    balance_path = (
-        f"/api/v1/balances/trading/{portfolio['account_id']}"
-        "?displayCurrency=GBP&expand=equityDetails")
-    try:
-        balance_payload = transport(balance_path, {
-            **credentials, "x-request-id": str(uuid.uuid4())})
-        portfolio["gbp_balance"] = normalize_gbp_balance(
-            balance_payload, portfolio["account_id"], portfolio["account_currency"], received_at)
-    except etoro.EToroError as exc:
+    if error_code is None:
+        try:
+            portfolio["gbp_balance"] = normalize_gbp_balance(
+                balance_payload, portfolio["account_id"], portfolio["account_currency"], received_at)
+        except etoro.EToroError as exc:
+            error_code = exc.code
+    if error_code is not None:
         portfolio["gbp_balance"] = {
-            "status": "unavailable", "error_code": exc.code,
-            "source_as_of": None, "received_at": received_at,
-        }
-    except Exception:
-        portfolio["gbp_balance"] = {
-            "status": "unavailable", "error_code": "collection_unavailable",
+            "status": "unavailable", "error_code": error_code,
             "source_as_of": None, "received_at": received_at,
         }
     return portfolio

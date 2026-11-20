@@ -32,6 +32,8 @@ def main(argv=None):
                         help="Enable local review actions and observation staging")
     parser.add_argument("--etoro-connection", type=Path,
                         help="Separate local eToro read-consent file for an explicitly selected journal")
+    parser.add_argument("--planning-profile", type=Path,
+                        help="Separate local-only goals JSON for an explicitly selected investment journal")
     args = parser.parse_args(argv)
     setup_options = {}
     setup_state = None
@@ -45,6 +47,10 @@ def main(argv=None):
             parser.error(str(exc))
         setup_state = status["state"]
         args.investment_database = args.workspace / "investment.sqlite3"
+        if args.planning_profile is None:
+            args.planning_profile = (
+                args.workspace.parent / ".goldscout-planning" /
+                f"{args.workspace.name or 'workspace-root'}.json")
         if setup_state != "ready" and (
                 args.monitoring_profile or args.awareness_profile
                 or args.monitoring_cache or args.monitoring_reviews or args.monitoring_workflow):
@@ -57,6 +63,8 @@ def main(argv=None):
         parser.error("--intelligence-demo requires --demo without an intelligence database")
     if args.demo and args.etoro_connection is not None:
         parser.error("Synthetic demo cannot use an eToro connection")
+    if args.demo and args.planning_profile is not None:
+        parser.error("Synthetic demo cannot use a planning profile")
     if args.analysis_controls and args.intelligence_database is None:
         parser.error("--analysis-controls requires an existing intelligence database")
     if args.investment_recording and args.investment_database is None:
@@ -95,7 +103,8 @@ def main(argv=None):
                          monitoring_profile=args.monitoring_profile, monitoring_cache=args.monitoring_cache,
                          monitoring_reviews=args.monitoring_reviews,
                          monitoring_workflow_enabled=args.monitoring_workflow,
-                         etoro_connection_path=args.etoro_connection, **setup_options)
+                         etoro_connection_path=args.etoro_connection,
+                         planning_profile=args.planning_profile, **setup_options)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
     except (ValueError, OSError) as exc:

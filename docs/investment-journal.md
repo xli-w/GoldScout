@@ -58,6 +58,15 @@ are not account recommendations or data to import into a real journal.
 
 ## Backup and restore
 
+The portfolio dashboard also offers an explicit verified backup download and a
+non-destructive restore rehearsal. It packages the verified SQLite snapshot with
+its receipt in an unencrypted ZIP; the browser controls the download destination.
+A rehearsal verifies the selected archive and copies it to a fresh temporary
+location before removing that temporary copy. It never installs or overwrites
+the active journal. This user workflow does not select an off-device location,
+encrypt the archive, prove that it is the latest copy, or certify power-loss
+durability. Preserve protected copies and supporting setup evidence separately.
+
 The following are explicit maintenance operations and require task-specific
 operator approval. Stop dashboard recording, CLI imports and other writers
 before operational maintenance. Choose existing, operator-controlled source

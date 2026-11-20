@@ -1,0 +1,283 @@
+import { expect, test } from "@playwright/test";
+
+async function fixture(page) {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  report.complete = true;
+  report.twr_pct = "0";
+  report.max_drawdown_pct = "0";
+  const account = report.accounts.find(item => item.kind === "broker" && item.status === "active");
+  const holding = report.holdings.find(item => item.account_id === account.id);
+  account.cash_observation = {
+    balance_gbp: "99", difference_gbp: "-1",
+    timestamp: "2026-01-01T12:00:00.000001Z", available_at: "2026-01-01T12:00:00.000002Z",
+    source: "Synthetic dated statement", evidence: "Synthetic cash evidence",
+  };
+  const session = {
+    enabled: true, csrf: "synthetic-csrf", opened: true,
+    accounts: report.accounts.filter(item => item.status === "active").map(({ id, name, kind }) => ({ id, name, kind })),
+    products: [...new Map(report.holdings.map(item => [item.product_id, {
+      id: item.product_id, name: item.name, sleeve: item.sleeve,
+      quantity_increment: "1", minimum_notional_gbp: "1",
+    }])).values()],
+    current_balances: Object.fromEntries(report.accounts.map(item => [item.id, item.cash_gbp])),
+    current_holdings: report.holdings.map(({ account_id, product_id, quantity }) => ({ account_id, product_id, quantity })),
+    latest_correctable_event: null, correctable_events: [],
+  };
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.route("**/api/investment/v1/recording/session", route => route.fulfill({ json: session }));
+  await page.clock.setFixedTime(new Date("2030-01-01T12:00:00Z"));
+  return { report, session, account, holding };
+}
+
+test("guided account review links evidence to safe drafts without making updates", async ({ page }) => {
+  const { account, holding } = await fixture(page);
+  let writes = 0;
+  page.on("request", request => { if (request.method() === "POST") writes++; });
+  await page.goto("/investment");
+  await page.getByRole("link", { name: `Update ${account.name}`, exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Update an account" })).toBeVisible();
+  const evidence = page.getByRole("region", { name: "Account evidence to review" });
+  await expect(evidence).toContainText("difference at that time -£1.00");
+  await expect(evidence).toContainText("do not enter a balancing deposit or withdrawal");
+  await expect(page.getByRole("region", { name: "Guided account update" }))
+    .toContainText("every holding in the portfolio, not just this account");
+  await evidence.getByText("Cash-check source", { exact: true }).click();
+  await expect(evidence).toContainText("2026-01-01T12:00:00.000002Z");
+  await expect(evidence).toContainText("Synthetic dated statement");
+  await page.getByRole("link", { name: "Check this account's cash" }).click();
+  await expect(page.getByLabel("What are you recording?")).toHaveValue("cash_observation");
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toHaveValue(account.id);
+  await page.getByRole("link", { name: "Return to the account review" }).click();
+  await page.getByRole("link", { name: `Update price for ${holding.name}`, exact: true }).click();
+  await expect(page.getByLabel("What are you recording?")).toHaveValue("mark");
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toHaveValue(account.id);
+  await expect(page.getByRole("combobox", { name: "Investment", exact: true })).toHaveValue(holding.product_id);
+  expect(writes).toBe(0);
+});
+
+test("unavailable account and stale holding targets never fall back to another selection", async ({ page }) => {
+  const { session, account, holding } = await fixture(page);
+  await page.goto("/investment/update?account_id=not-included");
+  await expect(page.getByRole("alert")).toContainText("No other account has been selected");
+  await expect(page.getByRole("link", { name: "Check this account's cash" })).toHaveCount(0);
+  session.current_holdings = [];
+  await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=mark&product_id=${holding.product_id}`);
+  await expect(page.getByRole("alert")).toContainText("No alternative was selected");
+  await expect(page.getByRole("button", { name: "Preview record" })).toHaveCount(0);
+  await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=unexpected`);
+  await expect(page.getByRole("alert")).toContainText("No alternative was selected");
+});
+
+test("performance loss is explained and requires acknowledgement before a verified save", async ({ page }) => {
+  const { report, account } = await fixture(page);
+  let previewEvent;
+  let confirmations = 0;
+  await page.route("**/api/investment/v1/recording/preview", async route => {
+    previewEvent = route.request().postDataJSON().event;
+    await route.fulfill({ json: {
+      preview_id: "synthetic-preview", revision: report.revision, event: previewEvent,
+      before: report,
+      after: { ...report, revision: report.revision + 1, twr_pct: null, max_drawdown_pct: null,
+        warnings: ["Synthetic missing flow-time valuation."] },
+      expires_at: "2030-01-01T12:05:00Z",
+    } });
+  });
+  await page.route("**/api/investment/v1/recording/confirm", async route => {
+    confirmations++;
+    await route.fulfill({ json: { id: previewEvent.id, revision: report.revision + 1 } });
+  });
+  await page.goto(`/investment/update?account_id=${account.id}`);
+  await page.getByRole("link", { name: "Money came in from outside my tracked accounts" }).click();
+  await expect(page.getByText(/Before previewing: a deposit or withdrawal/)).toBeVisible();
+  await page.getByLabel("GBP amount").fill("100");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic deposit receipt");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  const impact = page.getByRole("region", { name: "Valuation and performance impact" });
+  await expect(impact).toContainText("0.00% → Unavailable");
+  await expect(impact.getByRole("alert")).toContainText("previously available figures unavailable");
+  await expect(impact).toContainText("Synthetic missing flow-time valuation.");
+  const confirm = page.getByRole("button", { name: "Confirm and append record" });
+  await expect(confirm).toBeDisabled();
+  expect(confirmations).toBe(0);
+  await page.getByRole("checkbox", { name: /I understand that these previously available figures/ }).check();
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect(page).toHaveURL(new RegExp(`/investment/update\\?account_id=${account.id}$`));
+  expect(confirmations).toBe(1);
+  expect(previewEvent).toMatchObject({ type: "contribution", account_id: account.id, amount_gbp: "100" });
+  await expect(page.getByRole("region", { name: "Account evidence to review" })).toBeVisible();
+});
+
+test("malformed performance evidence cannot produce a confirmable preview", async ({ page }) => {
+  const { account } = await fixture(page);
+  await page.route("**/api/investment/v1/recording/preview", async route => route.fulfill({ json: {
+    preview_id: "malformed-preview", revision: 1, event: route.request().postDataJSON().event,
+    before: { equity_gbp: "100" }, after: { equity_gbp: "100" }, expires_at: "2030-01-01T12:05:00Z",
+  } }));
+  await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=interest`);
+  await page.getByLabel("GBP amount").fill("1");
+  await page.getByLabel("Why does this income belong to this role?").fill("Synthetic account interest");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic interest receipt");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("status")).toContainText("performance evidence failed validation");
+  await expect(page.getByRole("button", { name: "Confirm and append record" })).toHaveCount(0);
+});
+
+test("cash check preview explains the difference without claiming to update cash", async ({ page }) => {
+  const { report, account } = await fixture(page);
+  let confirmations = 0;
+  await page.route("**/api/investment/v1/recording/confirm", route => {
+    confirmations++;
+    return route.abort();
+  });
+  await page.route("**/api/investment/v1/recording/preview", async route => {
+    const event = route.request().postDataJSON().event;
+    const observation = {
+      account_id: account.id, balance_gbp: event.balance_gbp, difference_gbp: "-0.001",
+      timestamp: event.timestamp, available_at: event.available_at,
+      source: event.source, evidence: event.evidence,
+    };
+    await route.fulfill({ json: {
+      preview_id: "cash-preview", revision: report.revision, event, before: report,
+      after: { ...report, revision: report.revision + 1,
+        cash_observations: [...report.cash_observations, observation] },
+      expires_at: "2030-01-01T12:05:00Z",
+    } });
+  });
+  await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=cash_observation`);
+  await page.getByLabel("Observed GBP balance").fill("99.999");
+  await page.getByLabel("Statement/source description").fill("Synthetic statement");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic cash check");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  const comparison = page.getByRole("region", { name: "Preview cash comparison" });
+  await expect(comparison).toContainText("£99.999");
+  await expect(comparison).toContainText("-£0.001");
+  await expect(comparison).toContainText("does not adjust cash or resolve the difference");
+  await expect(page.getByRole("button", { name: "Confirm and append record" })).toBeEnabled();
+  await expect(page.getByRole("checkbox", { name: /I understand that these previously available figures/ })).toHaveCount(0);
+  expect(confirmations).toBe(0);
+});
+
+test("guided transfer from the second account submits the displayed other account", async ({ page }) => {
+  const { report, session } = await fixture(page);
+  const source = session.accounts[1];
+  const destination = session.accounts[0];
+  let submitted;
+  await page.route("**/api/investment/v1/recording/preview", async route => {
+    submitted = route.request().postDataJSON().event;
+    await route.fulfill({ json: {
+      preview_id: "transfer-preview", revision: report.revision, event: submitted,
+      before: report, after: { ...report, revision: report.revision + 1 },
+      expires_at: "2030-01-01T12:05:00Z",
+    } });
+  });
+  await page.goto(`/investment/record?record=account-update&account_id=${source.id}&kind=transfer`);
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toHaveValue(source.id);
+  await expect(page.getByLabel("Destination account")).toHaveValue(destination.id);
+  await page.getByLabel("GBP amount").fill("1");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic transfer receipt");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("button", { name: "Confirm and append record" })).toBeVisible();
+  expect(submitted).toMatchObject({
+    type: "transfer", account_id: source.id, destination_account_id: destination.id,
+  });
+});
+
+for (const loss of ["value", "drawdown", "already unavailable"]) {
+  test(`preview handles ${loss} independently and resets acknowledgement`, async ({ page }) => {
+    const { report, account } = await fixture(page);
+    if (loss === "already unavailable" || loss === "value") {
+      report.twr_pct = null;
+      report.max_drawdown_pct = null;
+    }
+    await page.route("**/api/investment/v1/recording/preview", async route => {
+      const after = { ...report, revision: report.revision + 1 };
+      if (loss === "value") {
+        after.complete = false;
+        after.equity_gbp = null;
+        after.as_of = null;
+        after.since_baseline_gain_gbp = null;
+      }
+      if (loss === "drawdown") after.max_drawdown_pct = null;
+      await route.fulfill({ json: {
+        preview_id: "impact-preview", revision: report.revision,
+        event: route.request().postDataJSON().event, before: report, after,
+        expires_at: "2030-01-01T12:05:00Z",
+      } });
+    });
+    await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=contribution`);
+    await page.getByLabel("GBP amount").fill("1");
+    await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+    await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+    await page.getByLabel("Source description / correction reason").fill("Synthetic evidence");
+    await page.getByRole("button", { name: "Preview record" }).click();
+    const confirm = page.getByRole("button", { name: "Confirm and append record" });
+    const acknowledgement = page.getByRole("checkbox", { name: /I understand that these previously available figures/ });
+    if (loss === "already unavailable") {
+      await expect(confirm).toBeEnabled();
+      await expect(acknowledgement).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "Valuation and performance impact" }))
+        .toContainText("Return reporting is unavailable after this record");
+    } else {
+      await expect(confirm).toBeDisabled();
+      await acknowledgement.check();
+      await expect(confirm).toBeEnabled();
+      await page.getByRole("button", { name: "Cancel preview" }).click();
+      await page.getByRole("button", { name: "Preview record" }).click();
+      await expect(acknowledgement).not.toBeChecked();
+      await expect(confirm).toBeDisabled();
+    }
+  });
+}
+
+test("lost confirmation after performance acknowledgement retries the same reference after reload", async ({ page }) => {
+  const { report, account } = await fixture(page);
+  let previewEvent;
+  const previewId = "uncertain-impact-preview";
+  const references = [];
+  let appends = 0;
+  await page.route("**/api/investment/v1/recording/preview", async route => {
+    previewEvent = route.request().postDataJSON().event;
+    await route.fulfill({ json: {
+      preview_id: previewId, revision: report.revision, event: previewEvent, before: report,
+      after: { ...report, revision: report.revision + 1, twr_pct: null, max_drawdown_pct: null },
+      expires_at: "2030-01-01T12:05:00Z",
+    } });
+  });
+  await page.route("**/api/investment/v1/recording/confirm", async route => {
+    references.push(route.request().postDataJSON().preview_id);
+    if (references.length === 1) {
+      appends++;
+      return route.abort("failed");
+    }
+    await route.fulfill({ json: { id: previewEvent.id, revision: report.revision + 1 } });
+  });
+  await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=contribution`);
+  await page.getByLabel("GBP amount").fill("1");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic receipt");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await page.getByRole("checkbox", { name: /I understand that these previously available figures/ }).check();
+  await page.getByRole("button", { name: "Confirm and append record" }).click();
+  await expect(page.getByRole("status")).toContainText("save outcome is unknown");
+  page.once("dialog", dialog => dialog.accept());
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Check an unfinished save" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry same confirmation" }).click();
+  await expect(page).toHaveURL(new RegExp(`/investment/update\\?account_id=${account.id}$`));
+  expect(references).toEqual([previewId, previewId]);
+  expect(appends).toBe(1);
+});

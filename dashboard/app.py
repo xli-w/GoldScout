@@ -2,6 +2,8 @@
 
 from contextlib import asynccontextmanager
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,6 +12,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError as SchemaValidationError
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
@@ -24,7 +28,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                monitoring_profile=None, monitoring_cache=None, monitoring_reviews=None,
                monitoring_workflow_enabled=False, setup_workspace=None, setup_enabled=False,
                etoro_connection_path=None, etoro_transport_factory=None,
-               etoro_credential_accessor=None):
+               etoro_credential_accessor=None, planning_profile=None):
     if setup_enabled and setup_workspace is None:
         raise ValueError("Setup requires a selected workspace")
     if setup_workspace is not None and (
@@ -43,6 +47,21 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         raise ValueError("Monitoring reviews require explicit investment and monitoring stores")
     if monitoring_workflow_enabled and monitoring_reviews is None:
         raise ValueError("Monitoring workflow actions require an explicitly selected review store")
+    if planning_profile is not None and (investment_database is None or intelligence_demo):
+        raise ValueError("Planning profiles require a recorded investment workspace")
+    if planning_profile is not None:
+        planning_profile = Path(planning_profile).absolute()
+        selected_stores = [
+            investment_database, intelligence_database, awareness_profile,
+            monitoring_profile, monitoring_cache, monitoring_reviews,
+            etoro_connection_path,
+        ]
+        if any(path is not None and planning_profile.resolve() == Path(path).resolve()
+               for path in selected_stores):
+            raise ValueError("The planning profile must be separate from all selected evidence stores")
+        if setup_workspace is not None and planning_profile.resolve().is_relative_to(
+                Path(setup_workspace).resolve()):
+            raise ValueError("The planning profile must remain outside the journal workspace")
     if monitoring_reviews is not None and (
             Path(monitoring_reviews).resolve() == Path(investment_database).resolve()
             or monitoring_cache is not None
@@ -70,6 +89,10 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             etoro_connection_path, clock, transport_factory=etoro_transport_factory,
             credential_accessor=etoro_credential_accessor)
         etoro_sessions = MonitoringWorkflowSessions()
+    backup_sessions = None
+    if investment_database is not None:
+        from dashboard.monitoring_workflow import MonitoringWorkflowSessions
+        backup_sessions = MonitoringWorkflowSessions()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -93,6 +116,10 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
     intelligence = None
     investment_recording = None
     monitoring_workflow = None
+    planning = None
+    if planning_profile is not None:
+        from dashboard.planning import PlanningProfile
+        planning = PlanningProfile(planning_profile)
     if investment_recording_enabled:
         if investment_database is None or intelligence_demo:
             raise ValueError("Investment recording requires a selected recorded investment store")
@@ -120,11 +147,15 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         "/api/investment/v1/setup/preview",
         "/api/investment/v1/setup/recovery-preview",
         "/api/investment/v1/setup/confirm",
+        "/api/investment/v1/planning/preview",
+        "/api/investment/v1/planning/confirm",
         "/api/investment/v1/etoro/connect",
         "/api/investment/v1/etoro/confirm",
         "/api/investment/v1/etoro/discard",
         "/api/investment/v1/etoro/revoke",
         "/api/investment/v1/etoro/refresh",
+        "/api/investment/v1/backup/download",
+        "/api/investment/v1/backup/rehearsal",
     }
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
@@ -155,6 +186,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                      request.url.path.startswith("/api/investment/v1/monitoring-workflow/")) or
                     (setup and setup.security is not None and
                      request.url.path.startswith("/api/investment/v1/setup/")) or
+                    (planning and request.url.path.startswith("/api/investment/v1/planning/")) or
+                    (backup_sessions and request.url.path.startswith("/api/investment/v1/backup/")) or
                     (etoro_sessions and request.url.path.startswith("/api/investment/v1/etoro/")))):
             response = error("invalid_request", 405)
         elif request.method == "POST" and (origin != f"{request.url.scheme}://{host}" or request.headers.get("sec-fetch-site") not in (None,"same-origin")):
@@ -187,6 +220,79 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         return {"mode": "recorded" if investment_database is not None else "demo",
                 "workspace": "investment" if investment_database is not None else "demo"}
 
+    @app.get("/api/investment/v1/planning/session")
+    def planning_session(request: Request):
+        if planning is None:
+            return {"enabled": False, "csrf": None, "revision": 0,
+                    "profile_hash": None, "goals": []}
+        from dashboard.planning import PlanningError
+        from dashboard.monitoring_workflow import WorkflowError
+        try:
+            result, token = planning.session_payload(
+                request.cookies.get("investment_planning_session"), clock())
+            response = JSONResponse(result)
+            response.set_cookie(
+                "investment_planning_session", token, httponly=True, samesite="strict",
+                secure=request.url.scheme == "https",
+                path="/api/investment/v1/planning", max_age=900)
+            return response
+        except (PlanningError, WorkflowError, OSError):
+            return JSONResponse(status_code=503, content={"error": "planning_profile_unavailable"})
+
+    def planning_authorized(request):
+        return bool(planning and planning.authorize(
+            request.cookies.get("investment_planning_session"),
+            request.headers.get("x-csrf-token"), clock()))
+
+    @app.post("/api/investment/v1/planning/preview")
+    async def planning_preview(request: Request):
+        if planning is None:
+            return JSONResponse(status_code=503, content={"error": "planning_profile_disabled"})
+        if not planning_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "planning_unauthorized"})
+        from dashboard.planning import PlanningError
+        from dashboard.monitoring_workflow import WorkflowError
+        try:
+            payload = await bounded_json(request, maximum=131072, strict=True)
+            required = {"request_id", "expected_revision", "expected_hash", "goals"}
+            if type(payload) is not dict or set(payload) != required:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            result = planning.preview(
+                request.cookies.get("investment_planning_session"),
+                payload["request_id"], payload["expected_revision"],
+                payload["expected_hash"], payload["goals"], clock())
+            return JSONResponse(result)
+        except PlanningError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        except WorkflowError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        except (ValueError, RecursionError, OSError):
+            return JSONResponse(status_code=400, content={"error": "invalid_request"})
+
+    @app.post("/api/investment/v1/planning/confirm")
+    async def planning_confirm(request: Request):
+        if planning is None:
+            return JSONResponse(status_code=503, content={"error": "planning_profile_disabled"})
+        if not planning_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "planning_unauthorized"})
+        from dashboard.planning import PlanningError
+        from dashboard.monitoring_workflow import WorkflowError
+        try:
+            payload = await bounded_json(request, strict=True)
+            if (type(payload) is not dict or set(payload) != {"preview_id"}
+                    or not isinstance(payload["preview_id"], str)):
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            result = planning.confirm(
+                request.cookies.get("investment_planning_session"),
+                payload["preview_id"], clock())
+            return JSONResponse(result)
+        except PlanningError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        except WorkflowError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        except (ValueError, RecursionError, OSError):
+            return JSONResponse(status_code=409, content={"error": "planning_save_rejected"})
+
     @app.get("/api/investment/v1/snapshot")
     def investment_snapshot():
         from investment import InvestmentError
@@ -205,6 +311,93 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             return JSONResponse(status_code=503, content={"error": "investment_unavailable", "message": str(exc)})
         except SchemaValidationError:
             return JSONResponse(status_code=409, content={"error": "investment_invalid", "message": "Investment report failed schema validation."})
+
+    @app.get("/api/investment/v1/backup/session")
+    def investment_backup_session(request: Request):
+        if backup_sessions is None:
+            return {"enabled": False, "csrf": None,
+                    "archive_limit_bytes": 0, "database_location": None}
+        try:
+            from dashboard.recovery import MAX_ARCHIVE_BYTES
+            result = backup_sessions.session_payload(
+                request.cookies.get("investment_backup_session"), clock())
+            token = result.pop("_token")
+            response = JSONResponse({
+                "enabled": True, "csrf": result["csrf"],
+                "archive_limit_bytes": MAX_ARCHIVE_BYTES,
+                "database_location": str(Path(investment_database).absolute()),
+            })
+            response.set_cookie(
+                "investment_backup_session", token, httponly=True, samesite="strict",
+                secure=request.url.scheme == "https",
+                path="/api/investment/v1/backup", max_age=900)
+            return response
+        except (ValueError, OSError):
+            return JSONResponse(status_code=503, content={"error": "backup_session_unavailable"})
+
+    def backup_authorized(request):
+        return bool(backup_sessions and backup_sessions.authorize(
+            request.cookies.get("investment_backup_session"),
+            request.headers.get("x-csrf-token"), clock()))
+
+    @app.post("/api/investment/v1/backup/download")
+    async def investment_backup_download(request: Request):
+        if investment_database is None or not backup_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "backup_unauthorized"})
+        from investment import InvestmentError
+        temporary = None
+        try:
+            if await bounded_json(request, maximum=1024, strict=True) != {}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            from dashboard.recovery import create_backup_archive
+            temporary, archive_path, _ = await run_in_threadpool(
+                create_backup_archive, investment_database, clock())
+            filename = "goldscout-verified-backup-" + clock().strftime("%Y%m%dT%H%M%SZ") + ".zip"
+            return FileResponse(
+                archive_path, media_type="application/zip", filename=filename,
+                background=BackgroundTask(temporary.cleanup))
+        except (InvestmentError, ValueError, OSError, RuntimeError):
+            if temporary is not None:
+                temporary.cleanup()
+            return JSONResponse(status_code=503, content={"error": "backup_creation_failed"})
+
+    @app.post("/api/investment/v1/backup/rehearsal")
+    async def investment_backup_rehearsal(request: Request):
+        if investment_database is None or not backup_authorized(request):
+            return JSONResponse(status_code=403, content={"error": "backup_unauthorized"})
+        from dashboard.recovery import MAX_ARCHIVE_BYTES, rehearse_backup_archive
+        from investment import InvestmentError
+        if request.headers.get("content-type", "").split(";", 1)[0] != "application/zip":
+            return JSONResponse(status_code=400, content={"error": "backup_archive_required"})
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+                if declared_length < 0:
+                    return JSONResponse(status_code=400, content={"error": "invalid_request"})
+                if declared_length > MAX_ARCHIVE_BYTES:
+                    return JSONResponse(status_code=413, content={"error": "backup_archive_too_large"})
+            except ValueError:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+        temporary = tempfile.TemporaryDirectory(prefix="goldscout-rehearsal-upload-")
+        archive_path = Path(temporary.name) / "selected-backup.zip"
+        size = 0
+        try:
+            descriptor = os.open(archive_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(descriptor, "wb") as target:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_ARCHIVE_BYTES:
+                        return JSONResponse(status_code=413, content={"error": "backup_archive_too_large"})
+                    target.write(chunk)
+            if size == 0:
+                return JSONResponse(status_code=400, content={"error": "backup_archive_required"})
+            result = await run_in_threadpool(rehearse_backup_archive, archive_path, clock())
+            return JSONResponse(result)
+        except (InvestmentError, ValueError, OSError, RuntimeError):
+            return JSONResponse(status_code=400, content={"error": "backup_rehearsal_failed"})
+        finally:
+            temporary.cleanup()
 
     @app.get("/api/investment/v1/monitoring")
     def investment_monitoring():
@@ -417,6 +610,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             "connection": value.get("connection"),
             "last_status": value["last_status"],
             "snapshot_available": value.get("snapshot") is not None,
+            "read_generation": value.get("read_generation"),
             "message": value.get("message", ""),
         }
 
@@ -463,13 +657,16 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             if type(payload) is not dict or set(payload) != {
                     "request_id", "environment", "read_scope_verified",
                     "trade_capable_key_risk_accepted", "eligibility_verified",
-                    "retention_rights_verified"}:
+                    "retention_rights_verified", "read_generation"}:
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            if type(payload["read_generation"]) is not int or payload["read_generation"] < 0:
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
             token = request.cookies.get("etoro_session")
             consent = {key: payload[key] for key in (
                 "environment", "read_scope_verified", "trade_capable_key_risk_accepted",
                 "eligibility_verified", "retention_rights_verified")}
-            return etoro_connection.begin(token, payload["request_id"], consent, clock())
+            return await run_in_threadpool(
+                etoro_connection.begin, token, payload["request_id"], consent, clock(), payload["read_generation"])
         except EToroError as exc:
             return JSONResponse(status_code=409, content={
                 "error": "etoro_read_failed", "error_code": exc.code})
@@ -539,15 +736,29 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
     @app.post("/api/investment/v1/etoro/refresh")
     async def etoro_refresh(request: Request):
         from investment import InvestmentError
+        from dashboard.etoro_connection import ManualRefreshRejected
         if etoro_connection is None or not etoro_authorized(request):
             return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
         try:
-            if await bounded_json(request, maximum=1024, strict=True) != {}:
+            payload = await bounded_json(request, maximum=1024, strict=True)
+            if (type(payload) is not dict or set(payload) != {
+                    "confirm_read", "read_generation", "revision", "account_id", "environment"}
+                    or payload["confirm_read"] is not True
+                    or type(payload["read_generation"]) is not int
+                    or payload["read_generation"] < 0
+                    or type(payload["revision"]) is not int or payload["revision"] < 1
+                    or type(payload["account_id"]) is not int or payload["account_id"] < 1
+                    or payload["environment"] not in ("real", "demo")):
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
-            return etoro_connection.refresh_explicitly(clock())
-        except InvestmentError as exc:
+            return await run_in_threadpool(
+                etoro_connection.refresh_explicitly, clock(),
+                manual_confirmed=True, generation=payload["read_generation"],
+                expected_connection=(payload["revision"], payload["account_id"], payload["environment"]))
+        except ManualRefreshRejected as exc:
             return JSONResponse(status_code=409, content={
                 "error": "etoro_refresh_rejected", "message": str(exc)})
+        except InvestmentError:
+            return JSONResponse(status_code=503, content={"error": "etoro_refresh_unavailable"})
 
     def workflow_sources():
         from investment.monitoring import project, validate_profile
@@ -937,8 +1148,10 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         @app.get("/intelligence")
         @app.get("/investment")
         @app.get("/investment/record")
+        @app.get("/investment/update")
         @app.get("/investment/reviews")
         @app.get("/investment-guide")
+        @app.get("/planning")
         @app.get("/etoro-portfolio")
         @app.get("/setup")
         def index():

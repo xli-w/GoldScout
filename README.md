@@ -39,6 +39,11 @@ in time; setup records them when you request the preview and cannot be
 backdated.
 
 After setup, choose **Add a record** for future updates; no restart is needed.
+For a regular review, choose **Update** beside an account to see its recorded
+cash, last cash check and holdings, then work through transactions and price
+checks. Previews show the impact on valuation and performance before saving.
+The portfolio can also compare two recorded valuations, showing recorded money
+movements, income and fees separately from any unexplained remainder.
 Manual recording is enabled for normal local launches. For viewing without
 journal writes, add `--investment-read-only` to your usual startup command,
 keeping the same workspace. This also prevents first-run setup from saving.

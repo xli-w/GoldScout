@@ -77,6 +77,65 @@ class EToroConnectionTests(unittest.TestCase):
         self.assertFalse(self.path.parent.exists())
         accessor.assert_not_called()
 
+    def test_revocation_invalidates_queued_connection_reads(self):
+        started = threading.Event()
+        queued = threading.Event()
+        release = threading.Event()
+        paths = []
+        errors = []
+
+        class TrackingLock:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.count_lock = threading.Lock()
+                self.attempts = 0
+
+            def __enter__(self):
+                with self.count_lock:
+                    self.attempts += 1
+                    if self.attempts == 2:
+                        queued.set()
+                self.lock.acquire()
+
+            def __exit__(self, *args):
+                self.lock.release()
+
+        def transport(path, headers):
+            paths.append(path)
+            if len(paths) == 1:
+                started.set()
+                if not release.wait(5):
+                    raise AssertionError("synthetic read was not released")
+            return encoded(aggregate()) if "aggregate-portfolio" in path else balance()
+
+        manager = self.manager(transport)
+        manager.collection_lock = TrackingLock()
+
+        def begin(request_id):
+            try:
+                self.connect(manager, request_id=request_id)
+            except etoro.EToroError as exc:
+                errors.append(exc.code)
+
+        first = threading.Thread(target=begin, args=("first",))
+        second = threading.Thread(target=begin, args=("second",))
+        first.start()
+        try:
+            self.assertTrue(started.wait(2))
+            second.start()
+            self.assertTrue(queued.wait(2))
+            self.assertEqual(manager.revoke(NOW)["state"], "not_connected")
+        finally:
+            release.set()
+            first.join(5)
+            if second.ident is not None:
+                second.join(5)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertCountEqual(errors, ["approval_interrupted", "approval_interrupted"])
+        self.assertEqual(len(paths), 1)
+        self.assertEqual(manager.pending, {})
+
     def test_discard_and_expiry_release_preview_memory_and_capacity(self):
         class RepeatingTransport:
             def __init__(self):
@@ -137,6 +196,58 @@ class EToroConnectionTests(unittest.TestCase):
         manager.start_once()
         self.assertEqual(state["snapshot"]["account_id"], 12345)
 
+    def test_explicit_refresh_does_not_require_startup_permission(self):
+        manager = self.manager(FixtureTransport())
+        preview = self.connect(manager, self.consent(read_scope=False))
+        manager.confirm("synthetic-session", preview["preview_id"], True, False, None, NOW)
+        transport = FixtureTransport()
+        manager.transport_factory = lambda: transport
+        generation = manager.begin_generation()
+        expected = (1, 12345, "real")
+        result = manager.refresh_explicitly(
+            NOW, manual_confirmed=True, generation=generation, expected_connection=expected)
+        self.assertEqual(result["state"], "refreshed")
+        self.assertEqual(len(transport.paths), 2)
+        self.assertEqual(manager.status(NOW)["state"], "connected")
+        manager.revoke(NOW)
+        with self.assertRaises(InvestmentError):
+            manager.refresh_explicitly(
+                NOW, manual_confirmed=True, generation=generation, expected_connection=expected)
+        self.assertEqual(len(transport.paths), 2)
+
+    def test_expired_startup_permission_allows_only_confirmed_manual_refresh(self):
+        manager = self.manager(FixtureTransport())
+        preview = self.connect(manager)
+        manager.confirm("synthetic-session", preview["preview_id"], True, True, 1, NOW)
+        later = NOW + timedelta(days=2)
+        transport = FixtureTransport()
+        restarted = self.manager(transport, now=later)
+        restarted.start_once()
+        self.assertEqual(transport.paths, [])
+        with self.assertRaises(InvestmentError):
+            restarted.refresh_explicitly(later)
+        self.assertEqual(transport.paths, [])
+        result = restarted.refresh_explicitly(
+            later, manual_confirmed=True, generation=restarted.begin_generation(),
+            expected_connection=(1, 12345, "real"))
+        self.assertEqual(result["state"], "refreshed")
+        self.assertEqual(restarted.status(later)["state"], "expired")
+
+    def test_confirmed_manual_read_rejects_replaced_connection(self):
+        manager = self.manager(FixtureTransport())
+        first = self.connect(manager)
+        manager.confirm("synthetic-session", first["preview_id"], True, False, None, NOW)
+        generation = manager.begin_generation()
+        second_transport = FixtureTransport()
+        manager.transport_factory = lambda: second_transport
+        second = self.connect(manager, request_id="replacement")
+        manager.confirm("synthetic-session", second["preview_id"], True, False, None, NOW)
+        with self.assertRaises(InvestmentError):
+            manager.refresh_explicitly(
+                NOW, manual_confirmed=True, generation=generation,
+                expected_connection=(1, 12345, "real"))
+        self.assertEqual(len(second_transport.paths), 2)
+
     def test_revoke_is_immediate_and_expiry_is_bounded(self):
         manager = self.manager(FixtureTransport())
         preview = self.connect(manager)
@@ -188,10 +299,13 @@ class EToroConnectionTests(unittest.TestCase):
             }]})
         ])
         restarted = self.manager(refresh_transport)
-        result = restarted.refresh_explicitly(NOW)
+        result = restarted.refresh_explicitly(
+            NOW, manual_confirmed=True, generation=restarted.begin_generation(),
+            expected_connection=(1, 12345, "real"))
         self.assertEqual(result["state"], "refresh_failed")
         self.assertEqual(result["error_code"], "account_binding_changed")
         self.assertIsNone(restarted.snapshot)
+        self.assertEqual(len(refresh_transport.paths), 1)
 
     def test_revocation_between_collection_and_publication_prevents_new_snapshot(self):
         manager = self.manager(FixtureTransport())
@@ -228,6 +342,65 @@ class EToroConnectionTests(unittest.TestCase):
         self.assertFalse(worker.is_alive(), "refresh did not finish")
         self.assertEqual(result[0]["error_code"], "approval_interrupted")
         self.assertEqual(manager.snapshot["account_totals"]["accountTotalValue"], "120")
+
+    def test_clock_failure_after_balance_marks_manual_and_startup_reads_failed(self):
+        manager = self.manager(FixtureTransport())
+        preview = self.connect(manager)
+        manager.confirm("synthetic-session", preview["preview_id"], True, True, 30, NOW)
+        for error_type in (OSError, RuntimeError):
+            for startup in (False, True):
+                with self.subTest(error_type=error_type, startup=startup):
+                    fail = [False]
+                    def clock():
+                        if fail[0]:
+                            fail[0] = False
+                            raise error_type("synthetic clock failure")
+                        return NOW
+                    class FailingClockTransport(FixtureTransport):
+                        def __call__(self, path, headers):
+                            payload = super().__call__(path, headers)
+                            if len(self.paths) == 2:
+                                fail[0] = True
+                            return payload
+                    transport = FailingClockTransport()
+                    fresh = EToroConnection(
+                        self.path, clock, transport_factory=lambda: transport,
+                        credential_accessor=lambda: KEYS)
+                    self.managers.append(fresh)
+                    if startup:
+                        fresh.start_once()
+                        fresh._worker.join(timeout=5)
+                        self.assertFalse(fresh._worker.is_alive())
+                    else:
+                        result = fresh.refresh_explicitly(
+                            NOW, manual_confirmed=True, generation=fresh.begin_generation(),
+                            expected_connection=(1, 12345, "real"))
+                        self.assertEqual(result["error_code"], "refresh_unavailable")
+                    self.assertEqual(fresh.status(NOW)["last_status"], "refresh_unavailable")
+                    self.assertIsNone(fresh.snapshot)
+                    self.assertEqual(len(transport.paths), 2)
+
+    def test_clock_failure_at_final_publication_check_preserves_snapshot(self):
+        manager = self.manager(FixtureTransport())
+        preview = self.connect(manager)
+        manager.confirm("synthetic-session", preview["preview_id"], True, True, 30, NOW)
+        expected = json.loads(self.path.read_text(encoding="utf-8"))
+        for error_type in (OSError, RuntimeError):
+            with self.subTest(error_type=error_type):
+                calls = [0]
+                def clock():
+                    calls[0] += 1
+                    if calls[0] == 5:
+                        raise error_type("synthetic clock failure")
+                    return NOW
+                changed = aggregate()
+                changed["accountTotals"]["accountTotalValue"] = 999
+                manager.clock_fn = clock
+                manager.transport_factory = lambda: FixtureTransport([encoded(changed), balance()])
+                result = manager._refresh(expected, NOW)
+                self.assertEqual(result["error_code"], "approval_interrupted")
+                self.assertEqual(manager.last_status, "approval_interrupted")
+                self.assertEqual(manager.snapshot["account_totals"]["accountTotalValue"], "120")
 
 
 if __name__ == "__main__":

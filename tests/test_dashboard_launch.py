@@ -105,7 +105,7 @@ class DashboardLaunchTests(unittest.TestCase):
         with patch("dashboard.app.verify_frontend", return_value=self.static):
             app = create_app(static_directory=self.static)
         with TestClient(app, base_url="http://localhost", backend_options={"loop_factory": MemoryEventLoop}) as client:
-            for path in ("/investment-guide", "/etoro-portfolio"):
+            for path in ("/investment-guide", "/etoro-portfolio", "/investment/update"):
                 with self.subTest(path=path):
                     response = client.get(path)
                     self.assertEqual(response.status_code, 200)
@@ -146,9 +146,12 @@ class DashboardLaunchTests(unittest.TestCase):
         self.assertFalse(workspace.exists())
         self.assertEqual(factory.call_args.kwargs["investment_database"], workspace / "investment.sqlite3")
         self.assertEqual(factory.call_args.kwargs["setup_workspace"], workspace)
+        planning_path = workspace.parent / ".goldscout-planning" / "private.json"
+        self.assertEqual(factory.call_args.kwargs["planning_profile"], planning_path)
         self.assertTrue(factory.call_args.kwargs["setup_enabled"])
         self.assertIn("/setup", output.getvalue())
         self.assertTrue(factory.call_args.kwargs["investment_recording_enabled"])
+        self.assertFalse(planning_path.parent.exists())
 
     def test_explicit_workspace_is_mutually_exclusive_with_other_sources(self):
         for flag in ("--demo", "--investment-database"):
@@ -171,11 +174,12 @@ class DashboardLaunchTests(unittest.TestCase):
                                         investment_recording_enabled=False, awareness_profile=None,
                                         monitoring_profile=None, monitoring_cache=None,
                                         monitoring_reviews=None, monitoring_workflow_enabled=False,
-                                        etoro_connection_path=None)
+                                        etoro_connection_path=None, planning_profile=None)
         server.assert_called_once_with("synthetic-app", host="127.0.0.1", port=8766, proxy_headers=False, access_log=False)
 
     def test_invalid_modes_and_ports_fail_before_runtime_imports(self):
         for args in (["--demo", "--telemetry", "unused"], ["--demo", "--port", "80"],
+                     ["--demo", "--planning-profile", str(self.root / "goals.json")],
                      ["--database", "unused", "--scenario", "partial_exit"],
                      ["--investment-database", "unused", "--telemetry", "unused"],
                      ["--investment-database", "unused", "--demo"]):
@@ -193,6 +197,21 @@ class DashboardLaunchTests(unittest.TestCase):
         self.assertNotIn("database", factory.call_args.kwargs)
         self.assertIn("/investment", output.getvalue())
         self.assertFalse((self.root / "investment.sqlite3").exists())
+
+    def test_explicit_investment_journal_can_select_separate_goals_profile(self):
+        server = Mock()
+        factory = Mock(return_value="investment-app")
+        journal = self.root / "investment.sqlite3"
+        planning = self.root / "private" / "goals.json"
+        args = ["--investment-database", str(journal),
+                "--planning-profile", str(planning), "--api-only"]
+        with patch.dict(sys.modules, {"uvicorn": SimpleNamespace(run=server),
+                                     "dashboard.app": SimpleNamespace(create_app=factory)}):
+            with redirect_stdout(io.StringIO()):
+                main(args)
+        self.assertEqual(factory.call_args.kwargs["planning_profile"], planning)
+        self.assertFalse(journal.exists())
+        self.assertFalse(planning.exists())
 
     def test_monitoring_workflow_cli_requires_separate_review_store_and_enables_without_password(self):
         server = Mock()

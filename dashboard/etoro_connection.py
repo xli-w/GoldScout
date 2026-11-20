@@ -18,6 +18,10 @@ MAX_PERMISSION_BYTES = 16 * 1024
 PREVIEW_TTL = timedelta(minutes=5)
 
 
+class ManualRefreshRejected(InvestmentError):
+    """The manual read was rejected before collecting provider data."""
+
+
 def _permission(value, now):
     fields = {
         "schema_version", "revision", "environment", "account_id", "approved_at",
@@ -66,6 +70,7 @@ class EToroConnection:
         self.last_status = "not_collected"
         self._startup_started = False
         self._stop = threading.Event()
+        self._revocation_generation = 0
         self._worker = None
         self._file_lock = None
 
@@ -145,7 +150,8 @@ class EToroConnection:
                     "revision": value["revision"],
                 }
             return {"state": state, "connection": public,
-                    "snapshot": deepcopy(self.snapshot), "last_status": self.last_status}
+                    "snapshot": deepcopy(self.snapshot), "last_status": self.last_status,
+                    "read_generation": self._revocation_generation}
 
     def _credentials(self):
         if self.credential_accessor is not None:
@@ -156,11 +162,12 @@ class EToroConnection:
         return {"x-api-key": values["GOLDSCOUT_ETORO_API_KEY"],
                 "x-user-key": values["GOLDSCOUT_ETORO_USER_KEY"]}
 
-    def _collect(self, environment, approval_check=None):
+    def _collect(self, environment, approval_check=None, expected_account_id=None):
         transport = (self.transport_factory() if self.transport_factory is not None
                      else etoro.EToroTransport(before_request=approval_check))
         return collect_portfolio(
-            transport, self._credentials, environment, now=self.clock_fn)
+            transport, self._credentials, environment, now=self.clock_fn,
+            expected_account_id=expected_account_id, before_balance=approval_check)
 
     @staticmethod
     def _validate_initial_consent(value):
@@ -179,13 +186,26 @@ class EToroConnection:
         if value["eligibility_verified"] is not True or value["retention_rights_verified"] is not True:
             raise InvestmentError("Confirm account eligibility and permitted local display/retention")
 
-    def begin(self, token, request_id, value, now):
+    def begin_generation(self):
+        with self.lock:
+            return self._revocation_generation
+
+    def begin(self, token, request_id, value, now, generation=None):
         self._validate_initial_consent(value)
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             raise InvestmentError("eToro request identifier is invalid")
         now = clock(now)
+        if generation is None:
+            generation = self.begin_generation()
+
+        def verify():
+            with self.lock:
+                if generation != self._revocation_generation:
+                    raise etoro.EToroError("approval_interrupted")
+
         with self.collection_lock:
             with self.lock:
+                verify()
                 self._purge_pending(now)
                 prior = self.pending.get(request_id)
                 if prior is not None:
@@ -197,7 +217,7 @@ class EToroConnection:
                 if len(self.pending) >= 32:
                     raise InvestmentError("Too many pending eToro previews; restart the local dashboard")
             with self._claim_startup():
-                snapshot = self._collect(value["environment"])
+                snapshot = self._collect(value["environment"], approval_check=verify)
             preview_id = secrets.token_urlsafe(32)
             response = {"preview_id": preview_id, "expires_at": iso(now + PREVIEW_TTL),
                         "snapshot": snapshot}
@@ -206,6 +226,7 @@ class EToroConnection:
                 args=(request_id, token, preview_id))
             timer.daemon = True
             with self.lock:
+                verify()
                 pending = {
                     "token": token, "request": deepcopy(value), "response": response,
                     "snapshot": snapshot, "expires": now + PREVIEW_TTL, "timer": timer,
@@ -253,8 +274,7 @@ class EToroConnection:
                 "account_binding_verified": True, "revoked_at": None,
             }
             self._write_permission(value)
-            if startup_refresh:
-                self._stop.clear()
+            self._stop.clear()
             self.snapshot = deepcopy(match["snapshot"])
             self.last_status = "success"
             self._clear_pending()
@@ -273,6 +293,7 @@ class EToroConnection:
     def revoke(self, now):
         now = clock(now)
         with self.lock:
+            self._revocation_generation += 1
             self._clear_pending()
             permission = self._read_permission(now)
             if permission is None:
@@ -287,37 +308,50 @@ class EToroConnection:
             self.last_status = "startup_refresh_revoked"
             return self.status(now)
 
-    def refresh_explicitly(self, now):
+    def refresh_explicitly(self, now, manual_confirmed=False, generation=None,
+                           expected_connection=None):
         now = clock(now)
         with self.lock:
             permission = self._read_permission(now)
-            if permission is None or not self._active(permission, now):
-                raise InvestmentError("Renew explicit eToro startup-read permission before refreshing")
+            if manual_confirmed is True:
+                if (type(generation) is not int or generation != self._revocation_generation
+                        or permission is None or permission[3] is not None
+                        or expected_connection != (
+                            permission[0]["revision"], permission[0]["account_id"],
+                            permission[0]["environment"])):
+                    raise ManualRefreshRejected("eToro manual read permission is unavailable or interrupted")
+            else:
+                raise ManualRefreshRejected("Confirm this one-time eToro read before refreshing")
             value = deepcopy(permission[0])
         try:
             with self._claim_startup():
-                return self._refresh(value, now)
+                return self._refresh(value, now, manual=manual_confirmed is True,
+                                     generation=generation)
         except etoro.EToroError as exc:
             self.last_status = exc.code
             return {"state": "refresh_failed", "error_code": exc.code}
 
-    def _refresh(self, expected, now):
+    def _refresh(self, expected, now, *, manual=False, generation=None):
         def verify():
             if self._stop.is_set():
                 raise etoro.EToroError("approval_interrupted")
             try:
                 checked = clock(self.clock_fn())
                 current = self._read_permission(checked)
-            except InvestmentError:
+            except (InvestmentError, OSError, RuntimeError):
                 raise etoro.EToroError("approval_interrupted") from None
-            if (current is None or not self._active(current, checked)
+            if (current is None or current[3] is not None
+                    or (not manual and not self._active(current, checked))
+                    or (manual and generation != self._revocation_generation)
                     or current[0]["revision"] != expected["revision"]
                     or current[0]["account_id"] != expected["account_id"]
                     or current[0]["environment"] != expected["environment"]):
                 raise etoro.EToroError("approval_interrupted")
 
         try:
-            result = self._collect(expected["environment"], approval_check=verify)
+            verify()
+            result = self._collect(expected["environment"], approval_check=verify,
+                                   expected_account_id=expected["account_id"])
             verify()
             if result["account_id"] != expected["account_id"]:
                 raise etoro.EToroError("account_binding_changed")
@@ -325,6 +359,14 @@ class EToroConnection:
             with self.lock:
                 self.last_status = exc.code
             return {"state": "refresh_failed", "error_code": exc.code}
+        except InvestmentError:
+            with self.lock:
+                self.last_status = "refresh_unavailable"
+            raise
+        except (OSError, RuntimeError):
+            with self.lock:
+                self.last_status = "refresh_unavailable"
+            return {"state": "refresh_failed", "error_code": "refresh_unavailable"}
         with self.lock:
             try:
                 verify()

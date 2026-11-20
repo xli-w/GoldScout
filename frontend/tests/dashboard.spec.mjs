@@ -20,6 +20,10 @@ const etoroSnapshot = {
     source_balance: "100", source_currency: "USD", display_currency: "GBP",
     exchange_rate: "0.77", source_as_of: null, received_at: "2026-07-01T10:02:00Z" },
 };
+const etoroConnection = (expiresAt = "2099-01-01T00:00:00Z", revoked = false) => ({
+  environment: "demo", account_id: 12345, expires_at: expiresAt,
+  revoked_at: revoked ? "2026-07-01T10:00:00Z" : null, revision: 1,
+});
 
 test.describe("eToro within the portfolio", () => {
   test.use({ timezoneId: "Europe/London" });
@@ -34,7 +38,8 @@ test.describe("eToro within the portfolio", () => {
         last_status: "success", snapshot_available: true,
         connection: { environment: "demo", account_id: 12345, expires_at: null, revoked_at: null, revision: 1 },
       } });
-      return route.fulfill({ json: { state: "connected", last_status: "success", snapshot: etoroSnapshot } });
+      return route.fulfill({ json: { state: "connected", last_status: "success", snapshot: etoroSnapshot,
+        connection: etoroConnection(null) } });
     });
 
     await page.goto("/investment");
@@ -45,7 +50,8 @@ test.describe("eToro within the portfolio", () => {
     await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
     await expect(etoro).toContainText("separate from your journal");
     await expect(etoro).toContainText("Jul 1, 2026, 10:00:00 AM UTC");
-    await expect(etoro).toContainText("Jul 1, 2026, 10:02:00 AM UTC");
+    await expect(etoro).not.toContainText("Jul 1, 2026, 10:02:00 AM UTC");
+    await expect(etoro).toContainText("balance coverage and source time are unverified");
     const direct = etoro.getByRole("region", { name: "Direct instrument aggregates" });
     await expect(direct.getByRole("columnheader", { name: "Exposure (asset currency)" })).toBeVisible();
     await expect(direct.getByRole("row").filter({ hasText: "101" })).toContainText("42 USD");
@@ -80,13 +86,15 @@ test.describe("eToro within the portfolio", () => {
     session = { enabled: true, csrf: "synthetic-csrf", state: "expired", last_status: "permission_expired",
       snapshot_available: true, connection: { environment: "demo", account_id: 12345,
         expires_at: "2026-06-30T10:00:00Z", revoked_at: null, revision: 1 } };
-    portfolio = { state: "expired", last_status: "permission_expired", snapshot: etoroSnapshot };
+    portfolio = { state: "expired", last_status: "permission_expired", snapshot: etoroSnapshot,
+      connection: session.connection };
     await page.reload();
     await expect(etoro).toContainText("Startup permission expired");
     await expect(etoro).toContainText("The displayed source snapshot is not refreshed");
     await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
     session.state = "revoked";
     session.last_status = "startup_refresh_revoked";
+    session.connection.revoked_at = "2026-07-01T10:00:00Z";
     portfolio.state = "revoked";
     portfolio.last_status = "startup_refresh_revoked";
     await page.reload();
@@ -94,13 +102,258 @@ test.describe("eToro within the portfolio", () => {
     session = { enabled: true, csrf: null, state: "startup_refresh_enabled", last_status: "success",
       snapshot_available: true, connection: { environment: "demo", account_id: 12345,
         expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 } };
-    portfolio = { state: "startup_refresh_enabled", last_status: "success", snapshot: etoroSnapshot };
+    portfolio = { state: "startup_refresh_enabled", last_status: "success", snapshot: etoroSnapshot,
+      connection: session.connection };
     await page.reload();
     await expect(etoro.getByRole("alert")).toContainText("local session could not be verified");
     await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
     await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeDisabled();
     await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
     expect(writes).toEqual([]);
+  });
+
+  test("partial status failures preserve known revocation access but block new reads", async ({ page }) => {
+    let revoked = false;
+    let sessionUnavailable = false;
+    let portfolioUnavailable = true;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "POST") {
+        writes.push(path);
+        expect(path).toBe("revoke");
+        revoked = true;
+        return route.fulfill({ json: { state: "revoked" } });
+      }
+      if (path === "session") {
+        if (sessionUnavailable) return route.fulfill({ status: 503, json: {} });
+        return route.fulfill({ json: { enabled: true, csrf: "synthetic-csrf",
+          state: revoked ? "revoked" : "startup_refresh_enabled",
+          last_status: revoked ? "startup_refresh_revoked" : "success", snapshot_available: true,
+          connection: { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+            revoked_at: revoked ? "2026-07-01T10:00:00Z" : null, revision: 1 } } });
+      }
+      if (portfolioUnavailable) return route.fulfill({ status: 503, json: {} });
+      return route.fulfill({ json: { state: "revoked", last_status: "startup_refresh_revoked",
+        snapshot: etoroSnapshot, connection: etoroConnection(undefined, true) } });
+    });
+
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toContainText("eToro portfolio status is unavailable");
+    const revoke = etoro.getByRole("button", { name: "Revoke startup refresh" });
+    await expect(revoke).toBeEnabled();
+    expect(writes).toEqual([]);
+    page.once("dialog", dialog => dialog.accept());
+    await revoke.click();
+    await expect(etoro).toContainText("Connection status reports revocation");
+    expect(writes).toEqual(["revoke"]);
+
+    sessionUnavailable = true;
+    portfolioUnavailable = false;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("eToro connection status is unavailable");
+    await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+    await expect(revoke).toBeEnabled();
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    expect(writes).toEqual(["revoke"]);
+    await page.reload();
+    await expect(etoro).toContainText("eToro connection status is unavailable");
+    await expect(revoke).toHaveCount(0);
+    expect(writes).toEqual(["revoke"]);
+  });
+
+  test("disagreeing status reads block collection but keep revocation available", async ({ page }) => {
+    let sessionState = "startup_refresh_enabled";
+    let portfolioState = "revoked";
+    let portfolioRevision = 1;
+    let includeSessionConnection = true;
+    let includePortfolioConnection = true;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      if (request.method() !== "GET") { writes.push(request.url()); return route.abort(); }
+      return route.fulfill({ json: request.url().endsWith("/session") ? {
+        enabled: true, csrf: "synthetic-csrf", state: sessionState,
+        last_status: "success", snapshot_available: true,
+        ...(includeSessionConnection ? { connection: {
+          environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+          revoked_at: sessionState === "revoked" ? "2026-07-01T10:00:00Z" : null, revision: 1,
+        } } : {}),
+      } : { state: portfolioState, last_status: "success", snapshot: etoroSnapshot,
+        ...(includePortfolioConnection ? { connection: {
+          environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+          revoked_at: portfolioState === "revoked" ? "2026-07-01T10:00:00Z" : null, revision: portfolioRevision,
+        } } : {}) } });
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toContainText("eToro status reads disagree");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    sessionState = "revoked";
+    portfolioState = "startup_refresh_enabled";
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("eToro status reads disagree");
+    await expect(etoro).not.toContainText("Startup permission is revoked.");
+    await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    sessionState = "startup_refresh_enabled";
+    portfolioRevision = 2;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("eToro status reads disagree");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    portfolioRevision = 1;
+    includePortfolioConnection = false;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("eToro status reads disagree");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    sessionState = "not_connected";
+    portfolioState = "not_connected";
+    includeSessionConnection = false;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("eToro connection details are incomplete");
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    sessionState = "startup_refresh_enabled";
+    portfolioState = "startup_refresh_enabled";
+    includeSessionConnection = true;
+    includePortfolioConnection = true;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeEnabled();
+    expect(writes).toEqual([]);
+  });
+
+  test("unavailable status payloads retain revocation and allow status recovery", async ({ page }) => {
+    let unavailable = true;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      if (request.method() !== "GET") { writes.push(request.url()); return route.abort(); }
+      const state = unavailable ? "unavailable" : "startup_refresh_enabled";
+      const connection = unavailable ? null : etoroConnection();
+      return route.fulfill({ json: request.url().endsWith("/session") ? {
+        enabled: true, csrf: "synthetic-csrf", state, last_status: "not_collected",
+        snapshot_available: false, connection,
+      } : { state, last_status: "not_collected", snapshot: null, connection } });
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toContainText("eToro connection status is unavailable");
+    await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    unavailable = false;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("Waiting for the one authorized startup read");
+    await expect(etoro).not.toContainText("eToro connection status is unavailable");
+    expect(writes).toEqual([]);
+  });
+
+  test("workspace failure retains eToro revocation without enabling a provider read", async ({ page }) => {
+    let revoked = false;
+    const writes = [];
+    await page.route("**/api/v1/settings", route => route.fulfill({ status: 503, json: {} }));
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, csrf: "synthetic-csrf", state: revoked ? "revoked" : "startup_refresh_enabled",
+        last_status: revoked ? "startup_refresh_revoked" : "success", snapshot_available: true,
+        connection: { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+          revoked_at: revoked ? "2026-07-01T10:00:00Z" : null, revision: 1 },
+      } : { state: revoked ? "revoked" : "startup_refresh_enabled",
+        last_status: revoked ? "startup_refresh_revoked" : "success", snapshot: etoroSnapshot,
+        connection: etoroConnection(undefined, revoked) } });
+      writes.push(path);
+      if (path === "revoke") { revoked = true; return route.fulfill({ json: { state: "revoked" } }); }
+      return route.abort();
+    });
+    await page.goto("/investment");
+    await expect(page.getByText("Workspace settings are unavailable; portfolio source is unknown.")).toBeVisible();
+    const fallback = page.locator("#workspace-etoro");
+    await fallback.locator(":scope > summary").click();
+    await expect(fallback.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
+    await expect(fallback.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    await expect(fallback.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    expect(writes).toEqual([]);
+    page.once("dialog", dialog => dialog.accept());
+    await fallback.getByRole("button", { name: "Revoke startup refresh" }).click();
+    await expect(fallback).toContainText("Startup permission is revoked");
+    expect(writes).toEqual(["revoke"]);
+  });
+
+  test("workspace failure and recovery preserve an uncertain eToro result and cached revocation", async ({ page }) => {
+    let workspaceUnavailable = false;
+    let sessionUnavailable = false;
+    const writes = [];
+    await page.route("**/api/v1/settings", route => workspaceUnavailable
+      ? route.fulfill({ status: 503, json: {} })
+      : route.fulfill({ json: { mode: "demo", workspace: "demo" } }));
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") {
+        if (path === "session" && sessionUnavailable) return route.fulfill({ status: 503, json: {} });
+        return route.fulfill({ json: path === "session" ? {
+          enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: "startup_refresh_enabled",
+          last_status: "success", snapshot_available: true, connection: etoroConnection(),
+        } : { state: "startup_refresh_enabled", last_status: "success",
+          snapshot: etoroSnapshot, connection: etoroConnection() } });
+      }
+      writes.push(path);
+      return route.abort();
+    });
+    await page.goto("/investment");
+    let etoro = page.getByRole("region", { name: "eToro portfolio" });
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Refresh once now" }).click();
+    await expect(etoro).toContainText("Refresh is still unverified");
+    workspaceUnavailable = true;
+    sessionUnavailable = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+    await expect(page.getByText("Workspace settings are unavailable; portfolio source is unknown.")).toBeVisible();
+    const fallback = page.locator("#workspace-etoro");
+    await fallback.locator(":scope > summary").click();
+    await expect(fallback).toContainText("Refresh is still unverified");
+    await expect(fallback.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    workspaceUnavailable = false;
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toContainText("Refresh is still unverified");
+    await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    sessionUnavailable = false;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    await expect(etoro).toContainText("Refresh is still unverified");
+    expect(writes).toEqual(["refresh"]);
+  });
+
+  test("manual refresh works without startup permission and confirms the account", async ({ page }) => {
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: "connected",
+        last_status: "success", snapshot_available: true, connection: etoroConnection(null),
+      } : { state: "connected", last_status: "success", snapshot: etoroSnapshot,
+        connection: etoroConnection(null) } });
+      writes.push(request.postDataJSON());
+      return route.fulfill({ json: { state: "refreshed" } });
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toContainText("Account ID 12345 · demo environment");
+    page.once("dialog", dialog => {
+      expect(dialog.message()).toContain("demo account 12345");
+      void dialog.accept();
+    });
+    await etoro.getByRole("button", { name: "Refresh once now" }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0]).toEqual({
+      confirm_read: true, read_generation: 0, revision: 1, account_id: 12345, environment: "demo",
+    });
   });
 
   test("a failed refresh leaves the previous read dated and its missing GBP balance explicit", async ({ page }) => {
@@ -112,11 +365,11 @@ test.describe("eToro within the portfolio", () => {
       const request = route.request();
       const path = new URL(request.url()).pathname.split("/").at(-1);
       if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
-        enabled: true, csrf: "synthetic-csrf", state: "startup_refresh_enabled",
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: "startup_refresh_enabled",
         last_status: lastStatus, snapshot_available: true,
         connection: { environment: "demo", account_id: 12345,
           expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 },
-      } : { state: "startup_refresh_enabled", last_status: lastStatus, snapshot } });
+      } : { state: "startup_refresh_enabled", last_status: lastStatus, snapshot, connection: etoroConnection() } });
       writes.push(path);
       if (path === "refresh") {
         lastStatus = "rate_limited";
@@ -126,14 +379,144 @@ test.describe("eToro within the portfolio", () => {
     });
     await page.goto("/investment");
     const etoro = page.getByRole("region", { name: "eToro portfolio" });
-    await expect(etoro.getByRole("region", { name: "GBP total unavailable" }))
+    await expect(etoro.getByRole("region", { name: "GBP balance unavailable" }))
       .toContainText("No conversion was estimated. Reason: balance_unavailable.");
+    page.once("dialog", dialog => dialog.accept());
     await etoro.getByRole("button", { name: "Refresh once now" }).click();
     await expect(etoro).toContainText("Last refresh status: rate_limited");
     await expect(etoro).toContainText("The displayed source snapshot is not refreshed");
     await expect(etoro).toContainText("Jul 1, 2026, 10:00:00 AM UTC");
     expect(writes).toEqual(["refresh"]);
   });
+
+  test("an uncertain refresh blocks another read while allowing revocation after a partial status", async ({ page }) => {
+    let revoked = false;
+    let portfolioUnavailable = false;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") {
+        if (path === "portfolio" && portfolioUnavailable) return route.fulfill({ status: 503, json: {} });
+        return route.fulfill({ json: path === "session" ? {
+          enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: revoked ? "revoked" : "startup_refresh_enabled",
+          last_status: revoked ? "startup_refresh_revoked" : "success", snapshot_available: true,
+          connection: { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+            revoked_at: revoked ? "2026-07-01T10:00:00Z" : null, revision: 1 },
+        } : { state: revoked ? "revoked" : "startup_refresh_enabled",
+          last_status: revoked ? "startup_refresh_revoked" : "success", snapshot: etoroSnapshot,
+          connection: etoroConnection(undefined, revoked) } });
+      }
+      writes.push(path);
+      if (path === "refresh") {
+        portfolioUnavailable = true;
+        return route.fulfill({ status: 503, json: {} });
+      }
+      if (path === "revoke") {
+        revoked = true;
+        portfolioUnavailable = false;
+        return route.fulfill({ json: { state: "revoked" } });
+      }
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Refresh once now" }).click();
+    await expect(etoro).toContainText("refresh result could not be verified");
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("Refresh is still unverified");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
+    await expect(etoro).toContainText("Startup permission is revoked");
+    await expect(etoro).toContainText("Refresh is still unverified");
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    expect(writes).toEqual(["refresh", "revoke"]);
+  });
+
+  test("unchanged status does not resolve a refresh that may still be in flight", async ({ page }) => {
+    let snapshot = etoroSnapshot;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: "startup_refresh_enabled",
+        last_status: "success", snapshot_available: true,
+        connection: { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+          revoked_at: null, revision: 1 },
+      } : { state: "startup_refresh_enabled", last_status: "success", snapshot, connection: etoroConnection() } });
+      writes.push(path);
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Refresh once now" }).click();
+    await expect(etoro).toContainText("refresh result could not be verified");
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("Refresh is still unverified");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    expect(writes).toEqual(["refresh"]);
+    snapshot = { ...etoroSnapshot, source_as_of: "2026-07-01T10:05:00Z" };
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("Refresh is still unverified");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    expect(writes).toEqual(["refresh"]);
+  });
+
+  test("an uncertain revocation checks status instead of repeating the request", async ({ page }) => {
+    let revoked = false;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, csrf: "synthetic-csrf", state: revoked ? "revoked" : "startup_refresh_enabled",
+        last_status: revoked ? "startup_refresh_revoked" : "success", snapshot_available: true,
+        connection: { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+          revoked_at: revoked ? "2026-07-01T10:00:00Z" : null, revision: 1 },
+      } : { state: revoked ? "revoked" : "startup_refresh_enabled",
+        last_status: revoked ? "startup_refresh_revoked" : "success", snapshot: etoroSnapshot,
+        connection: etoroConnection(undefined, revoked) } });
+      writes.push(path);
+      if (path === "revoke") {
+        revoked = true;
+        return route.fulfill({ status: 503, json: {} });
+      }
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
+    await expect(etoro).toContainText("Revocation could not be verified and may already have taken effect");
+    await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeEnabled();
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("Startup permission is revoked");
+    expect(writes).toEqual(["revoke"]);
+  });
+
+  for (const exchangeRate of ["0", "-0.5"]) {
+    test(`a provider GBP balance with exchange rate ${exchangeRate} is unavailable`, async ({ page }) => {
+      const snapshot = { ...etoroSnapshot,
+        gbp_balance: { ...etoroSnapshot.gbp_balance, exchange_rate: exchangeRate } };
+      await page.route("**/api/investment/v1/etoro/**", route => {
+        if (route.request().method() !== "GET") return route.abort();
+        return route.fulfill({ json: route.request().url().endsWith("/session") ? {
+          enabled: true, csrf: "synthetic-csrf", state: "connected",
+          last_status: "success", snapshot_available: true, connection: etoroConnection(null),
+        } : { state: "connected", last_status: "success", snapshot, connection: etoroConnection(null) } });
+      });
+      await page.goto("/investment");
+      const etoro = page.getByRole("region", { name: "eToro portfolio" });
+      await expect(etoro.getByRole("region", { name: "GBP balance unavailable" }))
+        .toContainText("invalid GBP balance or exchange rate");
+      await expect(etoro).not.toContainText("GBP 77");
+    });
+  }
 
   test("a startup read becoming available between status requests is eventually shown", async ({ page }) => {
     let portfolioReads = 0;
@@ -149,7 +532,8 @@ test.describe("eToro within the portfolio", () => {
       portfolioReads++;
       const available = portfolioReads > 2;
       return route.fulfill({ json: { state: "startup_refresh_enabled",
-        last_status: available ? "success" : "not_collected", snapshot: available ? etoroSnapshot : null } });
+        last_status: available ? "success" : "not_collected", snapshot: available ? etoroSnapshot : null,
+        connection: etoroConnection() } });
     });
     await page.goto("/investment");
     const etoro = page.getByRole("region", { name: "eToro portfolio" });
@@ -191,7 +575,8 @@ test.describe("eToro within the portfolio", () => {
         }
         return route.fulfill({ json: status });
       }
-      return route.fulfill({ json: { state, last_status: lastStatus, snapshot: null } });
+      return route.fulfill({ json: { state, last_status: lastStatus, snapshot: null,
+        connection: etoroConnection(undefined, revoked) } });
     });
     await page.goto("/investment");
     const etoro = page.getByRole("region", { name: "eToro portfolio" });
@@ -208,6 +593,180 @@ test.describe("eToro within the portfolio", () => {
     expect(refreshWasDisabled).toBeTruthy();
   });
 
+  for (const remount of [false, true]) test(
+    `revocation remains available during refresh${remount ? " after remount" : ""} and ignores its late result`, async ({ page }) => {
+    let revoked = false;
+    let startRefresh;
+    let releaseRefresh;
+    let finishRefresh;
+    const started = new Promise(resolve => { startRefresh = resolve; });
+    const released = new Promise(resolve => { releaseRefresh = resolve; });
+    const finished = new Promise(resolve => { finishRefresh = resolve; });
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "POST") {
+        writes.push(path);
+        if (path === "refresh") {
+          startRefresh();
+          await released;
+          await route.fulfill({ json: { state: "refreshed" } });
+          finishRefresh();
+          return;
+        }
+        expect(path).toBe("revoke");
+        revoked = true;
+        return route.fulfill({ json: { state: "revoked" } });
+      }
+      const state = revoked ? "revoked" : "startup_refresh_enabled";
+      const lastStatus = revoked ? "startup_refresh_revoked" : "success";
+      const connection = etoroConnection(undefined, revoked);
+      return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state, last_status: lastStatus,
+        snapshot_available: true, connection,
+      } : { state, last_status: lastStatus, snapshot: etoroSnapshot, connection } });
+    });
+
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    const details = etoro.locator("details").filter({ has: page.getByText("About eToro data and permissions") });
+    await expect(etoro).toContainText("separate from your journal and its totals");
+    await expect(details).not.toHaveAttribute("open");
+    await expect(details.getByText(/Instrument types and individual position legs/)).toBeHidden();
+    await details.locator("summary").click();
+    await expect(details.getByText(/Instrument types and individual position legs/)).toBeVisible();
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Refresh once now" }).click();
+    await started;
+    if (remount) {
+      await page.getByRole("navigation", { name: "Portfolio navigation" }).getByRole("link", { name: "Help" }).click();
+      await page.getByRole("navigation", { name: "Portfolio navigation" }).getByRole("link", { name: "Your portfolio" }).click();
+      await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+    }
+    const revoke = etoro.getByRole("button", { name: "Revoke startup refresh" });
+    await expect(revoke).toBeEnabled();
+    page.once("dialog", dialog => dialog.accept());
+    await revoke.click();
+    await expect(etoro).toContainText("Startup permission is revoked");
+    releaseRefresh();
+    await finished;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(etoro).toContainText("Startup permission is revoked");
+    await expect(etoro).toContainText("Refresh is still unverified");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    expect(writes).toEqual(["refresh", "revoke"]);
+  });
+
+  for (const { connected, failRevoke } of [
+    { connected: true, failRevoke: false },
+    { connected: false, failRevoke: false },
+    { connected: true, failRevoke: true },
+  ]) test(
+    `stopping a connection read ignores a late preview (${connected ? "connected" : "new connection"}${failRevoke ? ", revoke failed" : ""})`, async ({ page }) => {
+    let revoked = false;
+    let startRead;
+    let releaseRead;
+    let finishRead;
+    const started = new Promise(resolve => { startRead = resolve; });
+    const released = new Promise(resolve => { releaseRead = resolve; });
+    const finished = new Promise(resolve => { finishRead = resolve; });
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "POST") {
+        writes.push(path);
+        if (path === "connect") {
+          startRead();
+          await released;
+          await route.fulfill({ json: { preview_id: "late-preview",
+            expires_at: "2099-01-01T00:00:00Z", snapshot: etoroSnapshot } });
+          finishRead();
+          return;
+        }
+        expect(path).toBe("revoke");
+        if (failRevoke) return route.fulfill({ status: 403, json: { error: "authorization_required" } });
+        revoked = true;
+        return route.fulfill({ json: { state: connected ? "revoked" : "not_connected" } });
+      }
+      const state = connected ? revoked ? "revoked" : "startup_refresh_enabled" : "not_connected";
+      const lastStatus = connected ? revoked ? "startup_refresh_revoked" : "success" : "not_collected";
+      const connection = connected ? etoroConnection(undefined, revoked) : null;
+      return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state, last_status: lastStatus,
+        snapshot_available: connected, connection,
+      } : { state, last_status: lastStatus, snapshot: connected ? etoroSnapshot : null, connection } });
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await etoro.getByText(connected ? "Update eToro connection" : "Connect eToro", { exact: true }).click();
+    await etoro.getByLabel("eToro environment").selectOption("demo");
+    await etoro.getByLabel("I verified this key has Read-only permission.").check();
+    await etoro.getByLabel("I verified my account is eligible for this API use.").check();
+    await etoro.getByLabel(/I verified rights for local display/).check();
+    await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
+    await started;
+    const revoke = etoro.getByRole("button", { name: connected ? "Revoke startup refresh" : "Stop connection read" });
+    await expect(revoke).toBeEnabled();
+    page.once("dialog", dialog => dialog.accept());
+    await revoke.click();
+    const expectedStatus = failRevoke ? "Revocation could not be verified"
+      : connected ? "Startup permission is revoked" : "Not connected";
+    await expect(etoro).toContainText(expectedStatus);
+    releaseRead();
+    await finished;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(etoro).toContainText(expectedStatus);
+    await expect(etoro).toContainText("The connection read is still unverified");
+    await expect(etoro.getByRole("button", { name: "Confirm connection and account" })).toHaveCount(0);
+    expect(writes).toEqual(["connect", "revoke"]);
+  });
+
+  test("remounting during revocation keeps its outcome unverified", async ({ page }) => {
+    let revoked = false;
+    let startRevoke;
+    let releaseRevoke;
+    let finishRevoke;
+    const started = new Promise(resolve => { startRevoke = resolve; });
+    const released = new Promise(resolve => { releaseRevoke = resolve; });
+    const finished = new Promise(resolve => { finishRevoke = resolve; });
+    await page.route("**/api/investment/v1/etoro/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "POST") {
+        expect(path).toBe("revoke");
+        startRevoke();
+        await released;
+        revoked = true;
+        await route.fulfill({ json: { state: "revoked" } });
+        finishRevoke();
+        return;
+      }
+      const state = revoked ? "revoked" : "startup_refresh_enabled";
+      const lastStatus = revoked ? "startup_refresh_revoked" : "success";
+      const connection = etoroConnection(undefined, revoked);
+      return route.fulfill({ json: path === "session" ? {
+        enabled: true, csrf: "synthetic-csrf", state, last_status: lastStatus,
+        snapshot_available: true, connection,
+      } : { state, last_status: lastStatus, snapshot: etoroSnapshot, connection } });
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
+    await started;
+    const navigation = page.getByRole("navigation", { name: "Portfolio navigation" });
+    await navigation.getByRole("link", { name: "Help" }).click();
+    await navigation.getByRole("link", { name: "Your portfolio" }).click();
+    await expect(etoro).toContainText("Revocation or a read is still unverified");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    releaseRevoke();
+    await finished;
+    await expect(etoro).toContainText("Revocation or a read is still unverified");
+  });
+
   test("connecting requires explicit consent and account confirmation", async ({ page }) => {
     let connected = false;
     let revoked = false;
@@ -216,12 +775,12 @@ test.describe("eToro within the portfolio", () => {
       const request = route.request();
       const path = new URL(request.url()).pathname.split("/").at(-1);
       if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
-        enabled: true, csrf: "synthetic-csrf", state: revoked ? "revoked" : connected ? "startup_refresh_enabled" : "not_connected",
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: revoked ? "revoked" : connected ? "startup_refresh_enabled" : "not_connected",
         last_status: revoked ? "startup_refresh_revoked" : connected ? "success" : "not_collected", snapshot_available: connected,
-        connection: connected ? { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
-          revoked_at: null, revision: 1 } : null,
+        connection: connected ? etoroConnection(undefined, revoked) : null,
       } : { state: revoked ? "revoked" : connected ? "startup_refresh_enabled" : "not_connected",
-        last_status: revoked ? "startup_refresh_revoked" : connected ? "success" : "not_collected", snapshot: connected ? etoroSnapshot : null } });
+        last_status: revoked ? "startup_refresh_revoked" : connected ? "success" : "not_collected",
+        snapshot: connected ? etoroSnapshot : null, connection: connected ? etoroConnection(undefined, revoked) : null } });
       writes.push({ path, body: request.postDataJSON(), csrf: request.headers()["x-csrf-token"] });
       if (path === "connect") return route.fulfill({ json: { preview_id: "synthetic-preview",
         expires_at: "2099-01-01T00:00:00Z", snapshot: etoroSnapshot } });
@@ -260,23 +819,152 @@ test.describe("eToro within the portfolio", () => {
     expect(writes.map(item => item.path)).toEqual(["connect", "confirm", "revoke"]);
   });
 
-  for (const failure of ["lost confirmation response", "unavailable status after confirmation"]) {
+  test("discarding a preview resets startup consent before using a broader key", async ({ page }) => {
+    let connected = false;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: connected ? "connected" : "not_connected",
+        last_status: connected ? "success" : "not_collected", snapshot_available: connected,
+        connection: connected ? etoroConnection(null) : null,
+      } : { state: connected ? "connected" : "not_connected",
+        last_status: connected ? "success" : "not_collected", snapshot: connected ? etoroSnapshot : null,
+        connection: connected ? etoroConnection(null) : null } });
+      writes.push({ path, body: request.postDataJSON() });
+      if (path === "connect") return route.fulfill({ json: { preview_id: "synthetic-preview",
+        expires_at: "2099-01-01T00:00:00Z", snapshot: etoroSnapshot } });
+      if (path === "discard") return route.fulfill({ json: { discarded: true } });
+      if (path === "confirm") { connected = true; return route.fulfill({ json: { state: "connected" } }); }
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await etoro.getByText("Connect eToro", { exact: true }).click();
+    await etoro.getByLabel("eToro environment").selectOption("demo");
+    await etoro.getByLabel("I verified this key has Read-only permission.").check();
+    await etoro.getByLabel("I verified my account is eligible for this API use.").check();
+    await etoro.getByLabel(/I verified rights for local display/).check();
+    await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
+    await etoro.getByLabel("Allow one automatic read at each server startup while permission is active.").check();
+    await etoro.getByRole("button", { name: "Discard preview" }).click();
+    await etoro.getByText("Connect eToro", { exact: true }).click();
+    await etoro.getByLabel(/I accept the risk if this credential/).check();
+    await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
+    const startup = etoro.getByLabel("Allow one automatic read at each server startup while permission is active.");
+    await expect(startup).toBeDisabled();
+    await expect(startup).not.toBeChecked();
+    await etoro.getByLabel("I verified account ID 12345 is the eToro account I selected.").check();
+    await etoro.getByRole("button", { name: "Confirm connection and account" }).click();
+    await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+    expect(writes.map(item => item.path)).toEqual(["connect", "discard", "connect", "confirm"]);
+    expect(writes[2].body).toMatchObject({ read_scope_verified: false, trade_capable_key_risk_accepted: true });
+    expect(writes[3].body).toMatchObject({ startup_refresh: false, refresh_days: null });
+  });
+
+  test("revocation does not resolve an uncertain connection confirmation", async ({ page }) => {
+    let revoked = false;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: revoked ? "revoked" : "startup_refresh_enabled",
+        last_status: revoked ? "startup_refresh_revoked" : "success", snapshot_available: true,
+        connection: etoroConnection(undefined, revoked),
+      } : { state: revoked ? "revoked" : "startup_refresh_enabled",
+        last_status: revoked ? "startup_refresh_revoked" : "success", snapshot: etoroSnapshot,
+        connection: etoroConnection(undefined, revoked) } });
+      writes.push(path);
+      if (path === "connect") return route.fulfill({ json: { preview_id: "synthetic-preview",
+        expires_at: "2099-01-01T00:00:00Z", snapshot: etoroSnapshot } });
+      if (path === "revoke") { revoked = true; return route.fulfill({ json: { state: "revoked" } }); }
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await etoro.getByText("Update eToro connection", { exact: true }).click();
+    await etoro.getByLabel("eToro environment").selectOption("demo");
+    await etoro.getByLabel("I verified this key has Read-only permission.").check();
+    await etoro.getByLabel("I verified my account is eligible for this API use.").check();
+    await etoro.getByLabel(/I verified rights for local display/).check();
+    await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
+    await etoro.getByLabel("I verified account ID 12345 is the eToro account I selected.").check();
+    await etoro.getByRole("button", { name: "Confirm connection and account" }).click();
+    await expect(etoro).toContainText("Confirmation is still unverified");
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
+    await expect(etoro).toContainText("Startup permission is revoked");
+    await expect(etoro).toContainText("Confirmation is still unverified");
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    expect(writes).toEqual(["connect", "confirm", "revoke"]);
+  });
+
+  test("unchanged status does not resolve a confirmation that may still be in flight", async ({ page }) => {
+    let connected = false;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: connected ? "connected" : "not_connected",
+        last_status: connected ? "success" : "not_collected", snapshot_available: connected,
+        connection: connected ? { environment: "demo", account_id: 12345,
+          expires_at: null, revoked_at: null, revision: 1 } : null,
+      } : { state: connected ? "connected" : "not_connected",
+        last_status: connected ? "success" : "not_collected", snapshot: connected ? etoroSnapshot : null,
+        connection: connected ? etoroConnection(null) : null } });
+      writes.push(path);
+      if (path === "connect") return route.fulfill({ json: { preview_id: "synthetic-preview",
+        expires_at: "2099-01-01T00:00:00Z", snapshot: etoroSnapshot } });
+      if (path === "confirm") return route.abort();
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await etoro.getByText("Connect eToro", { exact: true }).click();
+    await etoro.getByLabel("eToro environment").selectOption("demo");
+    await etoro.getByLabel(/I accept the risk if this credential/).check();
+    await etoro.getByLabel("I verified my account is eligible for this API use.").check();
+    await etoro.getByLabel(/I verified rights for local display/).check();
+    await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
+    await etoro.getByLabel("I verified account ID 12345 is the eToro account I selected.").check();
+    await etoro.getByRole("button", { name: "Confirm connection and account" }).click();
+    await expect(etoro).toContainText("may already be saved");
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro).toContainText("Confirmation is still unverified");
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    expect(writes).toEqual(["connect", "confirm"]);
+    connected = true;
+    await etoro.getByRole("button", { name: "Retry status" }).click();
+    await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+    await expect(etoro).toContainText("Confirmation is still unverified");
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    expect(writes).toEqual(["connect", "confirm"]);
+  });
+
+  for (const failure of ["lost confirmation response", "server error after confirmation",
+    "invalid confirmation response", "unavailable status after confirmation"]) {
     test(`one-time broader-key consent handles ${failure} without repeating a read`, async ({ page }) => {
       let connected = false;
       let statusUnavailable = false;
+      let portfolioUnavailable = false;
       const writes = [];
       await page.route("**/api/investment/v1/etoro/**", route => {
         const request = route.request();
         const path = new URL(request.url()).pathname.split("/").at(-1);
         if (request.method() === "GET") {
-          if (statusUnavailable) return route.fulfill({ status: 503, json: { error: "unavailable" } });
+          if (statusUnavailable || (portfolioUnavailable && path === "portfolio"))
+            return route.fulfill({ status: 503, json: { error: "unavailable" } });
           return route.fulfill({ json: path === "session" ? {
-            enabled: true, csrf: "synthetic-csrf", state: connected ? "connected" : "not_connected",
+            enabled: true, read_generation: 0, csrf: "synthetic-csrf", state: connected ? "connected" : "not_connected",
             last_status: connected ? "success" : "not_collected", snapshot_available: connected,
             connection: connected ? { environment: "demo", account_id: 12345,
               expires_at: null, revoked_at: null, revision: 1 } : null,
           } : { state: connected ? "connected" : "not_connected",
-            last_status: connected ? "success" : "not_collected", snapshot: connected ? etoroSnapshot : null } });
+            last_status: connected ? "success" : "not_collected", snapshot: connected ? etoroSnapshot : null,
+            connection: connected ? etoroConnection(null) : null } });
         }
         writes.push({ path, body: request.postDataJSON() });
         if (path === "connect") return route.fulfill({ json: { preview_id: "synthetic-preview",
@@ -284,6 +972,11 @@ test.describe("eToro within the portfolio", () => {
         if (path === "confirm") {
           connected = true;
           if (failure === "lost confirmation response") return route.abort();
+          if (failure === "server error after confirmation") {
+            portfolioUnavailable = true;
+            return route.fulfill({ status: 503, json: { error: "unavailable" } });
+          }
+          if (failure === "invalid confirmation response") return route.fulfill({ json: { state: "not_connected" } });
           statusUnavailable = true;
           return route.fulfill({ json: { state: "connected" } });
         }
@@ -301,13 +994,20 @@ test.describe("eToro within the portfolio", () => {
       await expect(etoro).toContainText("Automatic refresh is unavailable unless Read-only key scope is verified");
       await etoro.getByLabel("I verified account ID 12345 is the eToro account I selected.").check();
       await etoro.getByRole("button", { name: "Confirm connection and account" }).click();
-      await expect(etoro.getByRole("alert")).toContainText(failure === "lost confirmation response"
+      await expect(etoro.locator("[role=alert]").first()).toContainText(failure !== "unavailable status after confirmation"
         ? "may already be saved" : "The connection was saved");
       await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
       expect(writes.map(item => item.path)).toEqual(["connect", "confirm"]);
       expect(writes[1].body).toEqual({ preview_id: "synthetic-preview", account_binding_confirmed: true,
         startup_refresh: false, refresh_days: null });
       statusUnavailable = false;
+      if (portfolioUnavailable) {
+        await etoro.getByRole("button", { name: "Retry status" }).click();
+        await expect(etoro).toContainText("Confirmation is still unverified");
+        await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+        expect(writes.map(item => item.path)).toEqual(["connect", "confirm"]);
+        portfolioUnavailable = false;
+      }
       await etoro.getByRole("button", { name: "Retry status" }).click();
       await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
       expect(writes.map(item => item.path)).toEqual(["connect", "confirm"]);
@@ -380,7 +1080,9 @@ test("portfolio shortcuts prioritize accounts and keep optional details availabl
   await expect(sections.getByRole("link", { name: "Accounts and investments" })).toHaveAttribute("href", "#investment-account-summary");
   await expect(page.getByRole("region", { name: "Accounts and investments" })).toBeVisible();
   await expect(page.getByText(/Latest journal entries, not live balances/)).toBeVisible();
-  const priceDates = page.locator(".portfolio-summary details");
+  const priceDates = page.locator(".portfolio-summary details").filter({
+    has: page.getByText("Price dates and source availability", { exact: true }),
+  });
   await priceDates.locator("summary").click();
   await expect(priceDates.getByRole("table")).toContainText("Price applies at");
   await expect(priceDates.getByRole("table")).toContainText("Source available from");
@@ -693,6 +1395,10 @@ test("next steps reflect incomplete evidence and historical differences without 
   await page.locator("#backup-recovery > summary").click();
   await expect(page.locator("#backup-recovery")).toHaveAttribute("open", "");
   await expect(page.getByText(/Backups are not automatic/)).toBeVisible();
+  await page.getByText("Steps for a source checkout", { exact: true }).click();
+  await expect(page.locator("#backup-recovery pre"))
+    .toContainText("--database .\\local-investment\\investment.sqlite3");
+  await expect(page.getByText(/assumes .*backups.* already exists/)).toBeVisible();
 });
 
 test("cash evidence overview labels replay history and surfaces correction limits", async ({ page }) => {
@@ -1081,8 +1787,8 @@ test("opening records show since-baseline value without inventing lifetime gain"
     previewEvent = request.event;
     await route.fulfill({ json: {
       preview_id: `preview-${request.event.id}`, revision: report.revision,
-      event: request.event, before: { equity_gbp: "2000" },
-      after: { equity_gbp: "2000" }, expires_at: "2026-01-05T12:05:00Z",
+      event: request.event, before: { ...report, equity_gbp: "2000" },
+      after: { ...report, equity_gbp: "2000", revision: report.revision + 1 }, expires_at: "2026-01-05T12:05:00Z",
     } });
   });
   await page.route("**/api/investment/v1/recording/confirm", async route => {
@@ -1220,6 +1926,8 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByText(/Lifetime gain and prior cost basis are unavailable/)).toBeVisible();
   const attribution = page.getByRole("region", { name: "Recorded fees and income" });
   await expect(attribution.getByText("Recorded transaction fees")).toBeVisible();
+  await expect(attribution).toContainText("not an all-in cost total");
+  await expect(attribution).toContainText("spread or slippage are not separately measured");
   await expect(attribution.getByText("Recorded interest")).toBeVisible();
   await expect(attribution.getByText("Recorded dividends")).toBeVisible();
   await expect(attribution.getByText("Recorded income total")).toBeVisible();
@@ -1242,7 +1950,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByText(/Transfers between included accounts do not change net external contributions/)).toBeVisible();
   await page.getByText("Cash observations and savings details", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Reported savings-account terms" })).toBeVisible();
-  await expect(page.getByText(/4.25% AER/)).toBeVisible();
+  await expect(page.locator("#investment-accounts").getByText(/4.25% AER/)).toBeVisible();
   await expect(page.getByText(/not current provider verification or an interest-accrual input/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Observed cash balances" })).toBeVisible();
   const cashHistory = page.getByLabel("Cash reconciliation history").getByRole("table");
@@ -1293,7 +2001,9 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Incomplete; full total unavailable.");
   await expect(page.getByLabel("Recorded investment holdings", { exact: true })).toContainText("Unavailable");
-  const priceDates = page.locator(".portfolio-summary details");
+  const priceDates = page.locator(".portfolio-summary details").filter({
+    has: page.getByText("Price dates and source availability", { exact: true }),
+  });
   await priceDates.locator("summary").click();
   await expect(priceDates).toContainText("No recorded price");
   await expect(priceDates).toContainText("Not available");
