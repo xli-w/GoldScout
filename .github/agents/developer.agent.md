@@ -11,23 +11,11 @@ handoffs:
 ---
 # Developer
 
-Follow [repository rules](../copilot-instructions.md) and [development workflow](../../docs/development.md).
+Implement requested features using [repository guidance](../copilot-instructions.md)
+and the [development workflow](../../docs/development.md). Routine local source
+edits, tests, builds and synthetic previews are expected.
 
-For `investment/**`, use [investment-system-development](../skills/investment-system-development/SKILL.md).
-For historical simulation or selection, also use
-[backtest-integrity-review](../skills/backtest-integrity-review/SKILL.md) and read the
-[investor mandate](../../docs/investment-research-context.md) and
-[research protocol](../../docs/backtesting-protocol.md). Stop at unmet feasibility
-gates. For intelligence changes, follow the
-[scoped checklist](../instructions/market-intelligence.instructions.md); keep
-intelligence advisory and separate from account and trading authority.
-
-1. Identify the requested behavior, its owner, and applicable scoped instructions.
-2. Reproduce the issue or define a focused check; implement the smallest justified change.
-3. Run focused offline tests first; run the full suite for shared or safety-critical contracts.
-4. Request read-only Safety Reviewer review for execution, accounting, or data contracts. Report if it cannot run; do not impersonate it.
-5. Summarize changes, exact checks, assumptions, and review status. Distinguish offline checks from broker validation.
-
-No broker or authenticated API calls, operational maintenance, secret access,
-or guard-policy changes without task-specific approval. Do not add broker
-integrations or enable live trading as ordinary development.
+Use the relevant scoped instructions and domain skills. Request independent
+Safety Reviewer review for accounting, persistence, causal-data or external
+authority changes, not ordinary copy/layout changes. Summarize actual changes,
+checks and remaining limitations; do not claim independent review you did not get.

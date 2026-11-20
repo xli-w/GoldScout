@@ -2,8 +2,14 @@
 
 Read [repository guidance](../.github/copilot-instructions.md),
 [safety invariants](safety-invariants.md) and the [README](../README.md).
-**Developer** implements; **Safety Reviewer** performs independent read-only
-review and cannot edit, execute or delegate execution.
+Routine source edits, local tests/builds and synthetic previews are expected
+development work. Implement requested local features without treating every
+change as an external account action. "No execution runtime" describes the
+product: it does not prohibit running development tools.
+
+**Developer** implements. **Safety Reviewer** independently reviews changes to
+accounting, persistence, causal data or external authority with read/search
+tools only; ordinary copy/layout changes do not require that review.
 
 ## Current owners
 
@@ -35,7 +41,8 @@ review and cannot edit, execute or delegate execution.
    Never access operational databases, receipts, snapshots, logs or credentials.
 4. Make the smallest justified change, run the focused offline slice immediately,
    then adjacent checks. Shared accounting/data/configuration/tooling contracts
-   require full offline regression and independent read-only Safety Reviewer.
+   require full offline regression. Changes to accounting, persistence, causal
+   data or external authority also require independent read-only Safety Reviewer.
 5. Update related docs, validate customization and inspect the diff. Report exact
    checks/results, assumptions, review status and absent broker validation.
 
@@ -85,11 +92,20 @@ Offline success certifies neither external-provider semantics nor performance.
 ## Permissions and hooks
 
 The [hook](../.github/hooks/safety.json) invokes
-[the policy script](../scripts/agent_guard.ps1), denying recognized secret and
-operational paths including the default `local-investment/` workspace and asking
-approval for execution/external interaction and safety-policy edits. Invalid
-payloads fail closed. Keep its aliases, move-target inspection and nested
-parallel-tool handling covered by synthetic tests.
+[the policy script](../scripts/agent_guard.ps1). Recognized, single-command local
+checks, frontend builds and synthetic demos can proceed without repository-level
+approval when bound to this checkout. Other execution, external interaction and
+policy edits require approval. Secret/operational paths including
+`local-investment/` are denied; malformed payloads fail closed.
+
+The bounded command forms include the offline runner (with an optional test
+pattern), customization validator, PowerShell guard tests, frontend build,
+and `python -m investment demo` or `python -m dashboard --demo`. Synthetic
+dashboard previews may add `--api-only`, `--intelligence-demo` and a port.
+Shell composition, arbitrary Python snippets and unrecognized options are not
+covered by this permission. Browser tests still need approval and an explicitly
+verified synthetic server: their configured/default URL could otherwise point
+at operational data. Hook approvals do not override editor/host policy.
 
 Approve only the specific safe command. No broker/authenticated calls,
 operational maintenance, secret access or guard-policy changes without separate
@@ -99,8 +115,10 @@ instructions do not replace filesystem permissions, credential separation or
 OS egress control.
 Never disable a guard or relax assertions to make a test pass.
 
-Keep agent names, read-only reviewer permissions, workflow-skill discovery,
-hook and CI guards intact. Run customization validation after YAML/link/tool
+Keep read-only reviewer permissions, workflow-skill discovery and CI isolation.
+Test approved hook/policy changes with synthetic requests, including nested
+calls, aliases, moves and retained denial/approval cases.
+Run customization validation after YAML/link/tool
 metadata changes. Static validation cannot prove editor discovery or hook
 activation; inspect VS Code customization diagnostics and smoke-check after
 reload. Record significant architecture decisions under [decisions](decisions/0000-template.md).

@@ -240,6 +240,21 @@ test("disabled analysis controls explain the configuration lock",async({page})=>
   await expect(page.getByRole("checkbox",{name:"Market intelligence",exact:true})).toBeDisabled();
 });
 
+test("checked collection preferences are inactive until the master switch is applied",async({page})=>{
+  const {snapshot}=await mockIntelligence(page,["demo"]);
+  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await expect(page.getByRole("checkbox",{name:"Calendar collection"})).toBeChecked();
+  await expect(page.getByRole("checkbox",{name:"News collection"})).toBeChecked();
+  await expect(page.getByText("Calendar and news selections are inactive while Market intelligence is off in applied settings.")).toBeVisible();
+  await expect(page.getByLabel("Analysis settings status")).toContainText("Market intelligence off");
+  const intro=page.getByRole("region",{name:"Advisory-only boundary"});
+  await expect(intro.getByRole("region",{name:"Current source coverage"})).toContainText("UK/global calendars and issuer coverage are unverified");
+  await expect(intro.getByRole("region",{name:"Source status"})).toContainText("service activity is unknown");
+  snapshot.settings.enabled=true;
+  await page.reload();
+  await expect(page.getByText("Calendar and news selections are inactive while Market intelligence is off in applied settings.")).toHaveCount(0);
+});
+
 test("configured AI profile is used without a provider dropdown",async({page})=>{
   const {requests}=await mockIntelligence(page,["demo"]);
   await page.goto(new URL("/intelligence",mockedFrontendURL).href);

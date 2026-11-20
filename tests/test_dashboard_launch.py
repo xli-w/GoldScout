@@ -94,7 +94,7 @@ class DashboardLaunchTests(unittest.TestCase):
             create_app(static_directory=self.root / "missing")
         self.assertIsNotNone(create_app(serve_frontend=False))
 
-    def test_investment_guide_direct_link_serves_frontend(self):
+    def test_direct_and_legacy_links_serve_frontend(self):
         try:
             from fastapi.testclient import TestClient
             from dashboard.app import create_app
@@ -105,9 +105,11 @@ class DashboardLaunchTests(unittest.TestCase):
         with patch("dashboard.app.verify_frontend", return_value=self.static):
             app = create_app(static_directory=self.static)
         with TestClient(app, base_url="http://localhost", backend_options={"loop_factory": MemoryEventLoop}) as client:
-            response = client.get("/investment-guide")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('<script src="/assets/app.js"></script>', response.text)
+            for path in ("/investment-guide", "/etoro-portfolio"):
+                with self.subTest(path=path):
+                    response = client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn('<script src="/assets/app.js"></script>', response.text)
 
     def test_installed_build_guidance_does_not_require_checkout(self):
         with patch("dashboard.assets.__file__", str(self.root / "package" / "assets.py")):
@@ -146,7 +148,7 @@ class DashboardLaunchTests(unittest.TestCase):
         self.assertEqual(factory.call_args.kwargs["setup_workspace"], workspace)
         self.assertTrue(factory.call_args.kwargs["setup_enabled"])
         self.assertIn("/setup", output.getvalue())
-        self.assertFalse(factory.call_args.kwargs["investment_recording_enabled"])
+        self.assertTrue(factory.call_args.kwargs["investment_recording_enabled"])
 
     def test_explicit_workspace_is_mutually_exclusive_with_other_sources(self):
         for flag in ("--demo", "--investment-database"):
@@ -187,6 +189,7 @@ class DashboardLaunchTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()) as output:
                 main(["--investment-database", str(self.root / "investment.sqlite3"), "--api-only"])
         self.assertEqual(factory.call_args.kwargs["investment_database"], self.root / "investment.sqlite3")
+        self.assertTrue(factory.call_args.kwargs["investment_recording_enabled"])
         self.assertNotIn("database", factory.call_args.kwargs)
         self.assertIn("/investment", output.getvalue())
         self.assertFalse((self.root / "investment.sqlite3").exists())
@@ -204,8 +207,61 @@ class DashboardLaunchTests(unittest.TestCase):
                 main(args)
         self.assertEqual(factory.call_args.kwargs["monitoring_reviews"], self.root / "reviews.sqlite3")
         self.assertTrue(factory.call_args.kwargs["monitoring_workflow_enabled"])
-        self.assertFalse(factory.call_args.kwargs["investment_recording_enabled"])
+        self.assertTrue(factory.call_args.kwargs["investment_recording_enabled"])
         self.assertFalse((self.root / "investment.sqlite3").exists())
+
+    def test_journal_mode_flags_and_first_run_setup_permissions(self):
+        for flags, recording, setup in (
+                ([], True, True),
+                (["--investment-recording"], True, True),
+                (["--investment-read-only"], False, False)):
+            workspace = self.root / "private"
+            factory = Mock(return_value="setup-app")
+            with self.subTest(flags=flags), patch.dict(sys.modules, {
+                    "uvicorn": SimpleNamespace(run=Mock()),
+                    "dashboard.app": SimpleNamespace(create_app=factory)}):
+                with redirect_stdout(io.StringIO()):
+                    main(["--workspace", str(workspace), "--api-only", *flags])
+            self.assertEqual(factory.call_args.kwargs["investment_recording_enabled"], recording)
+            self.assertEqual(factory.call_args.kwargs["setup_enabled"], setup)
+            self.assertFalse(workspace.exists())
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(["--investment-read-only", "--investment-recording"])
+
+    def test_existing_journal_launch_modes_have_real_recording_behavior(self):
+        from fastapi.testclient import TestClient
+        from dashboard.app import create_app
+        from investment.bootstrap import workspace_status
+        from investment.store import initialize, import_events
+        from test_dashboard_api import MemoryEventLoop
+        from test_investment_opening import NOW, opening, profile
+
+        workspace = self.root / "private"
+        workspace.mkdir()
+        database = workspace / "investment.sqlite3"
+        initialize(database, profile(), NOW)
+        import_events(database, [opening()], NOW)
+        original = database.read_bytes()
+        for source in (["--workspace", str(workspace)],
+                       ["--investment-database", str(database)]):
+            for flags, enabled in (([], True), (["--investment-recording"], True),
+                                   (["--investment-read-only"], False)):
+                def serve(app, **kwargs):
+                    with TestClient(app, base_url="http://localhost",
+                                    backend_options={"loop_factory": MemoryEventLoop}) as client:
+                        session = client.get("/api/investment/v1/recording/session")
+                        self.assertEqual(session.status_code, 200, session.text)
+                        self.assertEqual(session.json()["enabled"], enabled)
+                        self.assertFalse(client.get("/api/investment/v1/setup/session").json()["enabled"])
+                        self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 200)
+
+                with self.subTest(source=source[0], flags=flags), patch.dict(
+                        sys.modules, {"uvicorn": SimpleNamespace(run=serve)}):
+                    with patch("dashboard.app.create_app", side_effect=lambda **kw: create_app(clock=lambda: NOW, **kw)), \
+                            patch("investment.bootstrap.workspace_status", side_effect=lambda path, now=None: workspace_status(path, NOW)), \
+                            redirect_stdout(io.StringIO()):
+                        main([*source, "--api-only", *flags])
+        self.assertEqual(database.read_bytes(), original)
 
 
 if __name__ == "__main__":

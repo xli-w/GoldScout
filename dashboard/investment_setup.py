@@ -48,6 +48,26 @@ class InvestmentSetup:
     def authorize(self, token, csrf, now):
         return bool(self.security and self.security.authorize(token, csrf, now))
 
+    def recording_binding(self, receipt, now):
+        """Pin a ready journal and verify its original opening against completion."""
+        from investment.bootstrap import _matches, _read
+
+        database = self.workspace / "investment.sqlite3"
+
+        def identity():
+            resolved = database.resolve(strict=True)
+            info = resolved.stat()
+            return str(resolved), info.st_dev, info.st_ino
+
+        bound = identity()
+        if self.status(now)["state"] != "ready":
+            raise InvestmentError("Workspace completion is unavailable")
+        spec, events, _, _ = _read(database, now)
+        _matches(spec, events, receipt)
+        if identity() != bound:
+            raise InvestmentError("Completed setup journal changed")
+        return bound
+
     def _remember(self, token, request_id, request_hash, value, now):
         preview_id = secrets.token_urlsafe(32)
         response = {

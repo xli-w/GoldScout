@@ -14,7 +14,9 @@ source clocks differ from read clocks; missing evidence is explicit; only
 allowlisted data reaches responses; errors do not leak paths, SQL or secrets;
 synthetic demos use isolated temporary storage.
 
-Setup and manual recording have separate opt-ins, same-origin/CSRF, bound
-previews and exact revision checks. They grant no trade authority. Loopback
+Normal local launches now permit manual recording after completed setup/recovery;
+`--investment-read-only` blocks journal setup and recording. The reusable app
+factory still defaults to recording disabled. Same-origin/CSRF, bound previews
+and exact revision checks remain. These changes grant no trade authority. Loopback
 binding is mandatory; browser defenses are not user authentication.
 Stable technical API/schema numbers are not separate products.

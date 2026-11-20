@@ -2,6 +2,41 @@ param([string]$InputJson)
 
 $ErrorActionPreference = 'Stop'
 
+function Test-RoutineDevelopmentCommand {
+    param($Payload, $InputObject)
+
+    $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    foreach ($directory in @($Payload.cwd, $InputObject.cwd, $InputObject.working_directory, $InputObject.workingDirectory)) {
+        if ($null -ne $directory -and [IO.Path]::GetFullPath([string]$directory) -ne $root) {
+            return $false
+        }
+    }
+    if ((Get-Location).Path -ne $root -or $InputObject.command -isnot [string]) {
+        return $false
+    }
+    $command = $InputObject.command
+    if ($command -match '[\r\n]') { return $false }
+    $command = $command.Trim()
+    $python = '(?:python(?:\.exe)?|py -3\.11|\.\\(?:\.venv|venv)\\Scripts\\python\.exe)'
+    $scriptPath = '(?:\.\\)?scripts[/\\]'
+    $pattern = '(?:test_[A-Za-z0-9_*?.-]+\.py|''test_[A-Za-z0-9_*?.-]+\.py''|"test_[A-Za-z0-9_*?.-]+\.py")'
+    $commands = @(
+        "$python --version",
+        "$python ${scriptPath}offline_tests\.py(?: --pattern $pattern)?",
+        "$python ${scriptPath}validate_ai_setup\.py",
+        "$python -m investment demo",
+        "$python -m dashboard --demo(?: --api-only)?(?: --intelligence-demo)?(?: --port (?:[1-9][0-9]{3,4}))?",
+        "(?:powershell|pwsh)(?: -NoProfile)?(?: -NonInteractive)? -File ${scriptPath}test_agent_guard\.ps1",
+        'npm --prefix frontend run build',
+        'git --no-pager status --short',
+        'git (?:--no-pager )?diff --check'
+    )
+    foreach ($allowed in $commands) {
+        if ($command -cmatch "\A(?:$allowed)\z") { return $true }
+    }
+    return $false
+}
+
 function Get-TargetPaths {
     param($Value)
 
@@ -35,7 +70,9 @@ function Get-PolicyDecision {
             if (-not $call.name -or $null -eq $call.args) {
                 return @('deny', 'Host tool call is missing its name or arguments.')
             }
-            $nested = Get-PolicyDecision ([PSCustomObject]@{ tool_name = $call.name; tool_input = $call.args })
+            $nested = Get-PolicyDecision ([PSCustomObject]@{
+                tool_name = $call.name; tool_input = $call.args; cwd = $Payload.cwd
+            })
             if ($nested[0] -eq 'deny') { return $nested }
             if ($nested[0] -eq 'ask') { $combined = $nested }
         }
@@ -64,7 +101,9 @@ function Get-PolicyDecision {
         }
         $combined = @('allow', 'Nested calls contain no recognized restricted operation.')
         foreach ($call in $inputObject.tool_uses) {
-            $nested = Get-PolicyDecision ([PSCustomObject]@{ tool_name = $call.recipient_name; tool_input = $call.parameters })
+            $nested = Get-PolicyDecision ([PSCustomObject]@{
+                tool_name = $call.recipient_name; tool_input = $call.parameters; cwd = $Payload.cwd
+            })
             if ($nested[0] -eq 'deny') { return $nested }
             if ($nested[0] -eq 'ask') { $combined = $nested }
         }
@@ -89,8 +128,12 @@ function Get-PolicyDecision {
     if ($policyApproval) {
         return @('ask', 'Changing safety policy or its enforcement requires explicit approval.')
     }
-    if ($tool -match '(?i)terminal|execute|run|create_and_run_task|install|debug|profil|notebook.*(cell|package)|click_element|type_in_page|navigate_page|open_browser_page|fetch_webpage|github_repo|github_text_search|searchExtensions') {
-        return @('ask', 'Execution or external interaction requires approval. Approve only the specific offline check; authenticated paper/live operations need separate task-specific authorization.')
+    if ($tool -match '(?i)(^|[.])(?:powershell|run_in_terminal|execute_command)$' -and
+            (Test-RoutineDevelopmentCommand $Payload $inputObject)) {
+        return @('allow', 'Recognized local development command in this checkout.')
+    }
+    if ($tool -match '(?i)powershell|terminal|execute|run|create_and_run_task|install|debug|profil|notebook.*(cell|package)|click_element|type_in_page|navigate_page|open_browser_page|fetch_webpage|github_repo|github_text_search|searchExtensions') {
+        return @('ask', 'Unrecognized execution or external interaction requires approval. Routine bounded local checks are allowed; authenticated paper/live operations need task-specific authorization.')
     }
     if ($tool -match '(?i)alpaca|broker|order|account') {
         return @('ask', 'Broker/account integration requires explicit task-specific operator approval.')

@@ -1,5 +1,320 @@
 import { expect, test } from "@playwright/test";
 
+const etoroSnapshot = {
+  schema_version: 1, environment: "demo", account_id: 12345,
+  source_as_of: "2026-07-01T10:00:00Z", account_currency: "USD",
+  account_totals: { accountAvailableCash: "100", accountFrozenCash: "0",
+    accountCurrentPnl: "5", accountTotalValue: "999999", accountTotalUsedMargin: "0",
+    accountBalance: "100" },
+  direct_positions: [
+    { instrument_id: 101, asset_currency: "USD", netUnits: "2", netContracts: "2",
+      netCurrentExposureAssetCurrency: "42", netCurrentExposureAccountCurrency: "42", avgLeverage: "1" },
+    { instrument_id: 102, asset_currency: "GBP", netUnits: "3", netContracts: "3",
+      netCurrentExposureAssetCurrency: "12", netCurrentExposureAccountCurrency: "16", avgLeverage: "1" },
+  ],
+  mirrors: [{ mirror_id: 7, positions: [
+    { instrument_id: 103, asset_currency: "JPY", netUnits: "1", netContracts: "1",
+      netCurrentExposureAssetCurrency: "500", netCurrentExposureAccountCurrency: "4", avgLeverage: "1" },
+  ] }],
+  coverage: {}, gbp_balance: { status: "provider_reported", amount_gbp: "77",
+    source_balance: "100", source_currency: "USD", display_currency: "GBP",
+    exchange_rate: "0.77", source_as_of: null, received_at: "2026-07-01T10:02:00Z" },
+};
+
+test.describe("eToro within the portfolio", () => {
+  test.use({ timezoneId: "Europe/London" });
+
+  test("provider evidence stays separate, shows UTC and each asset currency, and preserves old links", async ({ page }) => {
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      if (request.method() !== "GET") { writes.push(request.url()); return route.abort(); }
+      if (request.url().endsWith("/session")) return route.fulfill({ json: {
+        enabled: true, csrf: "synthetic-csrf", state: "connected",
+        last_status: "success", snapshot_available: true,
+        connection: { environment: "demo", account_id: 12345, expires_at: null, revoked_at: null, revision: 1 },
+      } });
+      return route.fulfill({ json: { state: "connected", last_status: "success", snapshot: etoroSnapshot } });
+    });
+
+    await page.goto("/investment");
+    const navigation = page.getByRole("navigation", { name: "Portfolio navigation" });
+    await expect(navigation.getByRole("link", { name: /eToro/ })).toHaveCount(0);
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toBeVisible();
+    await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+    await expect(etoro).toContainText("separate from your journal");
+    await expect(etoro).toContainText("Jul 1, 2026, 10:00:00 AM UTC");
+    await expect(etoro).toContainText("Jul 1, 2026, 10:02:00 AM UTC");
+    const direct = etoro.getByRole("region", { name: "Direct instrument aggregates" });
+    await expect(direct.getByRole("columnheader", { name: "Exposure (asset currency)" })).toBeVisible();
+    await expect(direct.getByRole("row").filter({ hasText: "101" })).toContainText("42 USD");
+    await expect(direct.getByRole("row").filter({ hasText: "102" })).toContainText("12 GBP");
+    await expect(etoro.getByRole("region", { name: "Instrument aggregates for copy relationship 7" })
+      .getByRole("row").filter({ hasText: "103" })).toContainText("500 JPY");
+    await expect(page.getByRole("region", { name: "Investment totals" })).not.toContainText("999999");
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+
+    await page.goto("/etoro-portfolio");
+    await expect(page).toHaveURL(/\/investment#investment-etoro$/);
+    await expect(etoro).toBeVisible();
+    expect(writes).toEqual([]);
+  });
+
+  test("connection status and controls remain available when journal data fails", async ({ page }) => {
+    let session = { enabled: false, csrf: null, state: "not_selected", last_status: "not_selected", snapshot_available: false };
+    let portfolio = { state: "not_selected", last_status: "not_selected", snapshot: null };
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      if (route.request().method() !== "GET") { writes.push(route.request().url()); return route.abort(); }
+      return route.fulfill({ json: route.request().url().endsWith("/session") ? session : portfolio });
+    });
+    await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ status: 503, json: { error: "unavailable" } }));
+    await page.goto("/investment");
+    await expect(page.getByRole("heading", { name: "Investment data unavailable" })).toBeVisible();
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toContainText("eToro is not enabled for this session");
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+
+    session = { enabled: true, csrf: "synthetic-csrf", state: "expired", last_status: "permission_expired",
+      snapshot_available: true, connection: { environment: "demo", account_id: 12345,
+        expires_at: "2026-06-30T10:00:00Z", revoked_at: null, revision: 1 } };
+    portfolio = { state: "expired", last_status: "permission_expired", snapshot: etoroSnapshot };
+    await page.reload();
+    await expect(etoro).toContainText("Startup permission expired");
+    await expect(etoro).toContainText("The displayed source snapshot is not refreshed");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
+    session.state = "revoked";
+    session.last_status = "startup_refresh_revoked";
+    portfolio.state = "revoked";
+    portfolio.last_status = "startup_refresh_revoked";
+    await page.reload();
+    await expect(etoro).toContainText("Startup permission is revoked");
+    session = { enabled: true, csrf: null, state: "startup_refresh_enabled", last_status: "success",
+      snapshot_available: true, connection: { environment: "demo", account_id: 12345,
+        expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 } };
+    portfolio = { state: "startup_refresh_enabled", last_status: "success", snapshot: etoroSnapshot };
+    await page.reload();
+    await expect(etoro.getByRole("alert")).toContainText("local session could not be verified");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
+    await expect(etoro.getByRole("button", { name: "Revoke startup refresh" })).toBeDisabled();
+    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+    expect(writes).toEqual([]);
+  });
+
+  test("a failed refresh leaves the previous read dated and its missing GBP balance explicit", async ({ page }) => {
+    let lastStatus = "success";
+    const writes = [];
+    const snapshot = { ...etoroSnapshot, gbp_balance: { status: "unavailable", error_code: "balance_unavailable",
+      source_as_of: null, received_at: "2026-07-01T10:02:00Z" } };
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, csrf: "synthetic-csrf", state: "startup_refresh_enabled",
+        last_status: lastStatus, snapshot_available: true,
+        connection: { environment: "demo", account_id: 12345,
+          expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 },
+      } : { state: "startup_refresh_enabled", last_status: lastStatus, snapshot } });
+      writes.push(path);
+      if (path === "refresh") {
+        lastStatus = "rate_limited";
+        return route.fulfill({ json: { state: "refresh_failed", error_code: "rate_limited" } });
+      }
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro.getByRole("region", { name: "GBP total unavailable" }))
+      .toContainText("No conversion was estimated. Reason: balance_unavailable.");
+    await etoro.getByRole("button", { name: "Refresh once now" }).click();
+    await expect(etoro).toContainText("Last refresh status: rate_limited");
+    await expect(etoro).toContainText("The displayed source snapshot is not refreshed");
+    await expect(etoro).toContainText("Jul 1, 2026, 10:00:00 AM UTC");
+    expect(writes).toEqual(["refresh"]);
+  });
+
+  test("a startup read becoming available between status requests is eventually shown", async ({ page }) => {
+    let portfolioReads = 0;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      if (route.request().method() !== "GET") { writes.push(route.request().url()); return route.abort(); }
+      if (route.request().url().endsWith("/session")) return route.fulfill({ json: {
+        enabled: true, csrf: "synthetic-csrf", state: "startup_refresh_enabled",
+        last_status: "success", snapshot_available: true,
+        connection: { environment: "demo", account_id: 12345,
+          expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 },
+      } });
+      portfolioReads++;
+      const available = portfolioReads > 2;
+      return route.fulfill({ json: { state: "startup_refresh_enabled",
+        last_status: available ? "success" : "not_collected", snapshot: available ? etoroSnapshot : null } });
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible({ timeout: 5000 });
+    await expect(etoro).not.toContainText("did not complete (success)");
+    expect(writes).toEqual([]);
+  });
+
+  test("a delayed startup status cannot undo a revocation", async ({ page }) => {
+    let revoked = false;
+    let sessionReads = 0;
+    let releaseOldStatus;
+    let oldStatusStarted;
+    let oldStatusFinished;
+    const started = new Promise(resolve => { oldStatusStarted = resolve; });
+    const released = new Promise(resolve => { releaseOldStatus = resolve; });
+    const finished = new Promise(resolve => { oldStatusFinished = resolve; });
+    await page.route("**/api/investment/v1/etoro/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "POST") {
+        expect(path).toBe("revoke");
+        revoked = true;
+        return route.fulfill({ json: { state: "revoked" } });
+      }
+      const state = revoked ? "revoked" : "startup_refresh_enabled";
+      const lastStatus = revoked ? "startup_refresh_revoked" : "not_collected";
+      if (path === "session") {
+        const status = { enabled: true, csrf: "synthetic-csrf", state, last_status: lastStatus,
+          snapshot_available: false, connection: { environment: "demo", account_id: 12345,
+            expires_at: "2099-01-01T00:00:00Z", revoked_at: revoked ? "2026-07-01T10:00:00Z" : null, revision: 1 } };
+        sessionReads++;
+        if (sessionReads === 3 && !revoked) {
+          oldStatusStarted();
+          await released;
+          await route.fulfill({ json: status });
+          oldStatusFinished();
+          return;
+        }
+        return route.fulfill({ json: status });
+      }
+      return route.fulfill({ json: { state, last_status: lastStatus, snapshot: null } });
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await started;
+    const refreshWasDisabled = await etoro.getByRole("button", { name: "Refresh once now" }).isDisabled();
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
+    await expect(etoro).toContainText("Startup permission is revoked");
+    releaseOldStatus();
+    await finished;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(etoro).toContainText("Startup permission is revoked");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
+    expect(refreshWasDisabled).toBeTruthy();
+  });
+
+  test("connecting requires explicit consent and account confirmation", async ({ page }) => {
+    let connected = false;
+    let revoked = false;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, csrf: "synthetic-csrf", state: revoked ? "revoked" : connected ? "startup_refresh_enabled" : "not_connected",
+        last_status: revoked ? "startup_refresh_revoked" : connected ? "success" : "not_collected", snapshot_available: connected,
+        connection: connected ? { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+          revoked_at: null, revision: 1 } : null,
+      } : { state: revoked ? "revoked" : connected ? "startup_refresh_enabled" : "not_connected",
+        last_status: revoked ? "startup_refresh_revoked" : connected ? "success" : "not_collected", snapshot: connected ? etoroSnapshot : null } });
+      writes.push({ path, body: request.postDataJSON(), csrf: request.headers()["x-csrf-token"] });
+      if (path === "connect") return route.fulfill({ json: { preview_id: "synthetic-preview",
+        expires_at: "2099-01-01T00:00:00Z", snapshot: etoroSnapshot } });
+      if (path === "confirm") { connected = true; return route.fulfill({ json: { state: "startup_refresh_enabled" } }); }
+      if (path === "revoke") { revoked = true; return route.fulfill({ json: { state: "revoked" } }); }
+      return route.abort();
+    });
+    await page.goto("/investment");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro).toContainText("Not connected");
+    await etoro.getByText("Connect eToro", { exact: true }).click();
+    await etoro.getByLabel("eToro environment").selectOption("demo");
+    await etoro.getByLabel("I verified this key has Read-only permission.").check();
+    await etoro.getByLabel("I verified my account is eligible for this API use.").check();
+    await etoro.getByLabel(/I verified rights for local display/).check();
+    expect(writes).toEqual([]);
+    await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
+    const confirm = etoro.getByRole("button", { name: "Confirm connection and account" });
+    await expect(confirm).toBeDisabled();
+    await etoro.getByLabel("I verified account ID 12345 is the eToro account I selected.").check();
+    await etoro.getByLabel("Allow one automatic read at each server startup while permission is active.").check();
+    await etoro.getByLabel("Permission expires in").selectOption("7");
+    await confirm.click();
+    await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+    expect(writes.map(item => item.path)).toEqual(["connect", "confirm"]);
+    expect(writes[0].csrf).toBe("synthetic-csrf");
+    expect(writes[0].body).toMatchObject({ environment: "demo", read_scope_verified: true,
+      trade_capable_key_risk_accepted: false, eligibility_verified: true, retention_rights_verified: true });
+    expect(writes[1].body).toEqual({ preview_id: "synthetic-preview", account_binding_confirmed: true,
+      startup_refresh: true, refresh_days: 7 });
+    page.once("dialog", dialog => dialog.accept());
+    await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
+    await expect(etoro).toContainText("Startup permission is revoked");
+    await expect(etoro).toContainText("The displayed source snapshot is not refreshed");
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
+    expect(writes.map(item => item.path)).toEqual(["connect", "confirm", "revoke"]);
+  });
+
+  for (const failure of ["lost confirmation response", "unavailable status after confirmation"]) {
+    test(`one-time broader-key consent handles ${failure} without repeating a read`, async ({ page }) => {
+      let connected = false;
+      let statusUnavailable = false;
+      const writes = [];
+      await page.route("**/api/investment/v1/etoro/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname.split("/").at(-1);
+        if (request.method() === "GET") {
+          if (statusUnavailable) return route.fulfill({ status: 503, json: { error: "unavailable" } });
+          return route.fulfill({ json: path === "session" ? {
+            enabled: true, csrf: "synthetic-csrf", state: connected ? "connected" : "not_connected",
+            last_status: connected ? "success" : "not_collected", snapshot_available: connected,
+            connection: connected ? { environment: "demo", account_id: 12345,
+              expires_at: null, revoked_at: null, revision: 1 } : null,
+          } : { state: connected ? "connected" : "not_connected",
+            last_status: connected ? "success" : "not_collected", snapshot: connected ? etoroSnapshot : null } });
+        }
+        writes.push({ path, body: request.postDataJSON() });
+        if (path === "connect") return route.fulfill({ json: { preview_id: "synthetic-preview",
+          expires_at: "2099-01-01T00:00:00Z", snapshot: etoroSnapshot } });
+        if (path === "confirm") {
+          connected = true;
+          if (failure === "lost confirmation response") return route.abort();
+          statusUnavailable = true;
+          return route.fulfill({ json: { state: "connected" } });
+        }
+        return route.abort();
+      });
+      await page.goto("/investment");
+      const etoro = page.getByRole("region", { name: "eToro portfolio" });
+      await etoro.getByText("Connect eToro", { exact: true }).click();
+      await etoro.getByLabel("eToro environment").selectOption("demo");
+      await etoro.getByLabel(/I accept the risk if this credential/).check();
+      await etoro.getByLabel("I verified my account is eligible for this API use.").check();
+      await etoro.getByLabel(/I verified rights for local display/).check();
+      await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
+      await expect(etoro.getByLabel("Allow one automatic read at each server startup while permission is active.")).toBeDisabled();
+      await expect(etoro).toContainText("Automatic refresh is unavailable unless Read-only key scope is verified");
+      await etoro.getByLabel("I verified account ID 12345 is the eToro account I selected.").check();
+      await etoro.getByRole("button", { name: "Confirm connection and account" }).click();
+      await expect(etoro.getByRole("alert")).toContainText(failure === "lost confirmation response"
+        ? "may already be saved" : "The connection was saved");
+      await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
+      expect(writes.map(item => item.path)).toEqual(["connect", "confirm"]);
+      expect(writes[1].body).toEqual({ preview_id: "synthetic-preview", account_binding_confirmed: true,
+        startup_refresh: false, refresh_days: null });
+      statusUnavailable = false;
+      await etoro.getByRole("button", { name: "Retry status" }).click();
+      await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+      expect(writes.map(item => item.path)).toEqual(["connect", "confirm"]);
+    });
+  }
+});
+
 test("monitoring shows synthetic findings and invalidates them on failed refresh", async ({ page }) => {
   let unavailable = false;
   await page.route("**/api/investment/v1/monitoring", async route => {
@@ -52,6 +367,7 @@ test("portfolio shortcuts prioritize accounts and keep optional details availabl
   await expect(page.locator(".record-toolbar").getByRole("link", { name: "Help" })).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "Portfolio navigation" })
     .getByRole("link", { name: "Help" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "What needs attention" })).toBeVisible();
   expect(await page.evaluate(() => {
     const attention = document.querySelector(".investment-next-steps");
     const accounts = document.querySelector("#investment-account-summary");
@@ -171,7 +487,7 @@ test("review inbox separates setup states and keeps history out of active checks
   await page.goto("/investment/reviews");
   await expect(page.getByText("Review inbox: Not set up")).toBeVisible();
   await expect(page.getByText("Compare account figures: Not set up")).toBeVisible();
-  await expect(page.getByRole("link", { name: "See setup steps" })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "About optional setup" })).toHaveCount(1);
 
   inbox = {
     enabled: true, portfolio_id: "synthetic", profile_hash: "a".repeat(64), revision: 3,
@@ -196,10 +512,14 @@ test("review inbox separates setup states and keeps history out of active checks
   const history = page.locator("#review-inbox details").filter({ hasText: "History (1)" });
   await expect(history).not.toHaveAttribute("open", "");
   await expect(page.getByText("Historical finding", { exact: false })).toHaveCount(1);
-  await history.locator("summary").click();
+  await history.locator(":scope > summary").click();
   await expect(history).toContainText("Superseded");
   await expect(history).toContainText("Reviewed offline.");
   await expect(page.getByText("Active finding", { exact: false })).toHaveCount(1);
+  await page.getByRole("link", { name: "About optional setup" }).first().click();
+  await expect(page).toHaveURL(/\/investment-guide#monitoring-setup$/);
+  await expect(page.locator("#monitoring-setup")).toHaveAttribute("open", "");
+  await expect(page.locator("#monitoring-setup")).toContainText("Ask the person managing your workspace");
 });
 
 test("investment workspace opens the portfolio without trading requests", async ({ page }) => {
@@ -232,17 +552,15 @@ test("demo defaults to investment without a second trading product", async ({ pa
   expect((await page.request.get("/legacy")).status()).toBe(404);
 });
 
-test("recording route clearly reports when local opt-in is disabled", async ({ page }) => {
+test("view-only recording route offers workspace guidance without a normal recording opt-in", async ({ page }) => {
   await page.goto("/investment/record");
   await expect(page.getByRole("heading", { name: "Add a record", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Recording is disabled" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "How to enable manual recording" })).toBeVisible();
-  await expect(page.getByText(/Run your original startup command again/)).toBeVisible();
-  await expect(page.getByText(/Retain your original/)).toBeVisible();
-  await page.getByText("Why a restart is required", { exact: true }).click();
-  await expect(page.getByText(/explicitly selected journal and local opt-in/)).toBeVisible();
-  await expect(page.getByText(/--investment-recording/, { exact: false }).first()).toBeVisible();
-  await expect(page.getByText(/Retain your original/)).toContainText("--workspace or --investment-database");
+  await expect(page.getByRole("heading", { name: "Viewing only" })).toBeVisible();
+  await expect(page.getByText(/Normal local launches allow recording after setup/)).toBeVisible();
+  await page.getByText("Use a recorded workspace", { exact: true }).click();
+  await expect(page.getByText(/restart without that option/)).toContainText("--investment-read-only");
+  await expect(page.getByText(/Keep the same/)).toContainText("--workspace or --investment-database");
+  await expect(page.getByText("How to enable manual recording", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Preview record" })).toHaveCount(0);
 });
 
@@ -366,14 +684,15 @@ test("next steps reflect incomplete evidence and historical differences without 
   await expect(steps).toContainText("Some performance figures are unavailable");
   await expect(steps).not.toContainText("Performance has no complete starting value.");
   await expect(steps).not.toContainText("Backup verified");
-  await steps.getByRole("link", { name: "Review", exact: true }).click();
+  await steps.getByRole("link", { name: "View performance history", exact: true }).click();
   await expect(page.locator("#investment-performance")).toHaveAttribute("open", "");
   expect(mutations).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.getByRole("navigation", { name: "Portfolio navigation" })
     .getByRole("link", { name: "Help" }).click();
-  await expect(page.getByRole("heading", { name: "Backup and recovery" })).toBeVisible();
-  await expect(page.getByText(/GoldScout does not create or check backups/)).toBeVisible();
+  await page.locator("#backup-recovery > summary").click();
+  await expect(page.locator("#backup-recovery")).toHaveAttribute("open", "");
+  await expect(page.getByText(/Backups are not automatic/)).toBeVisible();
 });
 
 test("cash evidence overview labels replay history and surfaces correction limits", async ({ page }) => {
@@ -381,6 +700,11 @@ test("cash evidence overview labels replay history and surfaces correction limit
   const correctionWarning =
     "Historical correction replay may have changed past cash-observation differences. Preserve prior reports and review the original observations and correction evidence.";
   report.warnings.push(correctionWarning);
+  report.recorded_corrections = [{ id: "synthetic-correction", original_event_id: "original",
+    replacement_event_id: "replacement", replaced_type: "mark", account_id: null,
+    role: "unassigned", role_evidence: null, original_amount_gbp: null,
+    replacement_amount_gbp: null, timestamp: "2026-01-01T12:00:00Z",
+    available_at: "2026-01-01T12:00:00Z", evidence: "Synthetic correction evidence" }];
   report.cash_observations = report.cash_observations.map(observation => ({
     ...observation, difference_gbp: "0",
   }));
@@ -392,6 +716,9 @@ test("cash evidence overview labels replay history and surfaces correction limit
   }
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
+  await page.getByRole("link", { name: "Review correction history" }).click();
+  await expect(page.locator("#investment-records")).toHaveAttribute("open", "");
+  await expect(page.getByRole("region", { name: "Evidence-backed corrections" })).toContainText("Synthetic correction evidence");
   await page.getByText("Cash observations and savings details", { exact: true }).click();
   const overview = page.getByRole("region", { name: "Cash evidence overview" });
   await expect(overview).toContainText("0 differing observations in current replayed history");
@@ -401,7 +728,8 @@ test("cash evidence overview labels replay history and surfaces correction limit
 test("demo attention panel stays focused while optional details remain accessible", async ({ page }) => {
   await page.goto("/investment");
   const steps = page.getByRole("region", { name: "What needs attention" });
-  await expect(steps).toContainText("Synthetic demonstration");
+  await expect(page.locator(".demo-band")).toContainText("SYNTHETIC DEMO");
+  await expect(steps).toBeVisible();
   await expect(steps).not.toContainText("Backup status is unknown");
   await expect(steps).not.toContainText("Backup verified");
   await page.locator("#investment-roles > summary").click();
@@ -964,7 +1292,11 @@ test("opening records show since-baseline value without inventing lifetime gain"
   report.holdings[0] = { ...holding, value_gbp: null, mark_at: null, mark_available_at: null };
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Incomplete; full total unavailable.");
-  await expect(page.getByLabel("Investment holdings")).toContainText("Age unavailable");
+  await expect(page.getByLabel("Recorded investment holdings", { exact: true })).toContainText("Unavailable");
+  const priceDates = page.locator(".portfolio-summary details");
+  await priceDates.locator("summary").click();
+  await expect(priceDates).toContainText("No recorded price");
+  await expect(priceDates).toContainText("Not available");
   report.as_of = at;
   report.complete = true;
   report.equity_gbp = "2000";
@@ -977,7 +1309,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("Valuation recorded");
   await page.clock.setFixedTime(new Date("2026-01-05T12:00:00Z"));
   await expect(page.locator("#investment-accounts")).toHaveAttribute("open", "");
-  await expect(page.getByRole("columnheader", { name: "Price date" })).toBeVisible();
+  await expect(priceDates.getByRole("columnheader", { name: "Price applies at" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Allocation and drift" })).toHaveCount(0);
   await expect(page.getByText(/No order approval or execution is available here/)).toHaveCount(0);
   await page.getByRole("link", { name: "Add a record", exact: true }).click();
@@ -985,27 +1317,29 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(page.getByLabel("What are you recording?")).toBeVisible();
   await expect(page.getByLabel("What are you recording?").locator("optgroup[label='Investments']"))
     .toContainText("Investment bought");
-  await expect(page.getByLabel("Choose a record")).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Choose a record", exact: true })).toHaveCount(0);
   await page.getByLabel("What are you recording?").selectOption("buy");
   await expect(page.getByLabel("Recorded fee in GBP")).toHaveValue("");
   await expect(page.getByLabel("Applies at (local time)")).toHaveValue("");
   await expect(page.getByLabel("Source available from (local time)")).toHaveValue("");
   await page.getByLabel("What are you recording?").selectOption("split");
-  await page.getByLabel("Account", { exact: true }).selectOption("broker");
-  await page.getByLabel("Investment", { exact: true }).selectOption("fund");
+  await page.getByRole("combobox", { name: "Account", exact: true }).selectOption("broker");
+  await page.getByRole("combobox", { name: "Investment", exact: true }).selectOption("fund");
   await page.getByLabel("Split ratio").fill("2");
   await page.getByLabel("Applies at (local time)").fill("2026-01-05T12:00");
   await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
   await page.getByLabel("Source description / correction reason").fill("Synthetic split notice");
   await page.getByRole("button", { name: "Preview record" }).click();
-  expect(previewEvent).toMatchObject({ type: "split", account_id: "broker", product_id: "fund", ratio: "2" });
+  await expect.poll(() => previewEvent).toMatchObject({ type: "split", account_id: "broker", product_id: "fund", ratio: "2" });
   await page.getByRole("button", { name: "Cancel preview" }).click();
   await page.getByLabel("What are you recording?").selectOption("contribution");
+  await page.getByRole("combobox", { name: "Account", exact: true }).selectOption("bank");
   await page.getByLabel("GBP amount").fill("25");
   await page.getByLabel("Applies at (local time)").fill("2026-01-05T12:00");
   await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
   await page.getByLabel("Source description / correction reason").fill("Synthetic contribution receipt");
   await page.getByRole("button", { name: "Preview record" }).click();
+  await expect.poll(() => previewEvent?.type).toBe("contribution");
   expect(previewEvent).not.toHaveProperty("role");
   await expect(page.getByRole("region", { name: "Record summary" })).toContainText("Unassigned — no role chosen");
   await page.getByRole("button", { name: "Cancel preview" }).click();
@@ -1040,7 +1374,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   expect(previewEvent.replacement_event.role).toBe("dynamic");
   await page.getByLabel("What are you recording?").selectOption("profile_change");
   await page.getByLabel("What do you want to change?").selectOption("rename");
-  await page.getByLabel("Account or investment?", { exact: true }).selectOption("product");
+  await page.getByRole("combobox", { name: "Account or investment?", exact: true }).selectOption("product");
   await page.getByLabel("Which account or investment?").selectOption("fund");
   await page.getByLabel("New name").fill("Renamed fund");
   await page.getByLabel("Applies and available at (local time)")
@@ -1071,7 +1405,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
     .fill("2026-01-03T12:00");
   await page.getByLabel("Source description / correction reason").fill("Synthetic common-clock statement");
   await page.getByRole("button", { name: "Preview record" }).click();
-  expect(previewEvent.type).toBe("scope_addition");
+  await expect.poll(() => previewEvent?.type).toBe("scope_addition");
   expect(previewEvent.account).toMatchObject({
     id: "scope", name: "Additional broker", binding: "synthetic-binding", kind: "broker",
   });
@@ -1117,6 +1451,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.getByRole("button", { name: "Preview record" }).click();
   await expect(page.getByRole("heading", { name: "Review before recording" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Record summary" })).toContainText("unknown — not zero");
+  await expect.poll(() => previewEvent?.type).toBe("opening");
   expect(previewEvent.holdings[0].price_gbp).toBeNull();
   await page.getByRole("button", { name: "Cancel preview" }).click();
   await page.goto("/investment");

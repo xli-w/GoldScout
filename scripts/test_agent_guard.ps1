@@ -24,7 +24,28 @@ $cases = @(
     @{ Tool = 'Edit'; Input = "*** Begin Patch`n*** Update File: scripts\agent_guard.ps1`n+test`n*** End Patch"; Expected = 'ask' },
     @{ Tool = 'Edit'; Input = 'not-json'; Expected = 'deny' },
     @{ Tool = 'Edit'; Input = @{}; Expected = 'deny' },
-    @{ Tool = 'run_in_terminal'; Input = @{ command = 'python scripts/offline_tests.py' }; Expected = 'ask' },
+    @{ Tool = 'run_in_terminal'; Input = @{ command = 'python scripts/offline_tests.py' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = '.\.venv\Scripts\python.exe scripts\offline_tests.py --pattern test_investment*.py' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = '.\venv\Scripts\python.exe scripts\offline_tests.py' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'py -3.11 scripts/offline_tests.py --pattern "test_dashboard*.py"' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python scripts/validate_ai_setup.py' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'powershell -NoProfile -File scripts/test_agent_guard.ps1' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'npm --prefix frontend run build' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'npm --prefix frontend test' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python -m investment demo' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python -m dashboard --demo --api-only --intelligence-demo --port 8766' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python --version' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'git --no-pager status --short' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'git diff --check' }; Expected = 'allow' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python scripts/offline_tests.py; curl https://example.invalid' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = "python scripts/offline_tests.py`npython -m dashboard" }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python scripts/offline_tests.py > result.txt' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python scripts/offline_tests.py --pattern $(Get-Content .env)' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python -m dashboard --demo --workspace local-investment' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python -m dashboard' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python -c "print(1)"' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'npm --prefix frontend install' }; Expected = 'ask' },
+    @{ Tool = 'functions.powershell'; Input = @{ command = 'python scripts/offline_tests.py'; cwd = [IO.Path]::GetTempPath() }; Expected = 'ask' },
     @{ Tool = 'send_to_terminal'; Input = @{ command = 'python -m bot.main' }; Expected = 'ask' },
     @{ Tool = 'pylanceRunCodeSnippet'; Input = @{ codeSnippet = 'print(1)' }; Expected = 'ask' },
     @{ Tool = 'broker_submit_order'; Input = @{ symbol = 'SPY' }; Expected = 'ask' },
@@ -37,7 +58,7 @@ $cases = @(
     @{ Tool = 'multi_tool_use.parallel'; Input = @{ tool_uses = @(@{ recipient_name = 'functions.read_file'; parameters = @{ filePath = 'local-investment\journal.sqlite3' } }) }; Expected = 'deny' },
     @{ Tool = 'multi_tool_use.parallel'; Input = @{ tool_uses = @(@{ recipient_name = 'functions.rg'; parameters = @{ pattern = 'test'; paths = @('local-investment') } }) }; Expected = 'deny' },
     @{ Tool = 'multi_tool_use.parallel'; Input = @{ tool_uses = @(@{ recipient_name = 'functions.glob'; parameters = @{ pattern = 'local-investment\*' } }) }; Expected = 'deny' },
-    @{ Tool = 'multi_tool_use.parallel'; Input = @{ tool_uses = @(@{ recipient_name = 'functions.run_in_terminal'; parameters = @{ command = 'python scripts/offline_tests.py' } }) }; Expected = 'ask' },
+    @{ Tool = 'multi_tool_use.parallel'; Input = @{ tool_uses = @(@{ recipient_name = 'functions.run_in_terminal'; parameters = @{ command = 'python scripts/offline_tests.py' } }) }; Expected = 'allow' },
     @{ Tool = 'pylanceLSP'; Input = @{ params = @{ textDocument = @{ uri = 'file:///C:/Trader/.env' } } }; Expected = 'deny' },
     @{ Tool = 'get_errors'; Input = @{ filePaths = @('bot/main.py', '.env') }; Expected = 'deny' },
     @{ Tool = 'apply_patch'; Input = @{ input = "*** Begin Patch`n*** Update File: C:\Trader\scripts\agent_guard.ps1`n*** Delete File: C:\Trader\bot_ledger.sqlite3`n*** End Patch" }; Expected = 'deny' },
@@ -51,6 +72,17 @@ foreach ($case in $cases) {
     $response = & $guard -InputJson $payload | ConvertFrom-Json
     if ($response.hookSpecificOutput.permissionDecision -ne $case.Expected) {
         throw "Unexpected decision for $($case.Tool): expected $($case.Expected)"
+    }
+    $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    foreach ($directory in @($root, [IO.Path]::GetTempPath())) {
+        $hostCommand = @{ cwd = $directory; toolCalls = @(
+            @{ name = 'functions.powershell'; args = @{ command = 'python scripts/offline_tests.py' } }
+        ) }
+        $response = & $guard -InputJson ($hostCommand | ConvertTo-Json -Depth 8 -Compress) | ConvertFrom-Json
+        $expected = if ($directory -eq $root) { 'allow' } else { 'ask' }
+        if ($response.hookSpecificOutput.permissionDecision -ne $expected) {
+            throw 'Development command was not bound to the host checkout.'
+        }
     }
 }
 $hostSafePatch = "*** Begin Patch`n*** Add File: docs\research-note.md`n+safe`n*** End Patch"
@@ -108,4 +140,4 @@ foreach ($invalid in @('not-json', '{}', '{"tool_name":"read_file","tool_input":
         throw 'Malformed input did not fail closed'
     }
 }
-Write-Output "Agent guard: $($cases.Count + 14) policy checks passed."
+Write-Output "Agent guard: $($cases.Count + 16) policy checks passed."

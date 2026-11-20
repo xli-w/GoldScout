@@ -36,16 +36,12 @@ journal. See [the eToro connection guide](docs/investment.md#optional-etoro-conn
 For investment accounts, list each different investment once, then enter its
 quantity for each account that holds it. Use current figures for the same point
 in time; setup records them when you request the preview and cannot be
-backdated. After setup the portfolio opens read-only. To record future updates,
-restart with `--investment-recording` using the same workspace and startup
-command as before.
+backdated.
 
-Existing valid journals open read-only. To record changes, stop the dashboard
-with Ctrl+C and restart with `--investment-recording`, keeping the same folder:
-
-```powershell
-.\.venv\Scripts\python.exe -m dashboard --investment-recording
-```
+After setup, choose **Add a record** for future updates; no restart is needed.
+Manual recording is enabled for normal local launches. For viewing without
+journal writes, add `--investment-read-only` to your usual startup command,
+keeping the same workspace. This also prevents first-run setup from saving.
 
 Installed use requires selecting the same private folder with
 `--workspace <directory>` on each start. The dashboard has no sign-in and must
@@ -90,6 +86,6 @@ These use synthetic evidence, not account access.
 - [Investor mandate](docs/investment-research-context.md), [provider assessment](docs/provider-feasibility.md)
 - [Development](docs/development.md), [safety invariants](docs/safety-invariants.md)
 
-Default to offline development. No credentials, operational stores, provider
-calls or maintenance without task-specific approval. Offline tests establish
-neither suitability nor profitability.
+Local source edits, tests, builds and synthetic previews are normal development.
+Use temporary test data; credentials, operational stores, provider calls and
+maintenance need task-specific approval. See the development guide for checks.

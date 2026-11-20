@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useLocation } from "react-router-dom";
 import { reviewTimestamp } from "./api";
 import { localClock } from "./recording";
 import {
@@ -43,6 +44,7 @@ function utc(value: string, label: string): string {
 }
 
 export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
+  const location = useLocation();
   const [session, setSession] = useState<SetupSession | null>(null);
   const [accounts, setAccounts] = useState<Account[]>(() => [newAccount()]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -54,7 +56,6 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   const [holdingsCoverage, setHoldingsCoverage] = useState<Record<string, boolean>>({});
   const [openingContextConfirmed, setOpeningContextConfirmed] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [reviewed, setReviewed] = useState(false);
   const [step, setStep] = useState(0);
   const [preview, setPreview] = useState<SetupPreview | null>(null);
   const [receipt, setReceipt] = useState<SetupConfirmation | null>(null);
@@ -110,6 +111,14 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   useEffect(() => { (stepHeading.current ?? heading.current)?.focus(); }, [step, preview, receipt, session?.enabled]);
   useEffect(() => { if (error) errorSummary.current?.focus(); }, [error]);
   useEffect(() => {
+    if (location.hash !== "#setup-etoro") return;
+    const target = document.getElementById("setup-etoro");
+    if (target instanceof HTMLDetailsElement) {
+      target.open = true;
+      target.scrollIntoView();
+    }
+  }, [location.hash, session?.state]);
+  useEffect(() => {
     if (!preview) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
@@ -123,7 +132,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     finally { lock.current = false; setBusy(false); }
   };
   const changed = (coverageToClear: string[] = []) => {
-    setDirty(true); setPreview(null); setReviewed(false); setOpeningContextConfirmed(false); setError("");
+    setDirty(true); setPreview(null); setOpeningContextConfirmed(false); setError("");
     if (coverageToClear.length) setHoldingsCoverage(current => {
       const next = { ...current };
       coverageToClear.forEach(id => { delete next[id]; });
@@ -250,11 +259,11 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
           accounts: wireAccounts, products: wireProducts, policy: null },
         opening,
       });
-      setPreview(result); setReviewed(false); setNow(Date.now()); setStep(3);
+      setPreview(result); setNow(Date.now()); setStep(3);
     });
   };
   const confirm = () => {
-    if (!preview || !reviewed || (!confirmAttempted && Date.parse(preview.expires_at) <= Date.now())) return;
+    if (!preview || (!confirmAttempted && Date.parse(preview.expires_at) <= Date.now())) return;
     void run(async () => {
       setConfirmAttempted(true);
       try {
@@ -270,7 +279,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     void run(async () => {
       try {
         const result = await setupRecoveryPreview(session?.csrf ?? "");
-        setPreview(result); setReviewed(false); setNow(Date.now()); setStep(3); setDirty(true);
+        setPreview(result); setNow(Date.now()); setStep(3); setDirty(true);
       } catch {
         throw new Error("The previous setup could not be verified for recovery. Keep all setup files unchanged. If starting figures were not retained, re-entering and explicitly reviewing the original figures is required. Do not guess balances or create a replacement. Check the terminal window used to start the dashboard for error details.");
       }
@@ -284,7 +293,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       increment: p.quantity_increment, minimum: p.minimum_notional_gbp,
     })));
     setHoldings([]); setEffective(""); setAvailable(""); setEvidence("");
-    setPreview(null); setReviewed(false); setOpeningContextConfirmed(false);
+    setPreview(null); setOpeningContextConfirmed(false);
     setHoldingsCoverage({}); setFieldErrors({}); setError(""); setScope(true);
     setStep(2); setRecoveryEntry(true); setDirty(true);
   };
@@ -319,8 +328,11 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       {session && <p className="setup-workspace">Saved on this computer in: <strong>{session.workspace}</strong>.</p>}
       <p>Keep this computer private and arrange separate backups. GoldScout has no sign-in.</p>
     </details>
-    {!receipt && !preview && session && (session.state === "empty" || session.state === "ready") &&
-      <EToroPortfolioPanel embedded />}
+    {!receipt && session && (session.state === "empty" || session.state === "ready") &&
+      <details className="help-disclosure" id="setup-etoro">
+        <summary>Optional: connect eToro</summary>
+        <EToroPortfolioPanel />
+      </details>}
     {error && <div role="alert" tabIndex={-1} ref={errorSummary} className="investment-warnings">
       <p>{error}</p>
       {Object.entries(fieldErrors).length > 0 && <ul aria-label="Fields to correct">
@@ -337,30 +349,22 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     {receipt ? <div role="status" className="recording-preview">
       <h2>{receipt.status === "completed" ? "Setup completed" : "Setup partially completed — preserve the workspace"}</h2>
       <p>{receipt.committed
-        ? "Your starting records were saved. Do not repeat setup or delete its files."
+        ? "Your starting records were saved."
         : "Saving your starting records has not been confirmed. Some setup files may remain; do not replace them."}</p>
+      {receipt.message && <p>{receipt.message}</p>}
       <details className="help-disclosure"><summary>Save receipt and technical details</summary>
-        <p>{receipt.revision === null ? "No committed journal revision." : `Journal revision: ${receipt.revision}.`} {receipt.message}</p>
+        <p>{receipt.revision === null ? "No committed journal revision." : `Journal revision: ${receipt.revision}.`}</p>
         <p>Journal committed: {receipt.committed ? "yes" : "no"}.</p>
       </details>
       {receipt.status === "completed" ? <>
-        <p>Your portfolio opens read-only.</p>
-        <details className="help-disclosure"><summary>How to add records later</summary>
-          <ol>
-            <li>Stop GoldScout in its terminal window with <kbd>Ctrl</kbd> + <kbd>C</kbd>.</li>
-            <li>Restart it with <code>--investment-recording</code>, keeping the same workspace or journal.</li>
-          </ol>
-          <p>For a standard Windows source checkout, run this from the GoldScout folder:</p>
-          <pre className="command-example"><code>.\.venv\Scripts\python.exe -m dashboard --investment-recording</code></pre>
-          <p>Otherwise, add the option to your original command. If unsure, ask the person who set up GoldScout. This enables manual record entry only—not trades or money movement.</p>
-        </details>
+        <p>Open your portfolio, then choose Add a record for future updates.</p>
         <button type="button" onClick={onComplete}>Open portfolio</button>
       </>       : <p>Setup did not finish completely. Keep the whole setup folder unchanged and reload this page for recovery guidance.
         Do not recreate, delete, overwrite or manually repair any files.</p>}
     </div> : blocked ? <div className="investment-warnings">
       <h2>{session.state === "ready" ? "Existing investment records" : "Setup cannot create this workspace"}</h2>
       {session.message && <details className="help-disclosure"><summary>Technical reason setup cannot continue</summary><p>{session.message}</p></details>}
-      {session.state === "ready" ? <button type="button" onClick={onComplete}>Open read-only investment view</button>
+      {session.state === "ready" ? <button type="button" onClick={onComplete}>Open portfolio</button>
         : <p>{session.state === "manual_unopened"
           ? "These records were already initialized but have no starting balances. The wizard cannot adopt or overwrite them. Keep the files unchanged and use the existing manual recording workflow for this journal."
           : session.state === "recoverable"
@@ -420,14 +424,12 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
               Opening record: {preview.opening.id}. Account IDs and bindings are included below.</p>
             <pre>{JSON.stringify({ profile: preview.profile, opening: preview.opening }, null, 2)}</pre>
           </details>
-          <label className="setup-check"><input type="checkbox" checked={reviewed} disabled={busy || confirmAttempted}
-            onChange={event => setReviewed(event.target.checked)} />
-            I reviewed every account, holding, amount, date and source. I understand these starting records cannot be edited after saving.</label>
+          <p>Check the accounts, holdings, amounts, dates and source before confirming. Starting records cannot be edited in place.</p>
           {expired && !confirmAttempted && <p role="alert">Preview expired. Edit and request a fresh preview before confirming.</p>}
           <div className="setup-actions">
-            <button type="button" disabled={busy || confirmAttempted} onClick={() => { setPreview(null); setReviewed(false); setStep(2); }}>
+            <button type="button" disabled={busy || confirmAttempted} onClick={() => { setPreview(null); setStep(2); }}>
               {session.state === "recoverable" && !recoveryEntry ? "Back to recovery guidance" : "Edit evidence"}</button>
-            <button type="button" disabled={busy || !reviewed || (expired && !confirmAttempted)} onClick={confirm}>
+            <button type="button" disabled={busy || (expired && !confirmAttempted)} onClick={confirm}>
               {confirmAttempted ? "Retry same confirmation" : "Confirm and create local records"}</button>
           </div>
         </div> : session.state === "recoverable" && !recoveryEntry ? <div className="recording-preview">

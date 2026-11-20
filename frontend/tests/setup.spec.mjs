@@ -91,7 +91,7 @@ async function setupRoutes(page, options = {}) {
       if (options.refusePreview) return route.fulfill({ status: 409, json: { detail: "Original opening hash does not match." } });
       if (options.invalidPreview) return route.fulfill({ json: { preview_id: "bad" } });
       return route.fulfill({ json: {
-        preview_id: "synthetic-preview", expires_at: "2099-01-01T00:00:00Z",
+        preview_id: "synthetic-preview", expires_at: options.previewExpiry ?? "2099-01-01T00:00:00Z",
         profile: body.profile, opening: body.opening, report,
       } });
     }
@@ -103,7 +103,7 @@ async function setupRoutes(page, options = {}) {
       return route.fulfill({ json: {
         status: options.partial ? "partial" : "completed",
         committed: !options.uncommitted, revision: options.uncommitted ? null : 1,
-        message: options.partial ? "Synthetic ancillary export incomplete." : "Synthetic committed receipt.",
+        message: options.receiptMessage ?? (options.partial ? "Synthetic ancillary export incomplete." : "Synthetic committed receipt."),
       } });
     }
     if (path === "recovery-preview") {
@@ -154,12 +154,76 @@ async function depositPreview(page) {
 
 test("startup refresh result appears without reloading the setup wizard", async ({ page }) => {
   await setupRoutes(page, { startupRefresh: true });
+  const mutations = [];
+  page.on("request", request => {
+    if (request.url().includes("/api/investment/v1/etoro/") && request.method() !== "GET")
+      mutations.push(request.url());
+  });
   await unlock(page);
+  const etoro = page.locator("#setup-etoro");
+  await expect(etoro).not.toHaveAttribute("open", "");
+  await etoro.locator("summary").first().click();
   await expect(page.getByText("Waiting for the one authorized startup read. This screen does not initiate a request."))
     .toBeVisible();
-  await expect(page.getByRole("heading", { name: "Latest in-memory portfolio read" }))
+  await expect(page.getByRole("heading", { name: "Latest eToro read" }))
     .toBeVisible({ timeout: 5000 });
-  await expect(page.getByText("Account ID 12345")).toBeVisible();
+  await expect(etoro.getByText(/Account ID 12345/).first()).toBeVisible();
+  await etoro.locator("summary").first().click();
+  await etoro.locator("summary").first().click();
+  await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
+  expect(mutations).toEqual([]);
+});
+
+test("legacy eToro setup link opens the optional connection inside setup", async ({ page }) => {
+  await setupRoutes(page);
+  await page.goto("/etoro-portfolio");
+  await expect(page).toHaveURL(/\/setup#setup-etoro$/);
+  await expect(page.locator("#setup-etoro")).toHaveAttribute("open", "");
+  await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible();
+});
+
+test("eToro consent preview survives collapsing and reviewing portfolio setup", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-01-01T10:00:00Z") });
+  await setupRoutes(page);
+  const writes = [];
+  await page.route("**/api/investment/v1/etoro/session", route => route.fulfill({ json: {
+    enabled: true, csrf: "synthetic-etoro-csrf", state: "not_connected", last_status: "not_collected",
+    snapshot_available: false, connection: null,
+  } }));
+  await page.route("**/api/investment/v1/etoro/portfolio", route => route.fulfill({ json: {
+    state: "not_connected", last_status: "not_collected", snapshot: null,
+  } }));
+  await page.route("**/api/investment/v1/etoro/connect", route => {
+    writes.push(route.request().postDataJSON());
+    return route.fulfill({ json: { preview_id: "synthetic-etoro-preview", expires_at: "2026-01-01T10:00:10Z",
+      snapshot: { schema_version: 1, environment: "demo", account_id: 12345,
+        source_as_of: "2026-01-01T10:00:00Z", account_currency: "USD",
+        account_totals: { accountAvailableCash: "100", accountFrozenCash: "0",
+          accountCurrentPnl: "0", accountTotalValue: "100", accountTotalUsedMargin: "0", accountBalance: "100" },
+        direct_positions: [], mirrors: [], coverage: {}, gbp_balance: null } } });
+  });
+  await unlock(page);
+  const optional = page.locator("#setup-etoro");
+  await optional.locator(":scope > summary").click();
+  await optional.getByText("Connect eToro", { exact: true }).click();
+  await optional.getByLabel("eToro environment").selectOption("demo");
+  await optional.getByLabel("I verified this key has Read-only permission.").check();
+  await optional.getByLabel("I verified my account is eligible for this API use.").check();
+  await optional.getByLabel(/I verified rights for local display/).check();
+  await optional.getByRole("button", { name: "Connect and retrieve once" }).click();
+  const binding = optional.getByLabel("I verified account ID 12345 is the eToro account I selected.");
+  await binding.check();
+  await optional.locator(":scope > summary").click();
+  await optional.locator(":scope > summary").click();
+  await expect(binding).toBeChecked();
+  await depositPreview(page);
+  await expect(binding).toBeChecked();
+  const confirm = optional.getByRole("button", { name: "Confirm connection and account" });
+  await expect(confirm).toBeEnabled();
+  await page.clock.fastForward(11000);
+  await expect(confirm).toBeDisabled();
+  await expect(optional).toContainText("This eToro preview expired. Discard it and request a new read.");
+  expect(writes).toHaveLength(1);
 });
 
 test("cash-only setup skips investments in both directions", async ({ page }) => {
@@ -254,15 +318,11 @@ test("guided deposit setup requires review and creates only on explicit confirma
   expect(request.opening.available_at).toBe(request.opening.timestamp);
   expect(request.profile.created_at).toBe(request.opening.timestamp);
   const confirm = page.getByRole("button", { name: "Confirm and create local records" });
-  await expect(confirm).toBeDisabled();
-  await page.getByRole("checkbox", { name: /I reviewed every account/ }).check();
+  await expect(confirm).toBeEnabled();
   await confirm.click();
   await expect(page.getByRole("heading", { name: "Setup completed" })).toBeVisible();
-  const futureRecording = page.locator("details").filter({ hasText: "How to add records later" });
-  await expect(futureRecording).not.toHaveAttribute("open", "");
-  await futureRecording.locator("summary").click();
-  await expect(futureRecording).toContainText("Restart it with");
-  await expect(futureRecording).toContainText(".\\.venv\\Scripts\\python.exe -m dashboard --investment-recording");
+  await expect(page.getByText("Open your portfolio, then choose Add a record for future updates.")).toBeVisible();
+  await expect(page.getByText(/Restart it with/)).toHaveCount(0);
   await expect(page.getByText(/Your draft is not saved until you confirm/)).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Have these ready" })).toHaveCount(0);
   await page.getByRole("button", { name: "Open portfolio" }).click();
@@ -270,6 +330,32 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await expect(page.getByRole("heading", { name: "Your portfolio", exact: true })).toBeVisible();
   await expect.poll(() => api.calls.filter(call => call.path === "confirm").length).toBe(1);
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+});
+
+test("setup confirmation expires even without a redundant review checkbox", async ({ page }) => {
+  const api = await setupRoutes(page, { previewExpiry: "2026-01-01T10:00:10Z" });
+  await page.clock.install({ time: new Date("2026-01-01T10:00:00Z") });
+  await unlock(page);
+  await depositPreview(page);
+  const confirm = page.getByRole("button", { name: "Confirm and create local records" });
+  await expect(confirm).toBeEnabled();
+  await page.clock.fastForward(11000);
+  await expect(confirm).toBeDisabled();
+  await expect(page.getByRole("alert")).toContainText("Preview expired");
+  expect(api.calls.map(call => call.path)).toEqual(["preview"]);
+});
+
+test("completed setup surfaces unavailable recording without suggesting another setup", async ({ page }) => {
+  const message = "Setup completed, but manual recording is unavailable. Restart GoldScout to retry recording initialization.";
+  const api = await setupRoutes(page, { receiptMessage: message });
+  await unlock(page);
+  await depositPreview(page);
+  await page.getByRole("button", { name: "Confirm and create local records" }).click();
+  await expect(page.getByRole("heading", { name: "Setup completed" })).toBeVisible();
+  await expect(page.getByText(message, { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open portfolio" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Confirm and create local records" })).toHaveCount(0);
+  expect(api.calls.map(call => call.path)).toEqual(["preview", "confirm"]);
 });
 
 test("investment accounts require an explicit completeness confirmation when left empty", async ({ page }) => {
@@ -519,13 +605,12 @@ test("uncertain confirmation retries only the identical preview; partial commit 
   const api = await setupRoutes(page, { loseConfirmation: true, partial: true });
   await unlock(page);
   await depositPreview(page);
-  await page.getByRole("checkbox", { name: /I reviewed every account/ }).check();
   await page.getByRole("button", { name: "Confirm and create local records" }).click();
   await expect(page.getByRole("alert")).toContainText("outcome is unknown");
   await expect(page.getByRole("button", { name: "Edit evidence" })).toBeDisabled();
   await page.getByRole("button", { name: "Retry same confirmation" }).click();
   await expect(page.getByRole("heading", { name: /Setup partially completed/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open read-only investment view" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open portfolio" })).toHaveCount(0);
   expect(api.calls.filter(call => call.path === "confirm")).toHaveLength(2);
   expect(api.calls.filter(call => call.path === "preview")).toHaveLength(1);
 });
@@ -577,13 +662,12 @@ test("revision-zero recovery prefills only the original locked profile and recon
   await expect(page.getByRole("group", { name: "Review setup before confirmation" })).toBeVisible();
   expect(api.preview().profile).toEqual(originalProfile);
   expect(api.preview().opening).toEqual(originalOpening);
-  await page.getByRole("checkbox", { name: /I reviewed every account/ }).check();
   await page.getByRole("button", { name: "Confirm and create local records" }).click();
   await expect(page.getByRole("heading", { name: /Setup partially completed/ })).toBeVisible();
   await expect(page.getByRole("status")).toContainText("No committed journal revision");
   await expect(page.getByRole("status")).not.toContainText("Journal revision: 0");
   await expect(page.getByRole("status")).toContainText("Journal committed: no");
-  await expect(page.getByRole("button", { name: "Open read-only investment view" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open portfolio" })).toHaveCount(0);
   expect(api.calls.map(call => call.path)).toEqual(["preview", "confirm"]);
 });
 
@@ -617,7 +701,7 @@ test("retained recovery evidence is reviewed without reconstructing or replacing
   await expect(preview.getByText(/Opening record:/)).toContainText(originalOpening.id);
   await expect(preview.getByText(/Opening record:/)).toContainText(originalProfile.portfolio_id);
   await expect(preview).toContainText("unknown (not zero)");
-  await expect(page.getByRole("button", { name: "Confirm and create local records" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Confirm and create local records" })).toBeEnabled();
   expect(api.calls.map(call => call.path)).toEqual(["recovery-preview"]);
 });
 
@@ -647,7 +731,7 @@ for (const state of ["ready", "blocked", "manual_unopened"]) {
     await expect(setup.getByRole("alert")).toHaveCount(0);
     await expect(setup.getByRole("button", { name: "Preview setup", exact: true })).toHaveCount(0);
     await expect(setup.getByRole("button", { name: "Confirm and create local records" })).toHaveCount(0);
-    await expect(setup.getByRole("button", { name: "Open read-only investment view" })).toHaveCount(state === "ready" ? 1 : 0);
+    await expect(setup.getByRole("button", { name: "Open portfolio" })).toHaveCount(state === "ready" ? 1 : 0);
     expect(api.calls).toEqual([]);
   });
 }

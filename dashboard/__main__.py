@@ -17,8 +17,11 @@ def main(argv=None):
     parser.add_argument("--intelligence-demo",action="store_true",help="Synthetic temporary intelligence with demo-only controls")
     parser.add_argument("--analysis-controls",action="store_true",help="Enable local analysis settings only")
     parser.add_argument("--analysis-profiles",nargs="*",default=[],help="Registered nonsecret AI profile names")
-    parser.add_argument("--investment-recording", action="store_true",
-                        help="Enable manual edits to the selected investment journal")
+    journal_mode = parser.add_mutually_exclusive_group()
+    journal_mode.add_argument("--investment-recording", action="store_true",
+                              help="Allow manual journal entry (the normal launch default; retained for compatibility)")
+    journal_mode.add_argument("--investment-read-only", action="store_true",
+                              help="Disable journal setup and recording; separate provider/intelligence permissions are unchanged")
     parser.add_argument("--awareness-profile", type=Path,
                         help="Operator-owned local exposure/reminder JSON; requires both investment and intelligence stores")
     parser.add_argument("--monitoring-profile", type=Path, help="Local nonsecret monitoring JSON for the selected investment store")
@@ -43,12 +46,12 @@ def main(argv=None):
         setup_state = status["state"]
         args.investment_database = args.workspace / "investment.sqlite3"
         if setup_state != "ready" and (
-                args.investment_recording or args.monitoring_profile or args.awareness_profile
+                args.monitoring_profile or args.awareness_profile
                 or args.monitoring_cache or args.monitoring_reviews or args.monitoring_workflow):
-            parser.error("Complete workspace setup first; recording, monitoring and awareness are separate opt-ins.")
+            parser.error("Complete workspace setup before enabling monitoring or awareness.")
         setup_options = {
             "setup_workspace": args.workspace,
-            "setup_enabled": setup_state in ("empty", "recoverable"),
+            "setup_enabled": not args.investment_read_only and setup_state in ("empty", "recoverable"),
         }
     if args.intelligence_demo and (not args.demo or args.intelligence_database):
         parser.error("--intelligence-demo requires --demo without an intelligence database")
@@ -87,7 +90,7 @@ def main(argv=None):
                          intelligence_database=args.intelligence_database,intelligence_demo=args.intelligence_demo,
                          analysis_controls_enabled=args.analysis_controls,
                          analysis_profiles=tuple(args.analysis_profiles), investment_database=args.investment_database,
-                         investment_recording_enabled=args.investment_recording,
+                         investment_recording_enabled=not args.demo and not args.investment_read_only,
                          awareness_profile=args.awareness_profile,
                          monitoring_profile=args.monitoring_profile, monitoring_cache=args.monitoring_cache,
                          monitoring_reviews=args.monitoring_reviews,
@@ -95,14 +98,16 @@ def main(argv=None):
                          etoro_connection_path=args.etoro_connection, **setup_options)
     except FrontendBuildError as exc:
         parser.error(f"{exc}. {build_guidance()}")
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         parser.error(str(exc))
     landing = ("setup" if setup_state is not None and setup_state != "ready"
                else "investment")
     mode = ("investment setup" if landing == "setup"
             else "synthetic demo" if args.demo else "recorded data")
-    if args.investment_recording:
-        mode += " with opt-in investment recording"
+    if args.investment_read_only:
+        mode += " with journal read-only"
+    elif not args.demo:
+        mode += " with manual journal recording"
     if args.monitoring_workflow:
         mode += " with opt-in monitoring workflow actions"
     print(f"GoldScout local dashboard ({mode}): http://127.0.0.1:{args.port}/{landing}")

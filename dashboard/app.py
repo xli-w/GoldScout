@@ -97,8 +97,9 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         if investment_database is None or intelligence_demo:
             raise ValueError("Investment recording requires a selected recorded investment store")
         from dashboard.investment_recording import RecordingSessions
-        investment_recording = RecordingSessions(
-            investment_database, clock)
+        if setup is None or setup.status(clock())["state"] == "ready":
+            investment_recording = RecordingSessions(
+                investment_database, clock)
     if monitoring_workflow_enabled:
         from dashboard.monitoring_workflow import MonitoringWorkflowSessions
         monitoring_workflow = MonitoringWorkflowSessions()
@@ -359,6 +360,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
 
     @app.post("/api/investment/v1/setup/confirm")
     async def investment_setup_confirm(request: Request):
+        nonlocal investment_recording
         from dashboard.monitoring_workflow import WorkflowError
         from investment import InvestmentError
         if not setup_authorized(request):
@@ -369,8 +371,30 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                     or not isinstance(payload["preview_id"], str)
                     or not 1 <= len(payload["preview_id"]) <= 256):
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
-            return setup_response(setup.confirm(
-                request.cookies.get("investment_setup_session"), payload["preview_id"], clock()))
+            result = setup.confirm(
+                request.cookies.get("investment_setup_session"), payload["preview_id"], clock())
+            if (result["status"] == "completed" and investment_recording_enabled
+                    and investment_recording is None):
+                from dashboard.investment_recording import RecordingSessions
+                # Only a confirmed completion may grant the deferred capability.
+                # A failed handoff must not disguise an already committed setup.
+                try:
+                    binding = setup.recording_binding(result["receipt"], clock())
+                    candidate = RecordingSessions(investment_database, clock)
+                    if candidate.profile_hash != result["receipt"]["profile_hash"]:
+                        raise InvestmentError("Completed setup profile changed")
+                    if (candidate.path_identity != binding
+                            or setup.recording_binding(result["receipt"], clock()) != binding):
+                        raise InvestmentError("Completed setup journal changed")
+                    investment_recording = candidate
+                except (InvestmentError, OSError):
+                    result = {**result, "message":
+                              "Setup completed; recording is unavailable. Preserve the journal and inspect the selected workspace."}
+            elif result["status"] == "completed":
+                result = {**result, "message": "Setup completed."}
+            if result["status"] == "completed" and investment_recording is not None:
+                result = {**result, "message": "Setup completed; manual journal recording is available."}
+            return setup_response(result)
         except WorkflowError as exc:
             return JSONResponse(status_code=exc.status, content={"error": exc.code})
         except InvestmentError as exc:
@@ -915,6 +939,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         @app.get("/investment/record")
         @app.get("/investment/reviews")
         @app.get("/investment-guide")
+        @app.get("/etoro-portfolio")
         @app.get("/setup")
         def index():
             return FileResponse(static_directory / "index.html")

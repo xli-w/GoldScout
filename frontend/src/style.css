@@ -58,8 +58,8 @@
 .history-heading { margin-top: 30px; }
 .history-group { margin-top: 28px; }
 .investment-next-steps { padding: 14px 16px; border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
-.etoro-panel { max-width: 1200px; min-width: 0; overflow-wrap: anywhere; }
-.etoro-panel-embedded { margin-block: 20px; padding: 16px; border: 1px solid var(--line); background: #fff; }
+.etoro-panel { max-width: 1200px; min-width: 0; margin-top: 28px; padding: 16px; border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; }
+.investment-setup .etoro-panel { margin: 0; padding: 8px 0 0; border: 0; }
 .etoro-intro, .etoro-panel .position-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .etoro-form { display: grid; gap: 14px; max-width: 680px; }
 .etoro-form label { display: grid; gap: 6px; font-size: 12px; }
@@ -68,10 +68,10 @@
 .etoro-panel .setup-check input { width: auto; margin-top: 5px; flex: 0 0 auto; }
 .etoro-panel button { margin: 6px 8px 6px 0; }
 .etoro-panel button:disabled { opacity: .6; cursor: not-allowed; }
-.etoro-warning { margin-block: 14px; padding: 12px 14px; border-left: 3px solid var(--amber); background: #fffdf3; font-size: 12px; line-height: 1.6; }
+.etoro-warning { margin-block: 14px; padding: 12px 14px; border-left: 3px solid var(--amber); background: #2a2416; font-size: 12px; line-height: 1.6; }
 .etoro-section { margin-block: 18px; padding-block: 4px; }
 .etoro-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
-.etoro-totals > div { min-width: 0; padding: 10px; border: 1px solid var(--line); background: #fff; }
+.etoro-totals > div { min-width: 0; padding: 10px; border: 1px solid var(--line); background: var(--surface-raised); }
 .etoro-totals dt { color: var(--muted); font-size: 11px; }
 .etoro-totals dd { margin: 5px 0 0; font: 13px "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
 .etoro-panel .table-scroll { overflow-x: auto; }
@@ -353,11 +353,10 @@ tbody tr:hover { background: #182b21; }
 .investment-view svg [stroke="#a63747"] { stroke: var(--red); }
 .trading-guide { color: #bdccc3; }
 .intelligence-controls, .intelligence-brief, .intelligence-news, .intelligence-revisions { border-color: var(--line); }
-.intelligence-empty, .intelligence-advisory p, .intelligence-coverage p { color: var(--muted); }
+.intelligence-empty, .intelligence-advisory p { color: var(--muted); }
 .intelligence-empty h3 { color: var(--ink); }
 .intelligence-news time, .intelligence-revisions span, .intelligence-brief-time { color: var(--muted); }
 .intelligence-advisory { background: #2a2416; color: var(--amber); border-color: var(--amber); }
-.intelligence-coverage { background: var(--surface); border-color: var(--line); border-radius: 7px; }
 .control-lock-reason, .claim-evidence span { color: var(--amber); }
 .claim-evidence a { color: #78e1b0; }
 

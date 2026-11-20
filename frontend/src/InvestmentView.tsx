@@ -7,6 +7,7 @@ import validate from "./investment-validator-v2.js";
 import { label, reviewTimestamp, timestamp } from "./api";
 import { PortfolioAwareness } from "./PortfolioAwareness";
 import { PortfolioMonitoring } from "./PortfolioMonitoring";
+import { EToroPortfolioPanel } from "./EToroPortfolio";
 import { confirmRecording, pendingRecording, PENDING_RECORDING_KEY, recordingClocks, recordingVersion,
   RecordingPreviewChangedError, RecordingPreviewExpiredError, RecordingRequestError, RecordingSavedStorageError, standardRecord,
   type PendingRecording } from "./recording";
@@ -215,7 +216,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
       </li>}
       {data.recorded_corrections.length > 0
         ? <li>A correction made past performance unavailable; no new starting point was created.
-          {" "}<a href="#investment-records" onClick={() => openDisclosure("investment-records")}>Review</a>.
+          {" "}<a href="#investment-corrections" onClick={() => openDisclosure("investment-records")}>Review correction history</a>.
           {correctionDetails.length > 0 && <details className="help-disclosure">
             <summary>Correction details</summary>
             <ul>{correctionDetails.map(warning => <li key={warning}>{warning}</li>)}</ul>
@@ -225,7 +226,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
           {" "}<NavLink to="/investment-guide#performance-gaps">Learn more</NavLink>.</li>
         : (data.twr_pct === null || data.max_drawdown_pct === null) &&
           <li>Some performance figures are unavailable; complete totals do not restore past history.
-            {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>Review</a>.</li>}
+            {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>View performance history</a>.</li>}
       {hasDifferences && <li>Recorded cash observations differ from the journal; they do not change balances or show the current one.
         {" "}<a href="#investment-accounts" onClick={onReviewCashEvidence}>Review cash evidence</a>.
         {(cashWarnings.length > 0 || correctionReplayWarnings.length > 0) && <details className="help-disclosure">
@@ -926,25 +927,12 @@ function InvestmentRecording() {
       Recording is disabled, so this page cannot retry the confirmation. Do not enter it again; check the journal and terminal.</p>
   </section>;
   if (!session.enabled) return <section className="history-group" aria-label="Manual recording">
-    <h2>Recording is disabled</h2>
-    <p>Your saved records are protected from changes in this read-only session. Nothing is wrong with your portfolio.
-      To enter a record, you must deliberately restart with manual recording enabled.</p>
-    <h3>How to enable manual recording</h3>
-    <ol className="recording-access-steps">
-      <li>Find the terminal window where you started GoldScout. Press <kbd>Ctrl</kbd> + <kbd>C</kbd> and wait for it to stop.</li>
-      <li>Run your original startup command again, adding <code>--investment-recording</code>.
-        Keep the same workspace or journal selection so you open the same records.</li>
-      <li>Reload this page. Choose a record type, enter its source figures and check the preview before confirming.</li>
-    </ol>
-    <p>If you originally started with just <code>python -m dashboard</code> from this source checkout, use:</p>
-    <pre className="command-example"><code>python -m dashboard --investment-recording</code></pre>
-    <p><strong>Used a different folder or journal?</strong> Do not use the example unchanged. Retain your original
-      {" "}<code>--workspace</code> or <code>--investment-database</code> selection. If you are unsure, pause rather than selecting another folder.</p>
-    <p>This cannot connect to a bank or broker, place orders or move money. Nothing is enabled by opening this page.</p>
-    <details className="help-disclosure"><summary>Why a restart is required</summary>
-      <p>Recording requires an explicitly selected journal and local opt-in. The page cannot grant itself write access.
-        Installed use outside a checkout requires an explicit workspace or journal selection.
-        Keep GoldScout on this computer's loopback address; there is no user login.</p>
+    <h2>Viewing only</h2>
+    <p>Manual recording is unavailable in this session. Normal local launches allow recording after setup.</p>
+    <details className="help-disclosure"><summary>Use a recorded workspace</summary>
+      <p>If you started with <code>--investment-read-only</code>, restart without that option to add records.
+        Keep the same <code>--workspace</code> or <code>--investment-database</code> selection.
+        Synthetic demos do not save records.</p>
     </details>
   </section>;
   if (pending && (!preview || pending.previewId !== preview.preview_id)) return <section className="history-group" aria-label="Manual recording">
@@ -1282,6 +1270,12 @@ export function InvestmentView({ now }: { now: number }) {
   const query = useQuery({ queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal), refetchInterval: 60000 });
   const accountsRef = useRef<HTMLDetailsElement>(null);
   const data = query.isError ? undefined : query.data;
+  const location = useLocation();
+  const hasData = Boolean(data);
+  useEffect(() => {
+    if (location.hash === "#investment-etoro")
+      document.getElementById("investment-etoro")?.scrollIntoView();
+  }, [location.hash, hasData]);
   const metricValues = data ? [
     pounds(data.equity_gbp),
     pounds(data.net_contributions_gbp),
@@ -1319,6 +1313,9 @@ export function InvestmentView({ now }: { now: number }) {
             if (accountsRef.current) accountsRef.current.open = true;
           }} />
           <AccountAndHoldingsSummary data={data} />
+        </>}
+    <EToroPortfolioPanel />
+    {data && <>
           <section className="history-group">
             <h2>Performance summary</h2>
             <dl className="health-facts">
@@ -1449,7 +1446,7 @@ export function InvestmentView({ now }: { now: number }) {
               </div>
             </section>}
           {data.recorded_corrections.length > 0 &&
-            <section className="history-group" aria-label="Evidence-backed corrections">
+            <section className="history-group" id="investment-corrections" aria-label="Evidence-backed corrections">
               <h2>Historical corrections</h2>
               <p className="position-note">Corrections append new evidence and replay downstream accounting. A correction is refused if the revised event breaks later accounting. Any historical correction makes performance unavailable; the system never creates a replacement baseline automatically.</p>
               <div className="table-scroll" tabIndex={0} aria-label="Investment correction history">
@@ -1587,7 +1584,7 @@ export function InvestmentGuide() {
       <p>Keep source documents and setup receipts separately, and store a protected backup away from this computer.</p>
     </details>
     <details className="help-disclosure"><summary>About your records</summary>
-      <p>Figures are entered by you and are not checked with a bank or broker. The dashboard is read-only unless manual recording is explicitly enabled when it starts. Keep it on this computer; there is no sign-in.</p>
+      <p>Figures are entered by you and are not checked with a bank or broker. Manual recording is available after setup; use <code>--investment-read-only</code> to view without journal writes. Keep it on this computer; there is no sign-in.</p>
       <p>GoldScout does not recommend allocations or approve orders. It cannot place trades or move money.</p>
       <p>Investment values can fall, and no return is guaranteed. Account type does not confirm tax treatment, eligibility or deposit protection.</p>
     </details>

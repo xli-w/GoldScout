@@ -117,28 +117,29 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
     <section className="intelligence-advisory" aria-label="Advisory-only boundary">
       <ShieldAlert size={20}/>
       <div><h2>Optional public information — not investment advice</h2><p>Calendar, news and analysis may be incomplete or unverified; they cannot change records or make trades.
-        Portfolio awareness is separate and local. Never send private account evidence to hosted AI.</p></div>
-    </section>
-    <section className="intelligence-coverage" aria-label="Current source coverage">
-      <h2>Current source coverage</h2>
-      <p>U.S.-focused calendars and Federal Reserve policy news. UK/global calendars and issuer coverage are unverified.</p>
-    </section>
-    <section className="intelligence-coverage" aria-label="Source status">
-      <h2>Source status</h2>
-      <p>{snapshot.source_mode==="demo"&&snapshot.service_status_state==="unknown"
-        ?"Synthetic demo: service activity is unknown.":serviceStateText[snapshot.service_status_state]}</p>
-      {snapshot.service_status&&<>
-        {snapshot.service_status.failures.length>0&&<ul aria-label="Last reported failures">{snapshot.service_status.failures.map(failure=>
-          <li key={failure.source}>{sourceName(failure.source)}: {label(failure.error_code)}; reported {timestamp(failure.observed_at)}. This may be historical.</li>)}</ul>}
-        <details className="help-disclosure"><summary>Observation details</summary>
-          <p>Observed {timestamp(snapshot.service_status.observed_at)} · Applied settings revision {snapshot.service_status.settings_revision}.</p>
-          <p>Reported capabilities: network {snapshot.service_status.network_permitted?"permitted":"not permitted"};
-            news {snapshot.service_status.news_permitted?"permitted":"not permitted"};
-            AI {snapshot.service_status.ai_permitted?"permitted":"not permitted"}.
-            Calendar sources: {snapshot.service_status.calendar_sources.map(sourceName).join(", ")}.</p>
-        </details>
-      </>}
-      <p>This does not prove that the service is running now or that a provider is connected.</p>
+        Portfolio awareness is separate and local. Never send private account evidence to hosted AI.</p>
+        <div className="intelligence-source-details" role="region" aria-label="Current source coverage">
+          <h3>Current source coverage</h3>
+          <p>U.S.-focused calendars and Federal Reserve policy news. UK/global calendars and issuer coverage are unverified.</p>
+        </div>
+        <div className="intelligence-source-details" role="region" aria-label="Source status">
+          <h3>Source status</h3>
+          <p>{snapshot.source_mode==="demo"&&snapshot.service_status_state==="unknown"
+            ?"Synthetic demo: service activity is unknown.":serviceStateText[snapshot.service_status_state]}</p>
+          {snapshot.service_status&&<>
+            {snapshot.service_status.failures.length>0&&<ul aria-label="Last reported failures">{snapshot.service_status.failures.map(failure=>
+              <li key={failure.source}>{sourceName(failure.source)}: {label(failure.error_code)}; reported {timestamp(failure.observed_at)}. This may be historical.</li>)}</ul>}
+            <details className="help-disclosure"><summary>Observation details</summary>
+              <p>Observed {timestamp(snapshot.service_status.observed_at)} · Applied settings revision {snapshot.service_status.settings_revision}.</p>
+              <p>Reported capabilities: network {snapshot.service_status.network_permitted?"permitted":"not permitted"};
+                news {snapshot.service_status.news_permitted?"permitted":"not permitted"};
+                AI {snapshot.service_status.ai_permitted?"permitted":"not permitted"}.
+                Calendar sources: {snapshot.service_status.calendar_sources.map(sourceName).join(", ")}.</p>
+            </details>
+          </>}
+          <p>This does not prove that the service is running now or that a provider is connected.</p>
+        </div>
+      </div>
     </section>
     <nav className="intelligence-sections" aria-label="Intelligence sections">
       <div><span>Evidence</span><a href="#intelligence-calendar">Calendar</a><a href="#intelligence-briefs">AI briefs</a>
@@ -183,7 +184,7 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       <div className="intelligence-revisions" aria-label="Analysis settings status">
         <div><span>Latest request</span><strong>{requested?`Awaiting revision ${requested.settings.revision}`:latestControl?`${label(latestControl.status)} / ${latestControl.reason}`:"No recorded request"}</strong></div>
         <div><span>Applied settings</span><strong>Revision {snapshot.settings.revision} · Market intelligence {snapshot.settings.enabled?"on":"off"};
-          calendar {snapshot.settings.calendar_enabled?"on":"off"}; news {snapshot.settings.news_enabled?"on":"off"};
+          calendar preference {snapshot.settings.calendar_enabled?"on":"off"}; news preference {snapshot.settings.news_enabled?"on":"off"};
           AI {snapshot.settings.ai_enabled?"on":"off"}</strong></div>
         <div><span>Service</span><strong>{label(snapshot.service_status_state)}</strong></div>
       </div>
@@ -191,7 +192,8 @@ export function IntelligenceView({data}:{data:ReturnType<typeof useIntelligence>
       <details className="help-disclosure"><summary>Settings revisions</summary>
         <p>Applied revision {snapshot.settings.revision}.{requested && ` Requested revision ${requested.settings.revision}.`}</p>
       </details>
-      <div className="intelligence-toggle-row">{([['enabled','Market intelligence'],['calendar_enabled','Calendar collection'],['news_enabled','News collection'],['ai_enabled','AI summaries']] as const).map(([key,label])=><label key={key}><input type="checkbox" aria-label={label} aria-describedby={displayed.ai_enabled&&(key==='enabled'||key==='ai_enabled')?'ai-shutdown-note':undefined} checked={displayed[key]} disabled={locked||(key==='ai_enabled'&&!displayed.ai_enabled&&!profileForEnable)} onChange={event=>change(key,event.target.checked)}/>{label}</label>)}</div>
+      <div className="intelligence-toggle-row">{([['enabled','Market intelligence'],['calendar_enabled','Calendar collection'],['news_enabled','News collection'],['ai_enabled','AI summaries']] as const).map(([key,label])=><label key={key}><input type="checkbox" aria-label={label} aria-describedby={(key==='calendar_enabled'||key==='news_enabled')&&!snapshot.settings.enabled?'intelligence-master-note':displayed.ai_enabled&&(key==='enabled'||key==='ai_enabled')?'ai-shutdown-note':undefined} checked={displayed[key]} disabled={locked||(key==='ai_enabled'&&!displayed.ai_enabled&&!profileForEnable)} onChange={event=>change(key,event.target.checked)}/>{label}</label>)}</div>
+      {!snapshot.settings.enabled&&<p className="subtle" id="intelligence-master-note">Calendar and news selections are inactive while Market intelligence is off in applied settings.</p>}
       {displayed.ai_enabled&&<p className="subtle" id="ai-shutdown-note">Turning off AI summaries clears the saved AI profile. Turning off Market intelligence also turns off AI summaries.</p>}
       {!displayed.ai_enabled&&!profileForEnable&&<p className="subtle">AI summaries are unavailable. Configure one dashboard AI profile or register the saved profile.</p>}
       {!displayed.ai_enabled&&displayed.ai_profile&&!snapshot.profiles.includes(displayed.ai_profile)&&<p className="subtle">The saved AI profile is not registered and will be cleared when other settings change.</p>}

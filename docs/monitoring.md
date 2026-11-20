@@ -184,7 +184,7 @@ load. When the bound current report differs from the last sync, actions remain
 unavailable until the operator explicitly enables workflow actions and syncs.
 
 Actions use the separate `--monitoring-workflow` opt-in, independent of
-`--investment-recording`; they cannot record journal events. There is no
+manual journal recording and `--investment-read-only`; they cannot record journal events. There is no
 password or user login, and browser request defenses are not authentication.
 Same-origin and CSRF
 checks, rate-limited short-lived sessions, bounded JSON, exact portfolio/profile/

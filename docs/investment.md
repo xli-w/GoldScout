@@ -20,16 +20,20 @@ the bound preview. No login or hand-written profile is required.
 
 ## Optional eToro connection
 
-The startup wizard offers a separate eToro portfolio panel. Connecting is
-optional and requires an explicit one-time read, account-eligibility and
+The startup wizard offers an optional eToro connection, and the portfolio shows
+the provider's latest in-memory read alongside the recorded accounts. Connecting
+requires an explicit one-time read, account-eligibility and
 permitted-retention attestations, and confirmation that the returned account ID
 matches the account selected. The eToro snapshot is displayed separately; it
 does not create or populate a GBP journal account, balance, holding or mark.
-Keys are read only by the local server from its private connection settings or
-environment after the read is requested, never from browser fields.
+The provider figures are not included in portfolio totals. On the portfolio
+screen, connection controls remain accessible if its journal snapshot is
+unavailable. The local server reads keys from private connection settings or
+the environment only after a read is requested, never from browser fields.
 
 The panel shows provider account totals in their account currency, direct
-instrument aggregates and separate copy groups. It also shows a separate
+instrument aggregates with each asset's currency, and separate copy groups.
+Provider timestamps are displayed in UTC. It also shows a separate
 provider-reported GBP balance when validated; that balance has no source
 timestamp and is not synchronized to the portfolio snapshot. The documented
 portfolio response does not identify every instrument class or individual
@@ -102,11 +106,15 @@ correction clock instead of silently changing it. Monitoring snapshots remain se
 not transactions or repairs. Technical identities and provider details remain
 available in expandable panels; errors and missing-data warnings stay visible.
 
-After setup, the portfolio opens read-only. To record future updates, stop the
-dashboard and add `--investment-recording` to the original startup command,
-retaining its workspace/journal selection. The setup receipt shows the standard
-source-checkout command and reminds users not to switch workspaces. The page
-never enables writing.
+After completed setup or recovery, choose **Add a record** for future updates;
+no restart is needed. Normal local launches permit manual recording in the
+selected journal. Add `--investment-read-only` to your original command for
+viewing without journal writes; it also prevents setup from saving. Keep the
+same workspace/journal selection. The older `--investment-recording` option
+remains accepted, but cannot be combined with read-only mode.
+Each save still needs a bound preview and explicit confirmation. The final
+confirmation button is the setup review acknowledgement; no extra review
+checkbox is required. Source dates and holdings-completeness checks remain.
 Missing-price and cash-review links open the relevant records or guidance.
 Later prices cannot repair earlier performance gaps; historical corrections
 do not automatically establish a replacement baseline.
@@ -140,14 +148,38 @@ and receipts are separate filesystem operations. A later failure must not
 delete a committed journal or claim rollback. Preserve conflicting artifacts;
 only provenance-bound setup recovery is permitted.
 
-Existing journals open read-only. Damaged, foreign or older-format journals
+Existing valid journals allow manual recording on a normal launch. Damaged, foreign or older-format journals
 are rejected, not migrated, reset or repaired. Journals containing retired
 policy-review acknowledgement events are also refused, even if they carry the
 current wire version; there is no event migration. `--investment-database <path>`
 selects an existing journal and never falls back to setup.
-Later manual writes require separate `--investment-recording` opt-in.
 Same-origin, CSRF, revision and preview checks are mandatory but are not user
 authentication. Keep the dashboard on loopback.
+
+### Provider simplification follow-up (not implemented)
+
+Manual eToro refresh currently requires active automatic-startup permission.
+The first follow-up should separate **Refresh now** from **Refresh on startup**:
+an explicit manual request should not force the operator to enable automation.
+This needs its own permission scope, expiry/revocation rules and treatment of
+broader keys; removing the current check alone would grant unintended access.
+
+Connection checks record distinct facts: real/demo environment, returned account
+identity, key scope or broader-key risk, API eligibility, and permitted local
+processing. They are operator attestations, not provider-verified guarantees.
+Consolidate repeated explanations rather than silently dropping those facts.
+Keep automatic refresh separately opt-in. Longer expiry and automatic retries
+are separate decisions, not consequences of simpler wording.
+
+Implementation would affect [connection permissions](../dashboard/etoro_connection.py),
+[API validation](../dashboard/app.py), the
+[connection panel](../frontend/src/EToroPortfolio.tsx), existing persisted consent
+compatibility, and the dashboard/eToro connection regressions. Cover manual-only
+refresh, expired/revoked/changed-account permission, broader-key restrictions,
+startup behavior and failure/retry cases. Reassess provider scope semantics,
+eligibility, retention terms and response coverage before live validation.
+No provider permission, retention, expiry, retry or collection behavior changes
+in the local-recording simplification.
 
 ## Manual CLI and input contract
 

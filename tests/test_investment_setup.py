@@ -1,4 +1,4 @@
-"""First-run setup and read-only handoff, using temporary stores."""
+"""First-run setup and permission-bound recording handoff, using temporary stores."""
 
 import copy
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +14,7 @@ from dashboard.app import create_app
 from investment.store import read
 from investment import InvestmentError, bootstrap
 from test_dashboard_api import MemoryEventLoop
-from test_investment_opening import NOW, opening, profile
+from test_investment_opening import NOW, event, opening, profile
 
 
 class InvestmentSetupTests(unittest.TestCase):
@@ -51,6 +51,270 @@ class InvestmentSetupTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    def assert_recording_blocked(self, client):
+        self.assertFalse(client.get("/api/investment/v1/recording/session").json()["enabled"])
+        for route in ("preview", "confirm"):
+            self.assertEqual(client.post(
+                f"/api/investment/v1/recording/{route}", json={},
+                headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+
+    def assert_recording_works(self, client):
+        session = client.get("/api/investment/v1/recording/session").json()
+        self.assertTrue(session["enabled"])
+        headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+        value = event("after-setup", "contribution", self.now, "bank", amount_gbp="25")
+        response = client.post("/api/investment/v1/recording/preview", headers=headers,
+                               json={"request_id": "after-setup", "event": value})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["revision"], 1)
+        confirmation = {"preview_id": response.json()["preview_id"]}
+        response = client.post("/api/investment/v1/recording/confirm", headers=headers,
+                               json=confirmation)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["revision"], 2)
+        self.assertEqual(client.post("/api/investment/v1/recording/confirm",
+                                    headers=headers, json=confirmation).json(), response.json())
+        self.assertEqual(read(self.database, self.now).revision, 2)
+
+    def test_completed_setup_enables_recording_without_restart_only_when_allowed(self):
+        with self.client(investment_recording_enabled=True) as client:
+            self.assert_recording_blocked(client)
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            self.assert_recording_blocked(client)
+            self.assertFalse(self.workspace.exists())
+            confirmation = {"preview_id": preview["preview_id"]}
+            response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                   json=confirmation)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "completed")
+            self.assertEqual(client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                        json=confirmation).json(), response.json())
+            # Setup CSRF cannot authorize a journal append.
+            self.assertEqual(client.post("/api/investment/v1/recording/preview",
+                                        headers=headers, json={}).status_code, 403)
+            self.assert_recording_works(client)
+
+    def test_read_only_launch_permissions_block_setup_and_recording_without_creating_files(self):
+        with self.client(code=False) as client:
+            session = client.get("/api/investment/v1/setup/session").json()
+            self.assertEqual(session["state"], "empty")
+            self.assertFalse(session["enabled"])
+            self.assertIsNone(session["csrf"])
+            for route in ("preview", "recovery-preview", "confirm"):
+                self.assertEqual(client.post(
+                    f"/api/investment/v1/setup/{route}", json={},
+                    headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+            self.assert_recording_blocked(client)
+            self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 503)
+        self.assertFalse(self.workspace.exists())
+
+    def test_failed_recording_handoff_preserves_completed_setup_receipt(self):
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch("dashboard.investment_recording.RecordingSessions",
+                       side_effect=InvestmentError("Synthetic handoff failure")):
+                response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                       json={"preview_id": preview["preview_id"]})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "completed")
+            self.assertTrue(response.json()["committed"])
+            self.assertIn("recording is unavailable", response.json()["message"])
+            self.assert_recording_blocked(client)
+            self.assertEqual(read(self.database, self.now).revision, 1)
+
+    def test_partial_setup_stays_blocked_until_same_process_confirmed_recovery(self):
+        original_write = bootstrap._write_new
+
+        def fail_receipt(path, value):
+            if path.name == bootstrap.RECEIPT:
+                raise OSError("Synthetic receipt failure")
+            return original_write(path, value)
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            confirmation = {"preview_id": preview["preview_id"]}
+            with patch("investment.bootstrap._write_new", side_effect=fail_receipt):
+                response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                       json=confirmation)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "partial")
+            self.assertTrue(response.json()["committed"])
+            journal = self.database.read_bytes()
+            self.assert_recording_blocked(client)
+            self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "setup")
+            self.assertEqual(client.get("/api/investment/v1/setup/session").json()["state"], "recoverable")
+            # Retrying the uncertain/partial receipt is not a completion.
+            self.assertEqual(client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                        json=confirmation).json(), response.json())
+            self.assert_recording_blocked(client)
+            recovered = client.post("/api/investment/v1/setup/recovery-preview",
+                                    headers=headers, json={})
+            self.assertEqual(recovered.status_code, 200, recovered.text)
+            self.assert_recording_blocked(client)
+            self.assertEqual(self.database.read_bytes(), journal)
+            response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                   json={"preview_id": recovered.json()["preview_id"]})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "completed")
+            self.assertEqual(self.database.read_bytes(), journal)
+            self.assert_recording_works(client)
+
+    def test_reads_cannot_enable_recording_after_partial_result_even_if_workspace_is_ready(self):
+        original_confirm = bootstrap.confirm_setup
+
+        def uncertain_completion(*args):
+            result = original_confirm(*args)
+            self.assertEqual(result["status"], "completed")
+            return {**result, "status": "partial", "receipt": None,
+                    "message": "Synthetic uncertain completion"}
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch("dashboard.investment_setup.confirm_setup", side_effect=uncertain_completion):
+                response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                       json={"preview_id": preview["preview_id"]})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "partial")
+            original = self.database.read_bytes()
+            self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "investment")
+            self.assertEqual(client.get("/api/investment/v1/setup/session").json()["state"], "ready")
+            self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 200)
+            self.assert_recording_blocked(client)
+            self.assertEqual(self.database.read_bytes(), original)
+
+    def test_read_only_recoverable_workspace_reads_and_rejected_writes_preserve_artifacts(self):
+        original_write = bootstrap._write_new
+
+        def fail_receipt(path, value):
+            if path.name == bootstrap.RECEIPT:
+                raise OSError("Synthetic receipt failure")
+            return original_write(path, value)
+
+        with self.client() as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch("investment.bootstrap._write_new", side_effect=fail_receipt):
+                result = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                     json={"preview_id": preview["preview_id"]})
+            self.assertEqual(result.json()["status"], "partial")
+        original = {path.relative_to(self.workspace): path.read_bytes()
+                    for path in self.workspace.rglob("*") if path.is_file()}
+        with self.client(code=False) as client:
+            session = client.get("/api/investment/v1/setup/session").json()
+            self.assertEqual(session["state"], "recoverable")
+            self.assertFalse(session["enabled"])
+            self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "setup")
+            self.assertEqual(client.get("/api/investment/v1/snapshot").status_code, 200)
+            for route in ("preview", "recovery-preview", "confirm"):
+                self.assertEqual(client.post(
+                    f"/api/investment/v1/setup/{route}", json={},
+                    headers={"Origin": "http://127.0.0.1"}).status_code, 405)
+            self.assert_recording_blocked(client)
+        self.assertEqual({path.relative_to(self.workspace): path.read_bytes()
+                          for path in self.workspace.rglob("*") if path.is_file()}, original)
+
+    def test_blocked_workspace_cannot_initialize_recording_or_repair_files(self):
+        self.workspace.mkdir()
+        collision = self.workspace / "profile.json"
+        collision.write_text("synthetic unrelated file", encoding="utf-8")
+        with self.client(investment_recording_enabled=True) as client:
+            self.assertEqual(client.get("/api/investment/v1/setup/session").json()["state"], "blocked")
+            self.assert_recording_blocked(client)
+        self.assertEqual(collision.read_text(encoding="utf-8"), "synthetic unrelated file")
+        self.assertFalse(self.database.exists())
+
+    def test_unopened_workspace_is_not_adopted_as_completed_setup(self):
+        from investment.store import initialize
+
+        self.workspace.mkdir()
+        initialize(self.database, profile(), self.now)
+        original = self.database.read_bytes()
+        with self.client(investment_recording_enabled=True) as client:
+            session = client.get("/api/investment/v1/setup/session").json()
+            self.assertEqual(session["state"], "manual_unopened")
+            self.assertFalse(session["enabled"])
+            self.assert_recording_blocked(client)
+        self.assertEqual(self.database.read_bytes(), original)
+
+    def test_completed_setup_cannot_handoff_to_a_different_profile(self):
+        from investment.store import initialize, import_events
+
+        original_confirm = bootstrap.confirm_setup
+        replacement = Path(self.temporary.name) / "replacement.sqlite3"
+        changed_profile = profile()
+        changed_profile["portfolio_id"] = "different-portfolio"
+        initialize(replacement, changed_profile, self.now)
+        import_events(replacement, [opening()], self.now)
+
+        def replaced_completion(*args):
+            result = original_confirm(*args)
+            self.assertEqual(result["status"], "completed")
+            self.database.rename(Path(self.temporary.name) / "preserved.sqlite3")
+            replacement.rename(self.database)
+            return result
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch("dashboard.investment_setup.confirm_setup", side_effect=replaced_completion):
+                response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                       json={"preview_id": preview["preview_id"]})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "completed")
+            self.assertTrue(response.json()["committed"])
+            self.assertIn("recording is unavailable", response.json()["message"])
+            self.assert_recording_blocked(client)
+
+    def test_completed_setup_rejects_same_profile_journal_replacement_during_handoff(self):
+        from dashboard.investment_recording import RecordingSessions
+        from investment.store import initialize, import_events
+
+        original_confirm = bootstrap.confirm_setup
+        replacement = Path(self.temporary.name) / "replacement.sqlite3"
+        preserved = Path(self.temporary.name) / "preserved.sqlite3"
+        changed_opening = opening()
+        changed_opening["id"] = "different-opening"
+        initialize(replacement, profile(), self.now)
+        import_events(replacement, [changed_opening], self.now)
+        completed = {}
+
+        def remember_completion(*args):
+            result = original_confirm(*args)
+            self.assertEqual(result["status"], "completed")
+            completed.update(copy.deepcopy(result))
+            return result
+
+        def replace_before_capture(*args):
+            # The workspace was ready when checked, but the constructor now
+            # captures another valid journal with the very same profile hash.
+            self.database.rename(preserved)
+            replacement.rename(self.database)
+            return RecordingSessions(*args)
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch("dashboard.investment_setup.confirm_setup", side_effect=remember_completion), \
+                    patch("dashboard.investment_recording.RecordingSessions",
+                          side_effect=replace_before_capture):
+                response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                       json={"preview_id": preview["preview_id"]})
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()
+            self.assertEqual(result["status"], "completed")
+            self.assertTrue(result["committed"])
+            self.assertEqual(result["receipt"], completed["receipt"])
+            self.assertEqual(result["revision"], completed["revision"])
+            self.assertIn("recording is unavailable", result["message"])
+            self.assert_recording_blocked(client)
+        self.assertEqual(read(preserved, self.now).revision, 1)
+        self.assertEqual(read(self.database, self.now).revision, 1)
+        self.assertIn("different-opening", read(self.database, self.now).ids)
 
     def test_setup_read_preview_and_abandon_create_no_files(self):
         with self.client() as client:
@@ -167,7 +431,7 @@ class InvestmentSetupTests(unittest.TestCase):
         self.assertFalse(self.workspace.exists())
 
     def test_uncommitted_partial_response_can_be_reentered_after_restart(self):
-        with self.client() as client:
+        with self.client(investment_recording_enabled=True) as client:
             headers = self.session_headers(client)
             preview = self.preview(client, headers)
             with patch("investment.bootstrap.store.initialize",
@@ -179,7 +443,9 @@ class InvestmentSetupTests(unittest.TestCase):
             self.assertFalse(response.json()["committed"])
             self.assertIsNone(response.json()["revision"])
             self.assertFalse(self.database.exists())
-        with self.client() as restarted:
+            self.assert_recording_blocked(client)
+        with self.client(investment_recording_enabled=True) as restarted:
+            self.assert_recording_blocked(restarted)
             headers = self.session_headers(restarted)
             session = restarted.get("/api/investment/v1/setup/session").json()
             self.assertTrue(session["recovery"]["requires_opening"])
@@ -188,6 +454,7 @@ class InvestmentSetupTests(unittest.TestCase):
                                       json={"preview_id": preview["preview_id"]})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["status"], "completed")
+            self.assert_recording_works(restarted)
 
     def test_committed_ancillary_failures_offer_restart_recovery(self):
         original_write = bootstrap._write_new
@@ -220,7 +487,8 @@ class InvestmentSetupTests(unittest.TestCase):
                 self.assertEqual(response.json()["revision"], 1)
                 journal = self.database.read_bytes()
                 self.assertEqual(client.get("/api/v1/settings").json()["workspace"], "setup")
-            with self.client() as restarted:
+            with self.client(investment_recording_enabled=True) as restarted:
+                self.assert_recording_blocked(restarted)
                 public = restarted.get("/api/investment/v1/setup/session").json()
                 self.assertEqual(public["state"], "recoverable")
                 self.assertIn("recovery", public)
@@ -235,6 +503,7 @@ class InvestmentSetupTests(unittest.TestCase):
                 self.assertEqual(self.database.read_bytes(), journal)
                 self.assertEqual(read(self.database, self.now).revision, 1)
                 self.assertEqual(restarted.get("/api/v1/settings").json()["workspace"], "investment")
+                self.assert_recording_works(restarted)
 
     def test_competing_server_instances_cannot_overwrite_the_winning_opening(self):
         with self.client() as first, self.client() as second:
@@ -277,7 +546,7 @@ class InvestmentSetupTests(unittest.TestCase):
                 raise InvestmentError("Synthetic temporary verification failure")
             return original_read(path, now)
 
-        with self.client() as client:
+        with self.client(investment_recording_enabled=True) as client:
             headers = self.session_headers(client)
             preview = self.preview(client, headers)
             with patch("investment.bootstrap.os.link", side_effect=publish), \
@@ -290,6 +559,7 @@ class InvestmentSetupTests(unittest.TestCase):
             self.assertTrue(response.json()["committed"])
             self.assertEqual(response.json()["revision"], 1)
             journal = self.database.read_bytes()
+            self.assert_recording_blocked(client)
         with self.client() as restarted:
             headers = self.session_headers(restarted)
             recovered = restarted.post(

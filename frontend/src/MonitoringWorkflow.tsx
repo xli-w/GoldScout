@@ -283,7 +283,7 @@ export function MonitoringWorkflowPage() {
     <p><strong>Review inbox:</strong> {inboxStatus} <span aria-hidden="true">·</span>
       {" "}<strong>Compare account figures:</strong> {snapshotStatus}</p>
     {bothNotSetUp && <p>Optional checks are not configured.
-      {" "}<NavLink to="/investment-guide#monitoring-setup">See setup steps</NavLink>.</p>}
+      {" "}<NavLink to="/investment-guide#monitoring-setup">About optional setup</NavLink>.</p>}
     <section className="history-group" id="review-inbox">
       <h2>Review inbox</h2>
       {inbox.isError && <p role="alert">The review inbox could not be opened or verified against these portfolio records.
@@ -291,7 +291,7 @@ export function MonitoringWorkflowPage() {
       {inbox.isPending && <p role="status">Loading the local inbox…</p>}
       {data?.enabled === false && <p>A review inbox has not been selected for this dashboard.
         This does not mean there are no checks to review. Opening an inbox requires separate setup.
-        {!bothNotSetUp && <>{" "}<NavLink to="/investment-guide#monitoring-setup">See setup steps</NavLink>.</>}</p>}
+        {!bothNotSetUp && <>{" "}<NavLink to="/investment-guide#monitoring-setup">About optional setup</NavLink>.</>}</p>}
       {data?.enabled === true && <>
         <p>{data.source_available ? data.sync_current
             ? "The inbox matches the latest saved checks."
@@ -334,10 +334,10 @@ export function MonitoringWorkflowPage() {
       {session.isError && <p role="alert">Snapshot permissions could not be checked. Nothing can be saved.
         Check the terminal window used to start the dashboard for error details.</p>}
       {auth && !auth.enabled && <p>Snapshot entry needs a separate store and startup permission.
-        {!bothNotSetUp && <>{" "}<NavLink to="/investment-guide#monitoring-setup">See setup steps</NavLink></>}.</p>}
+        {!bothNotSetUp && <>{" "}<NavLink to="/investment-guide#monitoring-setup">About optional setup</NavLink></>}.</p>}
       {auth?.enabled && !auth.cache_enabled &&
         <p>A separate snapshot store must be selected before you can save comparisons; your portfolio journal cannot be used.
-          {!bothNotSetUp && <>{" "}<NavLink to="/investment-guide#monitoring-setup">See setup steps</NavLink></>}.</p>}
+          {!bothNotSetUp && <>{" "}<NavLink to="/investment-guide#monitoring-setup">About optional setup</NavLink></>}.</p>}
       {auth?.enabled && auth.cache_enabled && <>
         {!preview && <form className="recording-form" onSubmit={event => void previewObservation(event)}>
           <label>Account<select required value={accountId || auth.accounts[0]?.account_id || ""}

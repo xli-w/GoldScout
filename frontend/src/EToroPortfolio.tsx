@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { timestamp } from "./api";
 
 type Instrument = {
   instrument_id: number; asset_currency: string; netUnits: string;
@@ -62,8 +63,10 @@ async function responseJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (text.length > 2_000_000) throw new Error("eToro response exceeded the supported bound.");
   try { return JSON.parse(text) as unknown; }
-  catch { throw new Error("eToro response was invalid. No account data was saved."); }
+  catch { throw new Error("eToro response was invalid. Check the connection status before retrying."); }
 }
+
+class EToroRequestError extends Error {}
 
 async function get<T>(path: string, guard: (value: unknown) => value is T): Promise<T> {
   const response = await fetch(path, {
@@ -87,9 +90,16 @@ async function post(path: string, csrf: string, body: unknown): Promise<unknown>
     const detail = object(value) && typeof value.error_code === "string"
       ? ` (${value.error_code})`
       : object(value) && typeof value.message === "string" ? ` ${value.message}` : "";
-    throw new Error(`eToro request was refused or unavailable.${detail}`);
+    throw new EToroRequestError(`eToro request was refused or unavailable.${detail}`);
   }
   return value;
+}
+
+function isConnection(value: unknown): value is Connection {
+  return object(value) && (value.environment === "real" || value.environment === "demo") &&
+    Number.isSafeInteger(value.account_id) && Number.isSafeInteger(value.revision) &&
+    (value.expires_at === null || typeof value.expires_at === "string") &&
+    (value.revoked_at === null || typeof value.revoked_at === "string");
 }
 
 function isSession(value: unknown): value is Session {
@@ -97,31 +107,37 @@ function isSession(value: unknown): value is Session {
     typeof value.state === "string" && typeof value.last_status === "string" &&
     typeof value.snapshot_available === "boolean" &&
     (value.csrf === undefined || value.csrf === null || typeof value.csrf === "string") &&
-    (value.connection === undefined || value.connection === null || object(value.connection));
+    (value.connection === undefined || value.connection === null || isConnection(value.connection)) &&
+    (value.message === undefined || typeof value.message === "string");
 }
 
 function isPortfolioState(value: unknown): value is PortfolioState {
   return object(value) && typeof value.state === "string" &&
     typeof value.last_status === "string" &&
     (value.snapshot === null || isSnapshot(value.snapshot)) &&
-    (value.connection === undefined || value.connection === null || object(value.connection));
+    (value.connection === undefined || value.connection === null || isConnection(value.connection)) &&
+    (value.message === undefined || typeof value.message === "string");
 }
 
-function timestamp(value: string) {
-  const parsed = new Date(value);
-  return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString() : value;
+function hasTimezone(value: unknown): value is string {
+  return typeof value === "string" && /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) &&
+    Number.isFinite(Date.parse(value));
+}
+
+function providerTimestamp(value: unknown) {
+  return hasTimezone(value) ? timestamp(value) : "Unavailable (invalid timestamp)";
 }
 
 function PositionRows({ label, positions }: { label: string; positions: Instrument[] }) {
   return <section className="etoro-section" aria-label={label}>
-    <h3>{label}</h3>
+    <h4>{label}</h4>
     {positions.length === 0 ? <p>No instrument aggregates reported.</p> : <div className="table-scroll">
       <table><thead><tr>
         <th>Instrument ID</th><th>Net units</th><th>Net contracts</th>
-        <th>Exposure ({positions[0].asset_currency})</th><th>Exposure (account currency)</th><th>Average leverage</th>
+        <th>Exposure (asset currency)</th><th>Exposure (account currency)</th><th>Average leverage</th>
       </tr></thead><tbody>{positions.map(position => <tr key={position.instrument_id}>
         <td>{position.instrument_id}</td><td>{position.netUnits}</td><td>{position.netContracts}</td>
-        <td>{position.netCurrentExposureAssetCurrency}</td>
+        <td>{position.netCurrentExposureAssetCurrency} {position.asset_currency}</td>
         <td>{position.netCurrentExposureAccountCurrency}</td><td>{position.avgLeverage}</td>
       </tr>)}</tbody></table>
     </div>}
@@ -133,7 +149,7 @@ function SnapshotView({ snapshot }: { snapshot: Snapshot }) {
   const gbp = snapshot.gbp_balance;
   return <div className="etoro-snapshot">
     <p><strong>{snapshot.environment === "real" ? "Real account" : "Demo account"}</strong>
-      {" · "}Account ID {snapshot.account_id} · Source snapshot {timestamp(snapshot.source_as_of)} UTC
+      {" · "}Account ID {snapshot.account_id} · Source snapshot {providerTimestamp(snapshot.source_as_of)}
       {" · "}Account currency {snapshot.account_currency}</p>
     <div className="etoro-warning" role="note">
       This is read-only provider evidence, not a journal entry, custody verification, or buying-power approval.
@@ -141,7 +157,7 @@ function SnapshotView({ snapshot }: { snapshot: Snapshot }) {
       is shown as a net instrument aggregate; copied positions are kept in separate mirror groups.
     </div>
     <section className="etoro-section" aria-label="Account totals">
-      <h3>Provider account totals ({snapshot.account_currency})</h3>
+      <h4>Provider account totals ({snapshot.account_currency})</h4>
       <dl className="etoro-totals">
         <div><dt>Account value</dt><dd>{totals.accountTotalValue}</dd></div>
         <div><dt>Account balance</dt><dd>{totals.accountBalance}</dd></div>
@@ -154,20 +170,21 @@ function SnapshotView({ snapshot }: { snapshot: Snapshot }) {
         Pending-order details are not included; reserved cash is shown once and is not added to the balance.</p>
     </section>
     {gbp?.status === "provider_reported" ? <section className="etoro-section" aria-label="Provider reported GBP value">
-      <h3>Provider-reported GBP total</h3>
+      <h4>Provider-reported GBP total</h4>
       <p><strong>GBP {gbp.amount_gbp}</strong> · Converted from {gbp.source_balance} {gbp.source_currency}
         {" · "}Provider rate {gbp.exchange_rate} {gbp.display_currency} per {gbp.source_currency}</p>
-      <p className="position-note">This is a separate account-balance read received {timestamp(gbp.received_at)}.
+      <p className="position-note">This is a separate account-balance read received {providerTimestamp(gbp.received_at)}.
         The provider did not return a source timestamp. It is not synchronized to the portfolio snapshot
         and is not used to value individual holdings or populate the GBP journal.</p>
     </section> : <section className="etoro-section" aria-label="GBP total unavailable">
-      <h3>GBP total unavailable</h3>
-      <p>The provider did not return a validated GBP account balance. No conversion was estimated.</p>
+      <h4>GBP total unavailable</h4>
+      <p>The provider did not return a validated GBP account balance. No conversion was estimated.
+        {gbp?.error_code && ` Reason: ${gbp.error_code}.`}</p>
     </section>}
     <PositionRows label="Direct instrument aggregates" positions={snapshot.direct_positions} />
     {snapshot.mirrors.map(mirror => <section key={mirror.mirror_id} className="etoro-section"
       aria-label={`Copy relationship ${mirror.mirror_id}`}>
-      <h3>Copy relationship {mirror.mirror_id}</h3>
+      <h4>Copy relationship {mirror.mirror_id}</h4>
       {mirror.mirrorAvailableCash !== undefined &&
         <p>Mirror available cash ({snapshot.account_currency}): {mirror.mirrorAvailableCash}</p>}
       {mirror.totals && <dl className="etoro-totals">{Object.entries(mirror.totals).map(([name, value]) =>
@@ -178,7 +195,13 @@ function SnapshotView({ snapshot }: { snapshot: Snapshot }) {
   </div>;
 }
 
-export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }) {
+function waitingForStartup(session: Session | null, portfolio: PortfolioState | null) {
+  return Boolean(session?.enabled && session.state === "startup_refresh_enabled" &&
+    portfolio && !portfolio.snapshot &&
+    (session.last_status === "not_collected" || portfolio.last_status === "not_collected"));
+}
+
+export function EToroPortfolioPanel() {
   const [session, setSession] = useState<Session | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioState | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -203,6 +226,13 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
     setSession(currentSession);
     setPortfolio(currentPortfolio);
   };
+  const loadAfterChange = async (completed: string) => {
+    try { await load(); }
+    catch {
+      setSession(null); setPortfolio(null);
+      throw new Error(`${completed}, but the updated status could not be loaded. Retry status before trying again.`);
+    }
+  };
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -216,11 +246,9 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
     return () => { active = false; };
   }, []);
   useEffect(() => {
-    if (!session?.enabled || session.state !== "startup_refresh_enabled" ||
-        session.snapshot_available || session.last_status !== "not_collected") return;
+    if (busy || preview || !waitingForStartup(session, portfolio)) return;
     let active = true;
-    let timer = 0;
-    const poll = async () => {
+    const timer = window.setTimeout(async () => {
       try {
         const [currentSession, currentPortfolio] = await Promise.all([
           get("/api/investment/v1/etoro/session", isSession),
@@ -229,15 +257,12 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
         if (!active) return;
         setSession(currentSession);
         setPortfolio(currentPortfolio);
-        if (!currentSession.snapshot_available && currentSession.last_status === "not_collected")
-          timer = window.setTimeout(() => { void poll(); }, 1000);
       } catch (failure) {
         if (active) setError(failure instanceof Error ? failure.message : "eToro startup status is unavailable.");
       }
-    };
-    timer = window.setTimeout(() => { void poll(); }, 1000);
+    }, 1000);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [session?.enabled, session?.state, session?.snapshot_available, session?.last_status]);
+  }, [session, portfolio, busy, preview]);
   useEffect(() => {
     if (!preview) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -263,22 +288,28 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
       eligibility_verified: eligibility, retention_rights_verified: retention,
     });
     if (!object(result) || typeof result.preview_id !== "string" ||
-        typeof result.expires_at !== "string" || !isSnapshot(result.snapshot))
+        !hasTimezone(result.expires_at) || !isSnapshot(result.snapshot))
       throw new Error("eToro preview failed validation. Nothing was saved.");
-    setPreview(result as unknown as Preview);
-    setBinding(false);
+    setPreview({ preview_id: result.preview_id, expires_at: result.expires_at, snapshot: result.snapshot });
+    setBinding(false); setNow(Date.now());
   });
   const confirm = () => void run(async () => {
     if (!session?.csrf || !preview) throw new Error("The eToro preview is unavailable.");
     if (!binding) throw new Error("Confirm that the returned account identifier is the account you selected.");
     if (startupRefresh && !readScope)
       throw new Error("Automatic startup refresh requires verified Read-only key scope.");
-    await post("/api/investment/v1/etoro/confirm", session.csrf, {
-      preview_id: preview.preview_id, account_binding_confirmed: binding,
-      startup_refresh: startupRefresh, refresh_days: startupRefresh ? refreshDays : null,
-    });
+    try {
+      await post("/api/investment/v1/etoro/confirm", session.csrf, {
+        preview_id: preview.preview_id, account_binding_confirmed: binding,
+        startup_refresh: startupRefresh, refresh_days: startupRefresh ? refreshDays : null,
+      });
+    } catch (failure) {
+      if (failure instanceof EToroRequestError) throw failure;
+      setPreview(null); pendingRequest.current = null; setSession(null); setPortfolio(null);
+      throw new Error("Connection confirmation could not be verified and may already be saved. Retry status before reconnecting.");
+    }
     setPreview(null); pendingRequest.current = null;
-    await load();
+    await loadAfterChange("The connection was saved");
   });
   const discard = () => void run(async () => {
     if (!session?.csrf || !preview) throw new Error("The eToro preview is unavailable.");
@@ -290,28 +321,73 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
     setPreview(null); pendingRequest.current = null;
   });
   const revoke = () => void run(async () => {
-    if (!session?.csrf || !window.confirm("Revoke automatic eToro startup refresh? The current journal will not change.")) return;
-    await post("/api/investment/v1/etoro/revoke", session.csrf, {});
-    await load();
+    if (!session?.csrf) throw new Error("The local eToro session is unavailable.");
+    if (!window.confirm("Revoke automatic eToro startup refresh? The current journal will not change.")) return;
+    try { await post("/api/investment/v1/etoro/revoke", session.csrf, {}); }
+    catch (failure) {
+      if (failure instanceof EToroRequestError) throw failure;
+      setSession(null); setPortfolio(null);
+      throw new Error("Revocation could not be verified. Retry status before trying again.");
+    }
+    await loadAfterChange("Startup refresh was revoked");
   });
   const refresh = () => void run(async () => {
     if (!session?.csrf) throw new Error("The local eToro session is unavailable.");
-    const result = await post("/api/investment/v1/etoro/refresh", session.csrf, {});
-    if (isPortfolioState(result)) setPortfolio(result);
-    else await load();
+    try { await post("/api/investment/v1/etoro/refresh", session.csrf, {}); }
+    catch (failure) {
+      if (failure instanceof EToroRequestError) throw failure;
+      setSession(null); setPortfolio(null);
+      throw new Error("The refresh result could not be verified. Retry status before requesting another read.");
+    }
+    await loadAfterChange("The refresh request completed");
   });
 
-  const title = embedded ? "Connect an eToro portfolio" : "eToro portfolio";
-  return <section className={`etoro-panel${embedded ? " etoro-panel-embedded" : ""}`}
-    aria-label={title} aria-busy={busy}>
-    {!embedded && <h1>{title}</h1>}
-    {embedded && <h2>{title}</h2>}
-    <p className="etoro-intro">Read-only portfolio evidence stays on this computer and never enters hosted AI.
-      Keys are read from private server-side connection settings only after you request a read; they are never
-      entered in this page. Connecting does not change the GBP journal or place orders.</p>
+  const missingReportedSnapshot = Boolean(!preview && session?.state === "startup_refresh_enabled" &&
+    portfolio && !portfolio.snapshot && !waitingForStartup(session, portfolio) &&
+    (session.last_status === "success" || portfolio.last_status === "success"));
+  const previewExpired = preview !== null && Date.parse(preview.expires_at) <= now;
+  return <section className="etoro-panel" id="investment-etoro" aria-label="eToro portfolio" aria-busy={busy}>
+    <h2>eToro</h2>
+    <p className="etoro-intro">Optional provider view, separate from your journal and its totals.
+      Provider coverage is partial and not yet live-validated.</p>
     {error && <p role="alert" className="investment-warnings">{error}</p>}
     {session?.message && <p role="alert" className="investment-warnings">{session.message}</p>}
+    {!session && !error && <p role="status">Checking eToro status.</p>}
+    {(error || missingReportedSnapshot) &&
+      <button type="button" disabled={busy} onClick={() => void run(load)}>Retry status</button>}
+    {session && !session.enabled && <p role="status">eToro is not enabled for this session.
+      Open GoldScout with a workspace or ask the person who starts it to select a separate eToro connection file.
+      Opening this view does not request a read.</p>}
+    {session?.enabled && !session.csrf && <p role="alert">eToro controls are unavailable because the local session
+      could not be verified. Reload the page to retry.</p>}
+    {!preview && session?.state === "not_connected" && <p role="status">Not connected. Connecting requires an explicit one-time read.</p>}
+    {!preview && session?.state === "connected" && <p role="status">Connection saved.
+      {portfolio?.snapshot ? " The latest read is available below." : " No read is available in this dashboard session."}</p>}
+    {!preview && portfolio && !portfolio.snapshot && session?.state === "startup_refresh_enabled" &&
+      <p role="status">{waitingForStartup(session, portfolio)
+        ? "Waiting for the one authorized startup read. This screen does not initiate a request."
+        : missingReportedSnapshot
+        ? "The startup read was reported, but its snapshot is unavailable. Retry status before requesting another read."
+        : `The automatic startup read did not complete (${session.last_status}). It will not be retried automatically.`}</p>}
+    {!preview && session?.state === "expired" &&
+      <p role="status">Startup permission expired. The portfolio will not be fetched automatically; reconnect to renew.</p>}
+    {!preview && session?.state === "revoked" &&
+      <p role="status">Startup permission is revoked. No automatic reads will occur.</p>}
+    {!preview && portfolio?.snapshot && <div className="recording-preview">
+      <h3>Latest eToro read</h3>
+      {portfolio.last_status !== "success" && <p role="status">Last refresh status: {portfolio.last_status}.
+        The displayed source snapshot is not refreshed.</p>}
+      <SnapshotView snapshot={portfolio.snapshot} />
+    </div>}
+    {!preview && session?.connection?.expires_at &&
+      <p className="position-note">Startup-read permission expiry: {providerTimestamp(session.connection.expires_at)}.
+        Account ID {session.connection.account_id} · {session.connection.environment} environment.</p>}
+    {!preview && session?.state === "startup_refresh_enabled" && <div className="etoro-actions">
+      <button type="button" disabled={busy || !session.csrf || waitingForStartup(session, portfolio)} onClick={refresh}>Refresh once now</button>
+      <button type="button" disabled={busy || !session.csrf} onClick={revoke}>Revoke startup refresh</button>
+    </div>}
     {preview ? <div className="recording-preview" aria-label="Review eToro portfolio before saving consent">
+      <h3>Review eToro read</h3>
       <p>Review the returned account and its source coverage. No portfolio snapshot is stored on disk;
         only your explicit connection permission and account identifier are saved.</p>
       <SnapshotView snapshot={preview.snapshot} />
@@ -321,7 +397,7 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
       <label className="setup-check"><input type="checkbox" checked={startupRefresh}
         disabled={!readScope} onChange={event => setStartupRefresh(event.target.checked)} />
         Allow one automatic read at each server startup while permission is active.</label>
-      {!readScope && startupRefresh && <p role="note">Automatic refresh is unavailable unless Read-only key scope is verified.</p>}
+      {!readScope && <p role="note">Automatic refresh is unavailable unless Read-only key scope is verified.</p>}
       {startupRefresh && <label>Permission expires in
         <select value={refreshDays} onChange={event => setRefreshDays(Number(event.target.value))}>
           <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
@@ -330,13 +406,18 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
       <p className="position-note">The saved permission contains the account ID and consent only.
         The portfolio is held in memory for this dashboard run and is not retained as history.
         Startup refresh never updates journal balances or marks.</p>
-      <button type="button" disabled={busy || Date.parse(preview.expires_at) <= now} onClick={confirm}>
+      {previewExpired && <p role="alert">This eToro preview expired. Discard it and request a new read.</p>}
+      <button type="button" disabled={busy || !binding || previewExpired} onClick={confirm}>
         Confirm connection and account
       </button>
       <button type="button" disabled={busy} onClick={discard}>
         Discard preview
       </button>
-    </div> : <form className="recording-form etoro-form" onSubmit={event => { event.preventDefault(); begin(); }}>
+    </div> : session?.enabled && session.csrf && session.state !== "unavailable" && <details className="help-disclosure">
+      <summary>{session.connection ? "Update eToro connection" : "Connect eToro"}</summary>
+      <p className="etoro-intro">Keys stay in private server-side settings, not this page. Account evidence stays local
+        and is never sent to hosted AI. Opening this panel does not request a read.</p>
+      <form className="recording-form etoro-form" onSubmit={event => { event.preventDefault(); begin(); }}>
       <label>eToro environment
         <select value={environment} required onChange={event =>
           setEnvironment(event.target.value as "" | "real" | "demo")}>
@@ -361,28 +442,8 @@ export function EToroPortfolioPanel({ embedded = false }: { embedded?: boolean }
         This view does not identify every instrument class or individual position leg. Pending order details are
         unavailable; only the provider's reserved-cash total is shown. GBP totals use a separate provider read
         and may have no source timestamp. Incompatible evidence is never imported into the GBP journal.</p>
-      <button type="submit" disabled={busy || !session?.enabled}>Connect and retrieve once</button>
-    </form>}
-    {!preview && portfolio?.snapshot && <div className="recording-preview">
-      <h2>Latest in-memory portfolio read</h2>
-      {portfolio.last_status !== "success" && <p role="status">Last refresh status: {portfolio.last_status}.
-        The displayed source snapshot is not refreshed.</p>}
-      <SnapshotView snapshot={portfolio.snapshot} />
-    </div>}
-    {!preview && portfolio && !portfolio.snapshot && session?.state === "startup_refresh_enabled" &&
-      <p role="status">{session.last_status === "not_collected"
-        ? "Waiting for the one authorized startup read. This screen does not initiate a request."
-        : `The automatic startup read did not complete (${session.last_status}). It will not be retried automatically.`}</p>}
-    {!preview && session?.connection?.expires_at &&
-      <p className="position-note">Startup-read permission expires {timestamp(session.connection.expires_at)}.
-        Account ID {session.connection.account_id} · {session.connection.environment} environment.</p>}
-    {!preview && session?.state === "startup_refresh_enabled" && <div className="etoro-actions">
-      <button type="button" disabled={busy} onClick={refresh}>Refresh once now</button>
-      <button type="button" disabled={busy} onClick={revoke}>Revoke startup refresh</button>
-    </div>}
-    {!preview && session?.state === "expired" &&
-      <p role="status">Startup permission expired. The portfolio will not be fetched automatically; reconnect to renew.</p>}
-    {!preview && session?.state === "revoked" &&
-      <p role="status">Startup permission is revoked. No automatic reads will occur.</p>}
+      <button type="submit" disabled={busy}>Connect and retrieve once</button>
+      </form>
+    </details>}
   </section>;
 }

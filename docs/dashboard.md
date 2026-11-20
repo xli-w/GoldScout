@@ -35,13 +35,17 @@ do not assume stale assets represent current source. Use
 Normal `python -m dashboard` uses the source checkout's ignored
 `local-investment/` workspace. Installed use needs `--workspace <directory>`.
 The [guided setup](investment.md#guided-first-run-setup) confirms exact opening
-evidence before creation. Explicit `--investment-database <path>` reads only an
+evidence before creation. Explicit `--investment-database <path>` selects an
 existing selected journal. Older formats fail explicitly with no migration.
 Synthetic `--demo` uses temporary evidence, not a broker or real workspace.
 
-The default is read-only. Later manual recording needs
-`--investment-recording`, same-origin/CSRF checks, bound previews and exact
-revision confirmation. Setup does not grant recording authority.
+Normal launches enable manual recording for the selected journal, including
+immediately after completed setup/recovery. Add `--investment-read-only` to
+disable journal setup and recording. The older `--investment-recording` option
+remains accepted, but cannot be combined with read-only mode. Embedded
+`create_app` callers still default to recording disabled.
+Same-origin/CSRF checks, bound previews and exact revision confirmation remain.
+Partial or uncertain setup does not enable recording.
 Monitoring cache/workflow writes have separate gates; a page refresh never
 collects provider data or updates accounting.
 

@@ -84,6 +84,10 @@ profitability or live readiness. [README](../README.md) defines current scope.
   matches, with all prior evidence available; unheld marks cannot refresh it.
   Invalid confirmations fail replay, never silent repair.
 - Setup requires same-origin/CSRF, a bound preview and explicit confirmation.
+  Normal local launches permit manual journal recording, including after
+  completed setup/recovery; `--investment-read-only` blocks setup and recording.
+  Partial/uncertain setup never enables recording, and reads never grant it.
+  Journal-read-only mode does not change separate monitoring/provider/AI gates.
   Startup/status/preview creates no files. Existing artifacts are never
   overwritten. Setup stages/replay-validates before no-overwrite publication;
   guided first-run setup records current starting figures at preview submission,
