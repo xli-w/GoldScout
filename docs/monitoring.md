@@ -245,16 +245,19 @@ were checked against eToro's official
 and [API conventions](https://github.com/etoro-builders/etoro-cursor-plugin/blob/a18e511a7226df46a9a7587c6ce92582c3592ab2/rules/etoro-api-conventions.mdc).
 Account-specific compatibility remains unverified.
 
-The transport fixes the host and allowlists only documented GET paths for the
-P&L summary, Real/Demo aggregate portfolio, and validated Trading-account GBP
-display balance. It validates and pins public DNS addresses, uses TLS hostname
+The transport fixes the host and allowlists documented GET paths for the P&L
+summary, Real/Demo aggregate portfolio, Trading-account GBP display balance,
+and bounded Real/Demo closed-trade history pages. The dashboard requests
+history only on an explicitly confirmed manual refresh; startup reads do not
+request it. It validates and pins public DNS addresses, uses TLS hostname
 verification, bounds requests/response sizes, refuses redirects and honors
 the configured proxy without direct fallback. It also honors
 the optional [IPv4 DNS-server override](intelligence.md#ipv4-dns-server-override),
 which makes direct DNS queries only when explicitly configured. Failures are
 sanitized. No order/write functions, arbitrary URLs or automatic retries exist.
-This route is a snapshot, not paginated transaction history. History/window
-collection remains gated rather than inventing unsupported coverage.
+The standalone monitoring CLI still reads only its P&L summary snapshot; it
+does not request paginated history. The dashboard's separate history preview
+uses the fixed closed-trade endpoint and remains incomplete as a ledger.
 
 Source account currency is USD; price currency, full account identity, product
 classification and source as-of are unresolved. Collection therefore publishes
@@ -332,9 +335,13 @@ aggregate-portfolio read for the explicitly selected Real or Demo environment,
 plus a separate Trading-account balance read with GBP display currency. The
 dashboard keeps the normalized provider observation in process memory only.
 Its `.etoro/connection.json` stores consent, account identity and expiry, not
-keys, raw responses or portfolio history. The separate GBP balance is
-provider-reported, lacks a source timestamp, and is not combined with the
-portfolio snapshot or used to value holdings.
+keys, raw responses or portfolio/history data. A separately confirmed manual
+refresh can also fetch up to 365 calendar days of closed trades, capped at
+1,000 rows. The history response has no row currency, instrument type or
+account ID and is not journal evidence. Startup refresh still reads only the
+current portfolio. The separate GBP balance is provider-reported, lacks a
+source timestamp, and is not combined with the portfolio snapshot or used to
+value holdings.
 
 The initial read requires explicit consent, eligibility and retention checks,
 then confirmation of the returned account ID. A trade-capable key may be

@@ -114,10 +114,13 @@ profitability or live readiness. [README](../README.md) defines current scope.
   GET adapter may use a trade-capable key only after explicit operator acceptance
   that the credential can place, modify or cancel orders if exposed or misused.
   The optional eToro wizard read requires explicit account/retention consent.
+  Explicit manual refresh may also request a bounded closed-trade history read;
+  that data remains in dashboard memory and never becomes journal accounting.
   Startup refresh additionally requires verified Read-only scope, an expiring
-  1-30 day permission and revocation; it attempts one read set per server
-  startup and does not retry failures. Status/page loads never collect, and the
-  provider observation remains separate from journal accounting.
+  1-30 day permission and revocation; it attempts one current-portfolio read set
+  per server startup and does not retry failures or collect trade history.
+  Status/page loads never collect, and provider observations remain separate
+  from journal accounting.
   This acceptance does not verify read-only scope; the adapter has no order
   methods. Failed collection cannot refresh source clocks or repair journal
   differences. Native-currency evidence cannot manufacture GBP valuation.

@@ -11,6 +11,8 @@ export type GoalInput = {
     "substantial_fluctuations" | "not_sure";
   current_amount_gbp: string | null;
   monthly_contribution_gbp: string | null;
+  linked_portfolio_id: string | null;
+  linked_account_ids: string[];
 };
 
 export type PlanningGoal = GoalInput & { id: string };
@@ -47,7 +49,14 @@ function goal(value: unknown): value is PlanningGoal {
     ["not_set", "avoid_loss", "small_fluctuations", "substantial_fluctuations", "not_sure"]
       .includes(value.loss_tolerance as string) &&
     (value.current_amount_gbp === null || typeof value.current_amount_gbp === "string") &&
-    (value.monthly_contribution_gbp === null || typeof value.monthly_contribution_gbp === "string");
+    (value.monthly_contribution_gbp === null || typeof value.monthly_contribution_gbp === "string") &&
+    (value.linked_portfolio_id === null ||
+      typeof value.linked_portfolio_id === "string" && value.linked_portfolio_id.length > 0 &&
+        value.linked_portfolio_id.length <= 200) &&
+    Array.isArray(value.linked_account_ids) && value.linked_account_ids.length <= 50 &&
+    value.linked_account_ids.every(id => typeof id === "string" && id.length > 0 && id.length <= 200) &&
+    new Set(value.linked_account_ids).size === value.linked_account_ids.length &&
+    (value.linked_account_ids.length > 0) === (value.linked_portfolio_id !== null);
 }
 
 function session(value: unknown): value is PlanningSession {
@@ -90,6 +99,7 @@ async function request<T>(path: string, guard: (value: unknown) => value is T,
 export const planningSession = () => request("session", session);
 export const planningPreview = (csrf: string, payload: {
   request_id: string; expected_revision: number; expected_hash: string; goals: GoalInput[];
+  expected_portfolio_id: string | null; expected_journal_revision: number | null;
 }) => request("preview", preview, csrf, payload);
 export const planningConfirm = (csrf: string, preview_id: string) =>
   request("confirm", (value): value is { status: "saved"; revision: number } =>

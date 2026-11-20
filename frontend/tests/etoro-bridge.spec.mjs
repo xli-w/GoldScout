@@ -18,6 +18,8 @@ async function fixture(page) {
       accountBalance: "105" },
     direct_positions: [position(101, "2.000001"), position(102), position(103)],
     mirrors: [{ mirror_id: 7, positions: [position(103, "-1"), position(104)] }],
+    closed_trade_history: { status: "not_requested", from_date: null, through_date: null,
+      received_at: null, trades: [] },
     coverage: {}, gbp_balance: { status: "provider_reported", amount_gbp: "77",
       source_balance: "105", source_currency: "USD", display_currency: "GBP",
       exchange_rate: "0.77", source_as_of: null, received_at: "2026-07-01T10:02:00Z" },

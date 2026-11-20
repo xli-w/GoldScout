@@ -162,12 +162,14 @@ class EToroConnection:
         return {"x-api-key": values["GOLDSCOUT_ETORO_API_KEY"],
                 "x-user-key": values["GOLDSCOUT_ETORO_USER_KEY"]}
 
-    def _collect(self, environment, approval_check=None, expected_account_id=None):
+    def _collect(self, environment, approval_check=None, expected_account_id=None,
+                 include_closed_history=False):
         transport = (self.transport_factory() if self.transport_factory is not None
                      else etoro.EToroTransport(before_request=approval_check))
         return collect_portfolio(
             transport, self._credentials, environment, now=self.clock_fn,
-            expected_account_id=expected_account_id, before_balance=approval_check)
+            expected_account_id=expected_account_id, before_balance=approval_check,
+            include_closed_history=include_closed_history, before_history=approval_check)
 
     @staticmethod
     def _validate_initial_consent(value):
@@ -309,11 +311,14 @@ class EToroConnection:
             return self.status(now)
 
     def refresh_explicitly(self, now, manual_confirmed=False, generation=None,
-                           expected_connection=None):
+                           expected_connection=None, history_confirmed=False):
         now = clock(now)
         with self.lock:
             permission = self._read_permission(now)
             if manual_confirmed is True:
+                if history_confirmed is not True:
+                    raise ManualRefreshRejected(
+                        "Confirm this one-time portfolio and closed-trade history read")
                 if (type(generation) is not int or generation != self._revocation_generation
                         or permission is None or permission[3] is not None
                         or expected_connection != (
@@ -326,12 +331,14 @@ class EToroConnection:
         try:
             with self._claim_startup():
                 return self._refresh(value, now, manual=manual_confirmed is True,
-                                     generation=generation)
+                                     generation=generation,
+                                     history_confirmed=history_confirmed is True)
         except etoro.EToroError as exc:
             self.last_status = exc.code
             return {"state": "refresh_failed", "error_code": exc.code}
 
-    def _refresh(self, expected, now, *, manual=False, generation=None):
+    def _refresh(self, expected, now, *, manual=False, generation=None,
+                 history_confirmed=False):
         def verify():
             if self._stop.is_set():
                 raise etoro.EToroError("approval_interrupted")
@@ -351,7 +358,8 @@ class EToroConnection:
         try:
             verify()
             result = self._collect(expected["environment"], approval_check=verify,
-                                   expected_account_id=expected["account_id"])
+                                   expected_account_id=expected["account_id"],
+                                   include_closed_history=manual and history_confirmed)
             verify()
             if result["account_id"] != expected["account_id"]:
                 raise etoro.EToroError("account_binding_changed")

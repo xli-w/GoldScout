@@ -1,6 +1,6 @@
 """Read-only, bounded projection of eToro portfolio and GBP balance evidence."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import re
@@ -33,6 +33,17 @@ _MIRROR_TOTAL_FIELDS = (
     "mirrorActiveMargin",
 )
 _MAX_ITEMS = 1000
+_CLOSED_HISTORY_PAGE_SIZE = 1000
+_CLOSED_HISTORY_MAX_ITEMS = 1000
+_CLOSED_HISTORY_MAX_PAGES = _CLOSED_HISTORY_MAX_ITEMS // _CLOSED_HISTORY_PAGE_SIZE
+_CLOSED_TRADE_NUMBERS = (
+    "netProfit", "closeRate", "leverage", "openRate", "stopLossRate",
+    "takeProfitRate", "investment", "initialInvestment", "fees", "units",
+)
+_CLOSED_TRADE_IDS = (
+    "positionId", "instrumentId", "orderId", "socialTradeId", "parentPositionId",
+)
+_CLOSED_TRADE_TIMESTAMPS = ("closeTimestamp", "openTimestamp")
 
 
 def _invalid():
@@ -89,19 +100,159 @@ def _array(value):
     return value
 
 
-def _decode(payload):
+def _decode_document(payload, *, node_budget=20000):
     if type(payload) is not bytes or not 0 < len(payload) <= etoro.MAX_BYTES:
         raise etoro.EToroError("payload_invalid")
     try:
         document = json.loads(
             payload.decode("utf-8"), parse_float=Decimal,
             parse_constant=lambda _: _invalid(), object_pairs_hook=etoro._pairs)
-        etoro._bounded(document)
-        return _object(document)
+        etoro._bounded(document, budget=[node_budget])
+        return document
     except etoro.EToroError:
         raise
     except (ValueError, UnicodeError, RecursionError, ArithmeticError):
         raise etoro.EToroError("schema_invalid") from None
+
+
+def _decode(payload):
+    return _object(_decode_document(payload))
+
+
+def _history_timestamp(value):
+    if type(value) is not str:
+        _invalid()
+    try:
+        source = datetime.fromisoformat(
+            value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        _invalid()
+    if source.tzinfo is None or source.utcoffset() is None:
+        _invalid()
+    return source.astimezone(timezone.utc).isoformat(
+        timespec="microseconds").replace("+00:00", "Z")
+
+
+def _closed_trade(value):
+    item = _object(value)
+    if any(field not in item for field in (
+            "positionId", "instrumentId", "closeTimestamp", "isBuy", "units")):
+        _invalid()
+    result = {}
+    for field in _CLOSED_TRADE_IDS:
+        if field in item:
+            result[field] = _identifier(item[field])
+    for field in _CLOSED_TRADE_NUMBERS:
+        if field in item:
+            result[field] = _number(
+                item[field], nullable=field in ("stopLossRate", "takeProfitRate"))
+    for field in _CLOSED_TRADE_TIMESTAMPS:
+        if field in item:
+            result[field] = _history_timestamp(item[field])
+    for field in ("isBuy", "trailingStopLoss"):
+        if field in item:
+            if type(item[field]) is not bool:
+                _invalid()
+            result[field] = item[field]
+    return result
+
+
+def normalize_closed_trade_page(payload):
+    """Project one official closed-trade history page without deriving accounting."""
+    document = _decode_document(payload, node_budget=50000)
+    if type(document) is not list or len(document) > _CLOSED_HISTORY_PAGE_SIZE:
+        _invalid()
+    return [_closed_trade(item) for item in document]
+
+
+def _history_clock(now):
+    try:
+        value = now()
+    except (OSError, RuntimeError):
+        raise etoro.EToroError("clock_unavailable") from None
+    if (type(value) is not datetime or value.utcoffset() is None
+            or value.utcoffset() != timezone.utc.utcoffset(value)):
+        raise etoro.EToroError("clock_unavailable")
+    return value.astimezone(timezone.utc)
+
+
+def _history_result(status, *, from_date, through_date, now, trades=(), error_code=None):
+    result = {
+        "status": status,
+        "from_date": from_date,
+        "through_date": through_date,
+        "received_at": _history_clock(now).isoformat(
+            timespec="microseconds").replace("+00:00", "Z"),
+        "trades": list(trades),
+    }
+    if error_code is not None:
+        result["error_code"] = error_code
+    return result
+
+
+def _collect_closed_trade_history(transport, credentials, environment, now, before_request):
+    requested_at = _history_clock(now)
+    from_date = (requested_at.date() - timedelta(days=364)).isoformat()
+    through_date = requested_at.date().isoformat()
+    path_prefix = etoro.CLOSED_TRADE_HISTORY_PATHS[environment]
+    trades = []
+
+    def request_page(page):
+        if before_request is not None:
+            before_request()
+        path = (f"{path_prefix}?minDate={from_date}&page={page}"
+                f"&pageSize={_CLOSED_HISTORY_PAGE_SIZE}")
+        headers = {**credentials, "x-request-id": str(uuid.uuid4())}
+        if not etoro._headers_valid(headers):
+            raise etoro.EToroError("credentials_unavailable")
+        try:
+            payload = transport(path, headers)
+        except etoro.EToroError as exc:
+            if exc.code in ("approval_interrupted", "cancellation_unconfirmed"):
+                raise
+            if exc.code in etoro._TRANSPORT_CODES:
+                raise
+            raise etoro.EToroError("collection_unavailable") from None
+        except Exception:
+            raise etoro.EToroError("collection_unavailable") from None
+        page_trades = normalize_closed_trade_page(payload)
+        if any(not from_date <= trade["closeTimestamp"][:10] <= through_date
+               for trade in page_trades):
+            raise etoro.EToroError("history_date_out_of_range")
+        return page_trades
+
+    for page in range(1, _CLOSED_HISTORY_MAX_PAGES + 1):
+        try:
+            page_trades = request_page(page)
+        except etoro.EToroError as exc:
+            if exc.code in ("approval_interrupted", "cancellation_unconfirmed"):
+                raise
+            return _history_result(
+                "unavailable", from_date=from_date, through_date=through_date,
+                now=now, error_code=exc.code)
+        trades.extend(page_trades)
+        if len(page_trades) < _CLOSED_HISTORY_PAGE_SIZE:
+            trades.sort(key=lambda item: item["closeTimestamp"], reverse=True)
+            return _history_result(
+                "available", from_date=from_date, through_date=through_date,
+                now=now, trades=trades)
+
+    try:
+        final_page = request_page(_CLOSED_HISTORY_MAX_PAGES + 1)
+    except etoro.EToroError as exc:
+        if exc.code in ("approval_interrupted", "cancellation_unconfirmed"):
+            raise
+        return _history_result(
+            "unavailable", from_date=from_date, through_date=through_date,
+            now=now, error_code=exc.code)
+    if final_page:
+        return _history_result(
+            "unavailable", from_date=from_date, through_date=through_date,
+            now=now, error_code="history_limit_exceeded")
+    trades.sort(key=lambda item: item["closeTimestamp"], reverse=True)
+    return _history_result(
+        "available", from_date=from_date, through_date=through_date,
+        now=now, trades=trades)
 
 
 def _instrument(value):
@@ -218,10 +369,14 @@ def normalize_gbp_balance(payload, account_id, account_currency, received_at):
 
 
 def collect_portfolio(transport, credential_accessor, environment, *, now=None,
-                      expected_account_id=None, before_balance=None):
+                      expected_account_id=None, before_balance=None,
+                      include_closed_history=False, before_history=None):
     """Fetch one fixed portfolio GET and one fixed GBP balance GET without retries."""
     if environment not in etoro.AGGREGATE_PORTFOLIO_PATHS:
         raise etoro.EToroError("environment_invalid")
+    if type(include_closed_history) is not bool:
+        raise etoro.EToroError("history_permission_required")
+    now = now or (lambda: datetime.now(timezone.utc))
     try:
         credentials = credential_accessor()
         headers = {**credentials, "x-request-id": str(uuid.uuid4())}
@@ -255,7 +410,7 @@ def collect_portfolio(transport, credential_accessor, environment, *, now=None,
         error_code = exc.code
     except Exception:
         error_code = "collection_unavailable"
-    received_at = (now or (lambda: datetime.now(timezone.utc)))()
+    received_at = now()
     if not isinstance(received_at, datetime) or received_at.utcoffset() != timezone.utc.utcoffset(received_at):
         raise etoro.EToroError("clock_unavailable")
     received_at = received_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
@@ -270,4 +425,12 @@ def collect_portfolio(transport, credential_accessor, environment, *, now=None,
             "status": "unavailable", "error_code": error_code,
             "source_as_of": None, "received_at": received_at,
         }
+    closed_history = {
+        "status": "not_requested", "from_date": None, "through_date": None,
+        "received_at": None, "trades": [],
+    }
+    if include_closed_history:
+        closed_history = _collect_closed_trade_history(
+            transport, credentials, environment, now, before_history)
+    portfolio["closed_trade_history"] = closed_history
     return portfolio

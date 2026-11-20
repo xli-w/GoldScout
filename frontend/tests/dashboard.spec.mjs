@@ -16,6 +16,8 @@ const etoroSnapshot = {
     { instrument_id: 103, asset_currency: "JPY", netUnits: "1", netContracts: "1",
       netCurrentExposureAssetCurrency: "500", netCurrentExposureAccountCurrency: "4", avgLeverage: "1" },
   ] }],
+  closed_trade_history: { status: "not_requested", from_date: null, through_date: null,
+    received_at: null, trades: [] },
   coverage: {}, gbp_balance: { status: "provider_reported", amount_gbp: "77",
     source_balance: "100", source_currency: "USD", display_currency: "GBP",
     exchange_rate: "0.77", source_as_of: null, received_at: "2026-07-01T10:02:00Z" },
@@ -352,7 +354,9 @@ test.describe("eToro within the portfolio", () => {
     await etoro.getByRole("button", { name: "Refresh once now" }).click();
     await expect.poll(() => writes.length).toBe(1);
     expect(writes[0]).toEqual({
-      confirm_read: true, read_generation: 0, revision: 1, account_id: 12345, environment: "demo",
+      confirm_read: true, confirm_closed_trade_history: true,
+      history_retention_rights_verified: true, read_generation: 0, revision: 1,
+      account_id: 12345, environment: "demo",
     });
   });
 
@@ -1324,7 +1328,8 @@ test("next steps reflect incomplete evidence and historical differences without 
     `record=missing-price.*account_id=${encodeURIComponent(originalHolding.account_id)}.*product_id=${encodeURIComponent(originalHolding.product_id)}`,
   ));
   await expect(steps).toContainText("Later information cannot fill an earlier valuation.");
-  await expect(steps).toContainText("Performance has no complete starting value.");
+  await expect(page.getByRole("region", { name: "Historical performance limitations" }))
+    .toContainText("Performance has no complete starting value.");
   const moreMissingPrices = steps.locator("details");
   await expect(moreMissingPrices.locator("summary")).toHaveText("Show 4 more missing prices");
   await moreMissingPrices.locator("summary").click();
@@ -1383,10 +1388,11 @@ test("next steps reflect incomplete evidence and historical differences without 
   report.holdings = replay.holdings;
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(steps).not.toContainText("A complete total is unavailable");
-  await expect(steps).toContainText("Some performance figures are unavailable");
-  await expect(steps).not.toContainText("Performance has no complete starting value.");
+  const performanceLimits = page.getByRole("region", { name: "Historical performance limitations" });
+  await expect(performanceLimits).toContainText("Some performance figures are unavailable");
+  await expect(performanceLimits).not.toContainText("Performance has no complete starting value.");
   await expect(steps).not.toContainText("Backup verified");
-  await steps.getByRole("link", { name: "View performance history", exact: true }).click();
+  await performanceLimits.getByRole("link", { name: "View performance history", exact: true }).click();
   await expect(page.locator("#investment-performance")).toHaveAttribute("open", "");
   expect(mutations).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
@@ -1422,6 +1428,8 @@ test("cash evidence overview labels replay history and surfaces correction limit
   }
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
+  await expect(page.getByRole("region", { name: "What needs attention" }))
+    .toContainText("A correction may have changed earlier reported cash differences");
   await page.getByRole("link", { name: "Review correction history" }).click();
   await expect(page.locator("#investment-records")).toHaveAttribute("open", "");
   await expect(page.getByRole("region", { name: "Evidence-backed corrections" })).toContainText("Synthetic correction evidence");
@@ -1677,7 +1685,7 @@ test("opening records show since-baseline value without inventing lifetime gain"
     generated_at: at, as_of: at, baseline_as_of: at, currency: "GBP", complete: true,
     equity_gbp: "2000", net_contributions_gbp: "0", since_baseline_gain_gbp: "0",
     lifetime_gain_gbp: null, twr_pct: "0", max_drawdown_pct: "0",
-    recorded_fees_gbp: "1.5", recorded_interest_gbp: "2",
+    recorded_fees_gbp: "3.5", recorded_interest_gbp: "2",
     recorded_dividends_gbp: "3", recorded_income_gbp: "5",
     recorded_fee_events: [{
       id: "synthetic-buy", type: "buy", account_id: "broker", product_id: "fund",
@@ -1687,6 +1695,11 @@ test("opening records show since-baseline value without inventing lifetime gain"
       id: "synthetic-sell", type: "sell", account_id: "broker", product_id: "fund",
       quantity: "1", price_gbp: "11", fee_gbp: "1",
       timestamp: at, available_at: at, evidence: "synthetic later fill evidence", role: "unassigned",
+    }],
+    recorded_account_fees: [{
+      id: "synthetic-account-charge", type: "account_fee", account_id: "bank",
+      role: "unassigned", amount_gbp: "2", timestamp: at, available_at: at,
+      evidence: "synthetic platform statement",
     }],
     recorded_income_events: [{
       id: "synthetic-interest", type: "interest", account_id: "bank",
@@ -1805,6 +1818,8 @@ test("opening records show since-baseline value without inventing lifetime gain"
   const totals = page.getByRole("region", { name: "Investment totals" });
   await expect(totals.getByText("Gain since tracking began")).toBeVisible();
   await expect(totals.getByText("£2,000.00")).toBeVisible();
+  await expect(page.getByText(/Net money added is deposits less withdrawals, not investment gain/))
+    .toBeVisible();
   await page.locator("#investment-performance > summary").click();
   await expect(page.getByRole("heading", { name: "Recorded growth history" })).toBeVisible();
   await expect(page.getByText("These are recorded values, not live prices. Lines join recorded points; missing information stays as a gap.")).toBeVisible();
@@ -1925,9 +1940,14 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await page.locator("#investment-records > summary").click();
   await expect(page.getByText(/Lifetime gain and prior cost basis are unavailable/)).toBeVisible();
   const attribution = page.getByRole("region", { name: "Recorded fees and income" });
-  await expect(attribution.getByText("Recorded transaction fees")).toBeVisible();
+  await expect(attribution.getByText("Recorded trade and account charges")).toBeVisible();
+  await expect(attribution).toContainText("£3.50");
   await expect(attribution).toContainText("not an all-in cost total");
   await expect(attribution).toContainText("spread or slippage are not separately measured");
+  const accountChargeHistory = page.getByLabel("Recorded account charge history");
+  await expect(accountChargeHistory.getByRole("row").nth(1))
+    .toContainText("synthetic platform statement");
+  await expect(accountChargeHistory.getByRole("row").nth(1)).toContainText("£2.00");
   await expect(attribution.getByText("Recorded interest")).toBeVisible();
   await expect(attribution.getByText("Recorded dividends")).toBeVisible();
   await expect(attribution.getByText("Recorded income total")).toBeVisible();
@@ -2066,6 +2086,21 @@ test("opening records show since-baseline value without inventing lifetime gain"
   await expect(confirmationEvent).toContainText("Synthetic contribution receipt");
   await page.getByRole("button", { name: "Confirm and append record" }).click();
   await expect.poll(() => previewEvent?.type).toBe("contribution");
+  await page.getByLabel("What are you recording?").selectOption("account_fee");
+  await page.getByRole("combobox", { name: "Account", exact: true }).selectOption("bank");
+  await page.getByLabel("Charge amount (GBP)").fill("3.50");
+  await page.getByLabel("Applies at (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2026-01-05T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic account charge");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect.poll(() => previewEvent?.type).toBe("account_fee");
+  expect(previewEvent).toMatchObject({
+    account_id: "bank", amount_gbp: "3.50", type: "account_fee",
+  });
+  const chargeSummary = page.locator(".recording-preview details.recording-event");
+  await expect(chargeSummary).toContainText('"amount_gbp": "3.50"');
+  await expect(chargeSummary).toContainText("Synthetic account charge");
+  await page.getByRole("button", { name: "Cancel preview" }).click();
   await page.getByLabel("What are you recording?").selectOption("correction");
   await page.getByLabel("Event to correct").selectOption({ index: 1 });
   await page.getByLabel("Corrected GBP amount").fill("20");

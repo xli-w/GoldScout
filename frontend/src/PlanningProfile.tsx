@@ -1,7 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import Decimal from "decimal.js";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { planningConfirm, planningPreview, planningSession, type GoalInput, type PlanningGoal, type PlanningPreview, type PlanningSession } from "./planning-api";
-import { timestamp } from "./api";
+import { pounds, timestamp } from "./api";
 import { goalScenario } from "./planning-scenarios";
+import { loadInvestment, type InvestmentSnapshot } from "./InvestmentView";
 
 type DraftGoal = GoalInput & { key: string };
 const emptyGoal = (): DraftGoal => ({
@@ -9,12 +11,49 @@ const emptyGoal = (): DraftGoal => ({
   name: "", target_amount_gbp: null, target_date: null, notes: "",
   purpose: "not_set", access_date: null, liquidity: "unknown",
   loss_tolerance: "not_set", current_amount_gbp: null, monthly_contribution_gbp: null,
+  linked_portfolio_id: null, linked_account_ids: [],
 });
-const draft = (goal: PlanningGoal): DraftGoal => ({ ...goal, key: goal.id });
+const draft = (goal: PlanningGoal): DraftGoal => ({
+  ...goal, linked_account_ids: [...goal.linked_account_ids], key: goal.id,
+});
+
+function recordedAccountValues(data: InvestmentSnapshot | null) {
+  if (!data || data.source_mode !== "recorded" || !data.complete ||
+      data.equity_gbp === null || data.as_of === null ||
+      data.accounts.some(account => account.cash_gbp === null) ||
+      data.holdings.some(holding => holding.value_gbp === null)) return null;
+  const allValues = new Map<string, Decimal>();
+  for (const account of data.accounts)
+    allValues.set(account.id, new Decimal(account.cash_gbp!));
+  for (const holding of data.holdings)
+    allValues.set(holding.account_id,
+      (allValues.get(holding.account_id) ?? new Decimal(0)).plus(holding.value_gbp!));
+  const total = [...allValues.values()].reduce(
+    (value, amount) => value.plus(amount), new Decimal(0));
+  if (!total.eq(data.equity_gbp)) return null;
+  return new Map(data.accounts.filter(account => account.status === "active")
+    .map(account => [account.id, allValues.get(account.id) ?? new Decimal(0)]));
+}
+
+function linkedGoalValue(goal: Pick<GoalInput, "linked_portfolio_id" | "linked_account_ids">,
+  data: InvestmentSnapshot | null, values: Map<string, Decimal> | null) {
+  if (!goal.linked_account_ids.length || !data || !values ||
+      goal.linked_portfolio_id !== data.portfolio_id) return null;
+  let total = new Decimal(0);
+  for (const id of goal.linked_account_ids) {
+    const value = values.get(id);
+    if (!value) return null;
+    total = total.plus(value);
+  }
+  return total;
+}
 
 export function PlanningProfilePage() {
   const [session, setSession] = useState<PlanningSession | null>(null);
   const [goals, setGoals] = useState<DraftGoal[]>([]);
+  const [portfolio, setPortfolio] = useState<InvestmentSnapshot | null>(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(true);
+  const [portfolioError, setPortfolioError] = useState("");
   const [preview, setPreview] = useState<PlanningPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -27,8 +66,26 @@ export function PlanningProfilePage() {
     setPreview(null);
   }
 
+  async function reloadPortfolio(signal?: AbortSignal) {
+    setPortfolioLoading(true);
+    setPortfolioError("");
+    try {
+      const result = await loadInvestment(signal ?? new AbortController().signal);
+      if (!signal?.aborted) setPortfolio(result);
+    } catch (reason) {
+      if (!signal?.aborted) {
+        setPortfolio(null);
+        setPortfolioError(reason instanceof Error
+          ? reason.message : "Recorded account values are unavailable.");
+      }
+    } finally {
+      if (!signal?.aborted) setPortfolioLoading(false);
+    }
+  }
+
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     planningSession().then(result => {
       if (!active) return;
       setSession(result);
@@ -36,14 +93,44 @@ export function PlanningProfilePage() {
     }).catch(reason => {
       if (active) setError(reason instanceof Error ? reason.message : "Local planning is unavailable.");
     });
-    return () => { active = false; };
+    void reloadPortfolio(controller.signal);
+    return () => { active = false; controller.abort(); };
   }, []);
 
-  function updateGoal(key: string, field: keyof GoalInput, value: string) {
+  const accountValues = useMemo(() => recordedAccountValues(portfolio), [portfolio]);
+  const portfolioAccounts = portfolio?.source_mode === "recorded"
+    ? portfolio.accounts.filter(account => account.status === "active" && account.cash_gbp !== null)
+    : [];
+  const duplicateLinks = useMemo(() => {
+    const ids = goals.flatMap(goal => goal.linked_account_ids);
+    return new Set(ids.filter((id, index) => ids.indexOf(id) !== index));
+  }, [goals]);
+
+  function updateGoal(key: string,
+    field: Exclude<keyof GoalInput, "linked_portfolio_id" | "linked_account_ids">, value: string) {
     setGoals(current => current.map(goal => goal.key === key
       ? { ...goal, [field]: field === "target_amount_gbp" || field === "target_date"
         ? value || null : value }
       : goal));
+    setPreview(null);
+    setSaved("");
+  }
+
+  function updateLinkedAccount(key: string, accountId: string, checked: boolean) {
+    setGoals(current => current.map(goal => {
+      if (goal.key !== key) return goal;
+      const linked_account_ids = checked
+        ? [...goal.linked_account_ids, accountId]
+        : goal.linked_account_ids.filter(id => id !== accountId);
+      return {
+        ...goal,
+        current_amount_gbp: checked || goal.linked_account_ids.length > 0
+          ? null : goal.current_amount_gbp,
+        linked_account_ids,
+        linked_portfolio_id: linked_account_ids.length
+          ? portfolio?.portfolio_id ?? goal.linked_portfolio_id : null,
+      };
+    }));
     setPreview(null);
     setSaved("");
   }
@@ -58,10 +145,16 @@ export function PlanningProfilePage() {
         expected_revision: session.revision,
         expected_hash: session.profile_hash,
         goals: goals.map(({ key: _key, ...goal }) => goal),
+        expected_portfolio_id: goals.some(goal => goal.linked_account_ids.length > 0)
+          ? portfolio?.portfolio_id ?? null : null,
+        expected_journal_revision: goals.some(goal => goal.linked_account_ids.length > 0)
+          ? portfolio?.revision ?? null : null,
       });
       setPreview(result);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Goal preview was rejected.");
+      const message = reason instanceof Error ? reason.message : "Goal preview was rejected.";
+      setError(message);
+      if (message.includes("planning portfolio changed")) void reloadPortfolio();
     } finally { setBusy(false); }
   }
 
@@ -76,7 +169,12 @@ export function PlanningProfilePage() {
         setError("The save was confirmed, but the latest profile could not be reloaded. Keep this page open and retry.");
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Goal save was rejected.");
+      const message = reason instanceof Error ? reason.message : "Goal save was rejected.";
+      setError(message);
+      if (message.includes("planning portfolio changed")) {
+        setPreview(null);
+        void reloadPortfolio();
+      }
     } finally { setBusy(false); }
   }
 
@@ -89,11 +187,17 @@ export function PlanningProfilePage() {
 
   return <section className="planning-profile">
     <p className="planning-boundary">
-      Optional personal goals are saved in a separate local file. They do not change journal balances,
-      account records, monitoring, or market-context tools, and are not sent to hosted AI.
-      Goals are not linked to account balances. Scenarios use only amounts you enter, assume no growth,
-      interest, fees, tax or withdrawals, and are not forecasts or recommendations.
+      Optional goals are saved in a separate local file and are not sent to hosted AI.
+      You may associate each whole account with at most one goal; this does not move or reserve money.
+      Linked amounts appear only when the recorded portfolio has a complete value that reconciles to its account records.
+      Scenarios assume no growth, interest, fees, tax or withdrawals, and are not forecasts or recommendations.
     </p>
+    {portfolioError && <p role="status">Portfolio values could not be loaded: {portfolioError}
+      {" "}<button type="button" onClick={() => void reloadPortfolio()}>Retry portfolio values</button>
+    </p>}
+    {duplicateLinks.size > 0 && <p role="alert">
+      A saved account is linked to more than one goal. No linked goal value is shown until the duplicate assignments are removed.
+    </p>}
     {session && <p className="planning-revision">Saved profile revision {session.revision}. No profile file is created until you confirm a save.</p>}
     {error && <div role="alert" className="error-state"><p>{error}</p>
       {session ? <button type="button" disabled={busy} onClick={() => {
@@ -151,6 +255,54 @@ export function PlanningProfilePage() {
                 <option value="flexible">Flexible</option>
               </select>
             </label>
+              <fieldset className="planning-linked-accounts">
+                <legend>Accounts associated with this goal (optional)</legend>
+                <p>Each account's full recorded value can be assigned to only one goal here. Assigning an account does not earmark or transfer its money.</p>
+                {portfolioLoading ? <p role="status">Loading recorded accounts…</p>
+                  : portfolioError ? <p>Account links are unavailable until the portfolio can be loaded.</p>
+                  : portfolio?.source_mode !== "recorded" ? <p>Only recorded accounts can be linked; synthetic examples are not used.</p>
+                  : goal.linked_portfolio_id !== null &&
+                    goal.linked_portfolio_id !== portfolio.portfolio_id ? <>
+                    <p role="alert">These saved account links belong to a different portfolio and are not used.</p>
+                    <p>Saved account references: {goal.linked_account_ids.join(", ")}</p>
+                    <button type="button" onClick={() => {
+                      setGoals(current => current.map(item => item.key === goal.key
+                        ? { ...item, current_amount_gbp: null,
+                          linked_portfolio_id: null, linked_account_ids: [] } : item));
+                      setPreview(null); setSaved("");
+                    }}>Remove saved account links</button>
+                  </> : portfolioAccounts.length === 0
+                    ? <p>No opened active accounts are available to link.</p>
+                    : portfolioAccounts.map(account => {
+                      const assignedElsewhere = goals.some(item =>
+                        item.key !== goal.key && item.linked_account_ids.includes(account.id));
+                      const checked = goal.linked_account_ids.includes(account.id);
+                      return <label key={account.id}>
+                        <input type="checkbox" aria-label={`${account.name} (${account.id})`}
+                          checked={checked}
+                          disabled={assignedElsewhere && !checked}
+                          onChange={event => updateLinkedAccount(goal.key, account.id, event.target.checked)} />
+                        {account.name} ({account.id}){assignedElsewhere ? " — already assigned to another goal" : ""}
+                      </label>;
+                    })}
+                {goal.linked_account_ids.some(id =>
+                  !portfolioAccounts.some(account => account.id === id)) &&
+                  <p role="alert">One or more saved links are not active accounts in this portfolio.
+                    {" "}<button type="button" onClick={() => {
+                      setGoals(current => current.map(item => item.key === goal.key
+                        ? { ...item, current_amount_gbp: null,
+                          linked_portfolio_id: null, linked_account_ids: [] } : item));
+                      setPreview(null); setSaved("");
+                    }}>Remove unavailable links</button>
+                  </p>}
+                {goal.linked_account_ids.length > 0 && <>
+                  <p>{linkedGoalValue(goal, portfolio, accountValues) === null
+                    ? "Linked account amount unavailable until this portfolio has a complete, matching recorded value."
+                    : `Linked recorded amount: ${pounds(linkedGoalValue(goal, portfolio, accountValues)!.toString())} at ${timestamp(portfolio?.as_of ?? null)}.`}</p>
+                  {goal.linked_account_ids.some(id => duplicateLinks.has(id)) &&
+                    <p role="alert">Remove duplicate assignments before relying on this goal amount.</p>}
+                </>}
+              </fieldset>
             <label>Comfort with possible losses
               <select value={goal.loss_tolerance} onChange={event =>
                 updateGoal(goal.key, "loss_tolerance", event.target.value as GoalInput["loss_tolerance"])}>
@@ -161,12 +313,16 @@ export function PlanningProfilePage() {
                 <option value="not_sure">Not sure</option>
               </select>
             </label>
-            <label>Amount set aside for this goal (GBP, optional)
+            <label>Manual amount set aside (GBP, used only without linked accounts)
               <input inputMode="decimal" maxLength={18} pattern="(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,2})?"
                 title="Use a non-negative GBP amount with up to two decimal places."
+                disabled={goal.linked_account_ids.length > 0}
                 value={goal.current_amount_gbp ?? ""}
                 onChange={event => updateGoal(goal.key, "current_amount_gbp", event.target.value)} />
             </label>
+            {goal.linked_account_ids.length > 0 && <small className="field-help">
+              While accounts are linked, their recorded amount replaces this manual figure; the two are never added together.
+            </small>}
             <label>Expected monthly contribution (GBP, optional)
               <input inputMode="decimal" maxLength={18} pattern="(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,2})?"
                 title="Use a non-negative GBP amount with up to two decimal places."
@@ -184,8 +340,15 @@ export function PlanningProfilePage() {
               }}>Remove</button>
           </div>
           {(() => {
-            const scenario = goalScenario(goal);
-            return scenario && <div className="planning-scenario">
+            const linkedAmount = linkedGoalValue(goal, portfolio, accountValues);
+            const scenarioGoal = goal.linked_account_ids.length > 0
+              ? { ...goal, current_amount_gbp: linkedAmount?.toString() ?? null }
+              : goal;
+            const scenario = goalScenario(scenarioGoal);
+            return <>
+              {goal.linked_account_ids.length > 0 && !linkedAmount &&
+                <p role="status">Goal progress is unavailable until linked account values are complete and match this portfolio.</p>}
+              {scenario && <div className="planning-scenario">
               <h4>Simple contribution illustration</h4>
               <p>Starting with your entered £{scenario.current_amount_gbp}, there are {scenario.months} assumed
                 monthly contribution date{scenario.months === 1 ? "" : "s"} before the target date.
@@ -201,7 +364,8 @@ export function PlanningProfilePage() {
               </dl>
               <p>This arithmetic assumes no investment growth, interest, fees, tax, withdrawals or missed contributions.
                 It does not account for access restrictions, inflation or whether money is actually available.</p>
-            </div>;
+              </div>}
+            </>;
           })()}
         </div>)}
         <button type="button" onClick={() => {
@@ -226,7 +390,15 @@ export function PlanningProfilePage() {
         {goal.access_date && ` · access from ${goal.access_date}`}
         {` · liquidity: ${goal.liquidity.replaceAll("_", " ")}`}
         {` · loss comfort: ${goal.loss_tolerance.replaceAll("_", " ")}`}
-        {goal.current_amount_gbp !== null && ` · set aside £${goal.current_amount_gbp}`}
+        {goal.linked_account_ids.length > 0 && ` · linked accounts: ${
+          goal.linked_account_ids.map(id =>
+            portfolio?.accounts.find(account => account.id === id)?.name ?? id).join(", ")}`}
+        {goal.linked_account_ids.length > 0 && ` · recorded amount: ${
+          linkedGoalValue(goal, portfolio, accountValues) === null
+            ? "unavailable" : pounds(linkedGoalValue(goal, portfolio, accountValues)!.toString())} at ${
+              timestamp(portfolio?.as_of ?? null)}`}
+        {goal.linked_account_ids.length === 0 && goal.current_amount_gbp !== null &&
+          ` · set aside £${goal.current_amount_gbp}`}
         {goal.monthly_contribution_gbp !== null && ` · £${goal.monthly_contribution_gbp}/month expected`}
         {goal.notes && <p>{goal.notes}</p>}
       </li>)}</ul>

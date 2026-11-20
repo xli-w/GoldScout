@@ -218,7 +218,11 @@ class TransportTests(unittest.TestCase):
         transport = self.setup_transport()
         for path in ("/", etoro.PORTFOLIO_URL, etoro.PORTFOLIO_PATH + "?x=y",
                      "/api/v1/trading/execution/market-open-orders/by-amount",
-                     "/api/v1/trading/info/demo/pnl", "//evil.test/"):
+                     "/api/v1/trading/info/demo/pnl", "//evil.test/",
+                     "/api/v1/trading/info/trade/history?minDate=2026-99-99&page=1&pageSize=100",
+                     "/api/v1/trading/info/trade/history?minDate=2026-01-01&page=3&pageSize=1000",
+                     "/api/v1/trading/info/trade/history?minDate=2026-01-01&page=1&pageSize=500",
+                     "/api/v1/trading/info/trade/history?minDate=2026-01-01&page=1&pageSize=1000&extra=x"):
             with self.assertRaisesRegex(etoro.EToroError, "^endpoint_refused$"):
                 transport(path, headers())
         for values in ({}, {**headers(), "Host": "evil.test"},
@@ -228,6 +232,21 @@ class TransportTests(unittest.TestCase):
             with self.assertRaisesRegex(etoro.EToroError, "^headers_invalid$"):
                 transport(etoro.PORTFOLIO_PATH, values)
         self.resolver.assert_not_called()
+
+    def test_only_bounded_real_and_demo_closed_trade_reads_are_allowed(self):
+        for environment in ("real", "demo"):
+            path = (etoro.CLOSED_TRADE_HISTORY_PATHS[environment]
+                    + "?minDate=2026-01-01&page=2&pageSize=1000")
+            transport = self.setup_transport()
+            self.assertEqual(transport(path, headers()), encoded())
+            self.assertEqual(self.connection.request.call_args.args, ("GET", path))
+        for page in (0, 3, 10):
+            transport = self.setup_transport()
+            path = (etoro.CLOSED_TRADE_HISTORY_PATHS["real"]
+                    + f"?minDate=2026-01-01&page={page}&pageSize=1000")
+            with self.assertRaisesRegex(etoro.EToroError, "^endpoint_refused$"):
+                transport(path, headers())
+            self.resolver.assert_not_called()
 
     def test_all_dns_answers_must_be_public_and_well_formed(self):
         for address in ("127.0.0.1", "10.0.0.1", "169.254.169.254", "0.0.0.0",

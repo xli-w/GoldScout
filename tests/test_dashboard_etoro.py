@@ -27,7 +27,7 @@ class FixtureTransport:
             "balance": 105, "currency": "USD", "displayBalance": 82.25,
             "displayCurrency": "GBP", "exchangeRate": 0.78,
         }]})
-        self.payloads = [portfolio, balance, portfolio, balance]
+        self.payloads = [portfolio, balance, portfolio, balance, encoded([])]
         self.paths = []
 
     def __call__(self, path, headers):
@@ -74,6 +74,8 @@ class EToroDashboardAPITests(unittest.TestCase):
                 }, headers=headers)
                 result = client.post("/api/investment/v1/etoro/refresh", json={
                     "confirm_read": True, "read_generation": session["read_generation"],
+                    "confirm_closed_trade_history": True,
+                    "history_retention_rights_verified": True,
                     "revision": 1, "account_id": 12345, "environment": "real",
                 }, headers=headers)
                 self.assertEqual(len(transport.paths), 4)
@@ -108,11 +110,16 @@ class EToroDashboardAPITests(unittest.TestCase):
                 }, headers=headers)
                 self.assertEqual(confirmed.json()["state"], "connected")
                 manual = {"confirm_read": True, "read_generation": session["read_generation"],
+                          "confirm_closed_trade_history": True,
+                          "history_retention_rights_verified": True,
                           "revision": 1, "account_id": 12345, "environment": "real"}
                 path = "/api/investment/v1/etoro/refresh"
                 self.assertEqual(client.post(path, json={}, headers=headers).status_code, 400)
                 self.assertEqual(client.post(path, json={
                     **manual, "confirm_read": False,
+                }, headers=headers).status_code, 400)
+                self.assertEqual(client.post(path, json={
+                    **manual, "confirm_closed_trade_history": False,
                 }, headers=headers).status_code, 400)
                 self.assertEqual(client.post(path, json={
                     **manual, "account_id": 54321,
@@ -124,11 +131,11 @@ class EToroDashboardAPITests(unittest.TestCase):
                 result = client.post(path, json=manual, headers=headers)
                 self.assertEqual(result.status_code, 200, result.text)
                 self.assertEqual(result.json()["state"], "refreshed")
-                self.assertEqual(len(transport.paths), 4)
+                self.assertEqual(len(transport.paths), 5)
                 client.post("/api/investment/v1/etoro/revoke", json={}, headers=headers)
                 result = client.post(path, json=manual, headers=headers)
                 self.assertEqual(result.status_code, 409)
-                self.assertEqual(len(transport.paths), 4)
+                self.assertEqual(len(transport.paths), 5)
 
     def test_queued_manual_refresh_is_invalidated_by_revocation(self):
         queued, release = threading.Event(), threading.Event()
@@ -162,6 +169,8 @@ class EToroDashboardAPITests(unittest.TestCase):
                     "startup_refresh": False, "refresh_days": None,
                 }, headers=headers)
                 manual = {"confirm_read": True, "read_generation": session["read_generation"],
+                          "confirm_closed_trade_history": True,
+                          "history_retention_rights_verified": True,
                           "revision": 1, "account_id": 12345, "environment": "real"}
 
                 def refresh():
@@ -299,6 +308,8 @@ class EToroDashboardAPITests(unittest.TestCase):
                     results["refresh"] = client.post(
                         "/api/investment/v1/etoro/refresh", json={
                             "confirm_read": True, "read_generation": session["read_generation"],
+                            "confirm_closed_trade_history": True,
+                            "history_retention_rights_verified": True,
                             "revision": 1, "account_id": 12345, "environment": "real",
                         }, headers=headers)
 

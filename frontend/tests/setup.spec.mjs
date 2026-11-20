@@ -62,7 +62,10 @@ async function setupRoutes(page, options = {}) {
       account_totals: { accountAvailableCash: "100", accountFrozenCash: "0",
         accountCurrentPnl: "0", accountTotalValue: "100", accountTotalUsedMargin: "0",
         accountBalance: "100" },
-      direct_positions: [], mirrors: [], coverage: {}, gbp_balance: null,
+      direct_positions: [], mirrors: [],
+      closed_trade_history: { status: "not_requested", from_date: null, through_date: null,
+        received_at: null, trades: [] },
+      coverage: {}, gbp_balance: null,
     } : null;
     return route.fulfill({ json: {
       state: options.startupRefresh ? "startup_refresh_enabled" : "not_selected",
@@ -202,7 +205,10 @@ test("eToro consent preview survives collapsing and reviewing portfolio setup", 
         source_as_of: "2026-01-01T10:00:00Z", account_currency: "USD",
         account_totals: { accountAvailableCash: "100", accountFrozenCash: "0",
           accountCurrentPnl: "0", accountTotalValue: "100", accountTotalUsedMargin: "0", accountBalance: "100" },
-        direct_positions: [], mirrors: [], coverage: {}, gbp_balance: null } } });
+        direct_positions: [], mirrors: [],
+        closed_trade_history: { status: "not_requested", from_date: null, through_date: null,
+          received_at: null, trades: [] },
+        coverage: {}, gbp_balance: null } } });
   });
   await unlock(page);
   const optional = page.locator("#setup-etoro");
@@ -235,7 +241,10 @@ async function activeEToroRoutes(page) {
     source_as_of: "2026-01-01T10:00:00Z", account_currency: "USD",
     account_totals: { accountAvailableCash: "100", accountFrozenCash: "0",
       accountCurrentPnl: "0", accountTotalValue: "100", accountTotalUsedMargin: "0", accountBalance: "100" },
-    direct_positions: [], mirrors: [], coverage: {}, gbp_balance: null };
+    direct_positions: [], mirrors: [],
+    closed_trade_history: { status: "not_requested", from_date: null, through_date: null,
+      received_at: null, trades: [] },
+    coverage: {}, gbp_balance: null };
   await page.route("**/api/investment/v1/etoro/**", route => {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").at(-1);
@@ -372,7 +381,7 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await accountStep(page);
   await expect(page.locator(".setup-intro")).toHaveCount(0);
   await expect(preflight).toHaveCount(0);
-  await expect(page.getByText(/Your draft is not saved until you confirm/)).toBeVisible();
+  await expect(page.getByText(/Your private setup draft is saved in this browser/)).toBeVisible();
   await evidenceStep(page);
   await page.getByRole("button", { name: "Preview setup", exact: true }).click();
   const preview = page.getByRole("group", { name: "Review setup before confirmation" });
@@ -411,6 +420,29 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await expect(page.getByRole("heading", { name: "Your portfolio", exact: true })).toBeVisible();
   await expect.poll(() => api.calls.filter(call => call.path === "confirm").length).toBe(1);
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+});
+
+test("setup draft resumes after reload but clears review confirmations and previews", async ({ page }) => {
+  const api = await setupRoutes(page);
+  await page.goto("/setup");
+  await page.getByLabel("Account 1 name").fill("Synthetic savings");
+  await page.getByLabel("Account 1 type").selectOption("deposit");
+  await page.getByRole("checkbox", { name: /These are the GBP accounts I want to track/ }).check();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByLabel("Cash for Synthetic savings (GBP)").fill("1234.56");
+  await page.getByLabel("Where did these figures come from?").fill("Synthetic statement.");
+  const confirmation = page.getByRole("checkbox", { name: /I checked that every starting figure is current/ });
+  await confirmation.check();
+  await expect.poll(() => page.evaluate(() => localStorage.length)).toBe(1);
+
+  await page.reload();
+  await expect(page.getByLabel("Cash for Synthetic savings (GBP)")).toBeVisible();
+  await expect(page.getByLabel("Cash for Synthetic savings (GBP)")).toHaveValue("1234.56");
+  await expect(page.getByLabel("Where did these figures come from?")).toHaveValue("Synthetic statement.");
+  await expect(confirmation).not.toBeChecked();
+  await page.getByRole("button", { name: "Preview setup", exact: true }).click();
+  expect(api.calls.filter(call => call.path === "preview")).toHaveLength(0);
+  await expect(confirmation).not.toBeChecked();
 });
 
 test("setup confirmation expires even without a redundant review checkbox", async ({ page }) => {
@@ -667,19 +699,19 @@ test("malformed preview fails closed without offering confirmation", async ({ pa
   await expect(page.getByRole("button", { name: "Confirm and create local records" })).toHaveCount(0);
 });
 
-test("reload loses in-memory draft and asks before abandoning it", async ({ page }) => {
+test("reload restores the browser draft without requiring a technical warning", async ({ page }) => {
   await setupRoutes(page);
   await unlock(page);
   await page.getByLabel("Account 1 name").fill("Synthetic unsaved alias");
   let warned = false;
   page.on("dialog", async dialog => {
-    expect(dialog.type()).toBe("beforeunload");
     warned = true;
     await dialog.accept();
   });
+  await expect.poll(() => page.evaluate(() => localStorage.length)).toBeGreaterThan(0);
   await page.reload();
-  await expect(page.getByLabel("Account 1 name")).toHaveValue("");
-  expect(warned).toBe(true);
+  await expect(page.getByLabel("Account 1 name")).toHaveValue("Synthetic unsaved alias");
+  expect(warned).toBe(false);
 });
 
 test("uncertain confirmation retries only the identical preview; partial commit is not success", async ({ page }) => {

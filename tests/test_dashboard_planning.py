@@ -8,8 +8,14 @@ from threading import Barrier
 
 from dashboard.app import create_app
 from dashboard.planning import PlanningError, PlanningProfile
+from investment.core import iso
+from investment.service import demo_events, demo_profile
+from investment.store import import_events, initialize, read
 from fastapi.testclient import TestClient
 from test_dashboard_api import MemoryEventLoop
+
+
+NOW = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
 
 
 class PlanningProfileTests(unittest.TestCase):
@@ -32,7 +38,8 @@ class PlanningProfileTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def preview(self, client, session, goals, request_id="planning-request"):
+    def preview(self, client, session, goals, request_id="planning-request",
+                portfolio_id=None, journal_revision=None):
         return client.post(
             "/api/investment/v1/planning/preview",
             headers={"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]},
@@ -41,6 +48,8 @@ class PlanningProfileTests(unittest.TestCase):
                 "expected_revision": session["revision"],
                 "expected_hash": session["profile_hash"],
                 "goals": goals,
+                "expected_portfolio_id": portfolio_id,
+                "expected_journal_revision": journal_revision,
             })
 
     def confirm(self, client, session, preview_id):
@@ -48,6 +57,29 @@ class PlanningProfileTests(unittest.TestCase):
             "/api/investment/v1/planning/confirm",
             headers={"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]},
             json={"preview_id": preview_id})
+
+    def initialize_journal(self):
+        initialize(self.journal, demo_profile(NOW), NOW)
+        import_events(self.journal, demo_events(NOW), NOW)
+        return read(self.journal, NOW)
+
+    def linked_goal(self, portfolio_id="synthetic-demo", account_id="savings"):
+        return {
+            "name": "Emergency reserve", "target_amount_gbp": None,
+            "target_date": None, "notes": "", "purpose": "financial_resilience",
+            "access_date": None, "liquidity": "immediate", "loss_tolerance": "avoid_loss",
+            "current_amount_gbp": None, "monthly_contribution_gbp": None,
+            "linked_portfolio_id": portfolio_id, "linked_account_ids": [account_id],
+        }
+
+    def basic_goal(self, name):
+        return {
+            "name": name, "target_amount_gbp": None, "target_date": None, "notes": "",
+            "purpose": "not_set", "access_date": None, "liquidity": "unknown",
+            "loss_tolerance": "not_set", "current_amount_gbp": None,
+            "monthly_contribution_gbp": None,
+            "linked_portfolio_id": None, "linked_account_ids": [],
+        }
 
     def test_reads_do_not_create_profile_or_touch_journal_and_save_requires_confirmation(self):
         with self.client() as client:
@@ -57,9 +89,10 @@ class PlanningProfileTests(unittest.TestCase):
             self.assertFalse(self.path.exists())
             self.assertFalse(self.journal.exists())
 
-            goals = [{
-                "name": "First home", "target_amount_gbp": "25000.00",
-                "target_date": "2032-05-01", "notes": "Synthetic local-only note",
+            goals = [self.basic_goal("First home") | {
+                "target_amount_gbp": "25000.00",
+                "target_date": "2032-05-01",
+                "notes": "Synthetic local-only note",
             }]
             preview = self.preview(client, session, goals)
             self.assertEqual(preview.status_code, 200, preview.text)
@@ -95,18 +128,14 @@ class PlanningProfileTests(unittest.TestCase):
     def test_invalid_goals_and_stale_previews_fail_closed(self):
         with self.client() as client:
             session = self.get_session(client)
-            invalid = [{
-                "name": "Too much precision", "target_amount_gbp": "1.001",
-                "target_date": "2030-02-29", "notes": "",
+            invalid = [self.basic_goal("Too much precision") | {
+                "target_amount_gbp": "1.001", "target_date": "2030-02-29",
             }]
             response = self.preview(client, session, invalid)
             self.assertEqual(response.status_code, 400)
             self.assertFalse(self.path.exists())
 
-            goals = [{
-                "name": "Emergency reserve", "target_amount_gbp": None,
-                "target_date": None, "notes": "",
-            }]
+            goals = [self.basic_goal("Emergency reserve")]
             first = self.preview(client, session, goals, "first")
             self.assertEqual(first.status_code, 200, first.text)
             changed = [{
@@ -144,13 +173,14 @@ class PlanningProfileTests(unittest.TestCase):
                 "purpose": "first_home", "access_date": "2030-01-01",
                 "liquidity": "within_5_years", "loss_tolerance": "small_fluctuations",
                 "current_amount_gbp": "5000", "monthly_contribution_gbp": "200",
+                "linked_portfolio_id": None, "linked_account_ids": [],
             }
             preview = self.preview(client, session, [goal], "planning-upgrade")
             self.assertEqual(preview.status_code, 200, preview.text)
             saved = self.confirm(client, session, preview.json()["preview_id"])
             self.assertEqual(saved.status_code, 200, saved.text)
         upgraded = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(upgraded["schema_version"], 2)
+        self.assertEqual(upgraded["schema_version"], 3)
         self.assertEqual(upgraded["goals"][0]["liquidity"], "within_5_years")
         self.assertEqual(upgraded["goals"][0]["current_amount_gbp"], "5000")
 
@@ -163,12 +193,69 @@ class PlanningProfileTests(unittest.TestCase):
                 "purpose": "financial_resilience", "access_date": None,
                 "liquidity": "immediate", "loss_tolerance": "avoid_loss",
                 "current_amount_gbp": "0", "monthly_contribution_gbp": "0.00",
+                "linked_portfolio_id": None, "linked_account_ids": [],
             }
             valid = self.preview(client, session, [goal], "valid-zero-inputs")
             self.assertEqual(valid.status_code, 200, valid.text)
             goal["loss_tolerance"] = "guaranteed_return"
             invalid = self.preview(client, session, [goal], "invalid-tolerance")
             self.assertEqual(invalid.status_code, 400)
+            self.assertFalse(self.path.exists())
+
+    def test_goal_account_assignments_are_unique_and_portfolio_bound(self):
+        with self.client() as client:
+            session = self.get_session(client)
+            goal = self.linked_goal()
+            duplicate = self.preview(client, session, [goal, {
+                **goal, "name": "Second goal",
+            }], "duplicate-link")
+            self.assertEqual(duplicate.status_code, 400)
+            self.assertEqual(duplicate.json()["error"], "goal_account_already_assigned")
+            self.assertFalse(self.path.exists())
+
+            ledger = self.initialize_journal()
+            mismatch = self.preview(
+                client, session, [self.linked_goal("another-portfolio")],
+                "mismatched-portfolio", "synthetic-demo", ledger.revision)
+            self.assertEqual(mismatch.status_code, 409)
+            self.assertEqual(mismatch.json()["error"], "planning_portfolio_changed")
+            unavailable = self.preview(
+                client, session, [self.linked_goal(account_id="retired-account")],
+                "unavailable-account", "synthetic-demo", ledger.revision)
+            self.assertEqual(unavailable.status_code, 409)
+            self.assertEqual(unavailable.json()["error"], "planning_account_unavailable")
+            inconsistent = self.preview(
+                client, session, [self.linked_goal() | {"current_amount_gbp": "10"}],
+                "linked-manual-amount", "synthetic-demo", ledger.revision)
+            self.assertEqual(inconsistent.status_code, 400)
+            self.assertEqual(inconsistent.json()["error"], "invalid_goal_links")
+            self.assertFalse(self.path.exists())
+
+    def test_linked_goal_preview_and_confirmation_reject_changed_journal_revision(self):
+        with self.client() as client:
+            session = self.get_session(client)
+            ledger = self.initialize_journal()
+            goal = self.linked_goal()
+            stale_preview = self.preview(
+                client, session, [goal], "stale-journal-preview",
+                "synthetic-demo", ledger.revision - 1)
+            self.assertEqual(stale_preview.status_code, 409)
+            self.assertEqual(stale_preview.json()["error"], "planning_portfolio_changed")
+
+            preview = self.preview(
+                client, session, [goal], "changed-journal-confirm",
+                "synthetic-demo", ledger.revision)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            later = NOW.replace(day=2)
+            import_events(self.journal, [{
+                "id": "later-contribution", "type": "contribution",
+                "timestamp": iso(later), "available_at": iso(later),
+                "account_id": "savings", "currency": "GBP",
+                "amount_gbp": "1", "evidence": "synthetic test contribution",
+            }], later)
+            result = self.confirm(client, session, preview.json()["preview_id"])
+            self.assertEqual(result.status_code, 409)
+            self.assertEqual(result.json()["error"], "planning_portfolio_changed")
             self.assertFalse(self.path.exists())
 
     def test_malformed_existing_profile_is_not_repaired_or_overwritten(self):
@@ -189,10 +276,8 @@ class PlanningProfileTests(unittest.TestCase):
             previews = []
             for client, session, name in zip(
                     (first_client, second_client), sessions, names):
-                result = self.preview(client, session, [{
-                    "name": name, "target_amount_gbp": None,
-                    "target_date": None, "notes": "",
-                }], f"request-{name}")
+                result = self.preview(
+                    client, session, [self.basic_goal(name)], f"request-{name}")
                 self.assertEqual(result.status_code, 200, result.text)
                 previews.append(result.json()["preview_id"])
             start = Barrier(2)
@@ -220,16 +305,12 @@ class PlanningProfileTests(unittest.TestCase):
         first, second = PlanningProfile(self.path), PlanningProfile(self.path)
         first_session, first_token = first.session_payload(None, now)
         second_session, second_token = second.session_payload(None, now)
-        first_preview = first.preview(first_token, "first", first_session["revision"],
-                                      first_session["profile_hash"], [{
-                                          "name": "First edit", "target_amount_gbp": None,
-                                          "target_date": None, "notes": "",
-                                      }], now)
-        second_preview = second.preview(second_token, "second", second_session["revision"],
-                                        second_session["profile_hash"], [{
-                                            "name": "Conflicting edit", "target_amount_gbp": None,
-                                            "target_date": None, "notes": "",
-                                        }], now)
+        first_preview = first.preview(
+            first_token, "first", first_session["revision"], first_session["profile_hash"],
+            [self.basic_goal("First edit")], None, None, now)
+        second_preview = second.preview(
+            second_token, "second", second_session["revision"], second_session["profile_hash"],
+            [self.basic_goal("Conflicting edit")], None, None, now)
 
         with first._file_lock():
             with self.assertRaises(PlanningError) as busy:

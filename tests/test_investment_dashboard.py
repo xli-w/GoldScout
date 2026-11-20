@@ -285,6 +285,8 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertNotIn("authenticated", session)
             self.assertEqual([item["id"] for item in session["accounts"]],
                              ["bank", "broker"])
+            self.assertEqual(session["portfolio_id"], profile()["portfolio_id"])
+            self.assertEqual(session["revision"], 0)
             headers = {"Origin": "http://127.0.0.1",
                        "X-CSRF-Token": session["csrf"]}
             self.assertEqual(client.post(

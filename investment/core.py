@@ -15,7 +15,7 @@ RECORDED_BALANCE = re.compile(r"(?:0|[1-9][0-9]{0,24})(?:\.[0-9]{1,16})?\Z")
 ZERO = Decimal(0)
 ROLES = ("core", "dynamic", "unassigned")
 ROLE_EVENTS = {"contribution", "withdrawal", "transfer", "interest",
-               "dividend", "buy", "sell"}
+               "dividend", "buy", "sell", "account_fee"}
 
 
 def clock(value=None):
@@ -156,6 +156,7 @@ EVENT_FIELDS = {
     "transfer": ("amount_gbp", "destination_account_id"),
     "buy": ("product_id", "quantity", "price_gbp", "fee_gbp"),
     "sell": ("product_id", "quantity", "price_gbp", "fee_gbp"),
+    "account_fee": ("amount_gbp",),
     "split": ("product_id", "ratio"),
     "interest": ("amount_gbp",),
     "dividend": ("amount_gbp", "product_id"),
@@ -894,6 +895,8 @@ class Ledger:
                     sign = 1 if kind == "buy" else -1
                     self.role_cash[cash_key] = self.role_cash.get(cash_key, ZERO) - sign * quantity * price - fee
                     self.role_holdings[holding_key] = self.role_holdings.get(holding_key, ZERO) + sign * quantity
+                elif kind == "account_fee":
+                    self.role_cash[cash_key] = self.role_cash.get(cash_key, ZERO) - amount
                 elif kind == "split":
                     product = next(item for item in self.spec["products"]
                                    if item["id"] == value["product_id"])
@@ -937,6 +940,9 @@ class Ledger:
             self.cash[account] -= sign * quantity * price + fee
             self.holdings[key] = self.holdings.get(key, ZERO) + sign * quantity
             self.fees += fee
+        elif kind == "account_fee":
+            self.cash[account] -= amount
+            self.fees += amount
         elif kind == "split":
             if self.holdings.get(key, ZERO) <= 0:
                 raise InvestmentError("Split requires an evidenced holding")

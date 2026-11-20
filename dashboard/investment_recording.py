@@ -95,9 +95,12 @@ class RecordingSessions:
             "csrf": record["csrf"], "accounts": [], "products": [],
             "latest_correctable_event": None, "correctable_events": [],
             "current_balances": {}, "current_holdings": [], "opened": False,
+            "portfolio_id": None, "revision": 0,
         }
         ledger = self._verify_store()
         result["opened"] = ledger.opened
+        result["portfolio_id"] = ledger.spec["portfolio_id"]
+        result["revision"] = ledger.revision
         result["accounts"] = [
             {"id": account["id"], "name": account["name"], "kind": account["kind"]}
             for account in ledger.spec["accounts"]

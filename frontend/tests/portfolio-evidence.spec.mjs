@@ -1,5 +1,89 @@
 import { expect, test } from "@playwright/test";
 
+test("current account differences take priority over review settings", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  const account = report.accounts.find(item => item.status === "active");
+  account.cash_observation = {
+    balance_gbp: "100", difference_gbp: "-1", timestamp: "2030-01-01T00:00:00Z",
+    available_at: "2030-01-01T00:00:00Z", source: "Synthetic statement", evidence: "Synthetic check",
+  };
+  report.cash_observations = [{ ...account.cash_observation, account_id: account.id }];
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.clock.setFixedTime(new Date("2030-01-02T00:00:00Z"));
+  await page.goto("/investment");
+
+  const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
+  await expect(card).toContainText("Action needed");
+  await expect(card).toContainText("Review the recorded cash difference");
+  await expect(card).not.toContainText("Freshness unknown");
+  const details = card.locator("details");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.getByText("Recorded account details").click();
+  await expect(details).toContainText("difference -£1.00");
+  account.cash_observation.difference_gbp = "0";
+  report.cash_observations.push({ ...account.cash_observation, account_id: account.id });
+  await page.getByRole("button", { name: "Refresh investment" }).click();
+  await expect(card).toContainText("Action needed");
+  await expect(card).toContainText("a later match does not resolve them");
+});
+
+test("historical performance limitations remain distinct from current actions", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  report.twr_pct = null;
+  report.max_drawdown_pct = null;
+  report.recorded_corrections = [];
+  report.cash_observations = [];
+  report.warnings = [];
+  report.accounts.forEach(account => { account.cash_observation = null; });
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+
+  const actions = page.getByRole("region", { name: "What needs attention" });
+  await expect(actions).not.toContainText("Some performance figures are unavailable");
+  const history = page.getByRole("region", { name: "Historical performance limitations" });
+  await expect(history).toContainText("Some performance figures are unavailable");
+  await expect(history).toContainText("You can continue to record and review your portfolio");
+});
+
+test("a correction keeps cash review actionable when replay shows a match", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  const account = report.accounts.find(item => item.status === "active");
+  account.cash_observation = {
+    balance_gbp: "100", difference_gbp: "0", timestamp: "2030-01-01T00:00:00Z",
+    available_at: "2030-01-01T00:00:00Z", source: "Synthetic statement", evidence: "Synthetic check",
+  };
+  report.cash_observations = [{ ...account.cash_observation, account_id: account.id }];
+  report.recorded_corrections = [{ id: "synthetic-correction", original_event_id: "original",
+    replacement_event_id: "replacement", replaced_type: "interest", account_id: account.id,
+    role: "unassigned", role_evidence: null, original_amount_gbp: "1", replacement_amount_gbp: "2",
+    timestamp: "2030-01-01T00:00:00Z", available_at: "2030-01-01T00:00:00Z", evidence: "Synthetic correction" }];
+  report.warnings.push("Historical correction replay may have changed past cash-observation differences. Preserve prior reports and review the original observations and correction evidence.");
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.clock.setFixedTime(new Date("2030-01-02T00:00:00Z"));
+  await page.goto("/investment");
+
+  const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
+  await card.getByRole("combobox").selectOption("7");
+  await card.getByRole("button", { name: "Mark account checked today" }).click();
+  await expect(card).toContainText("Action needed");
+  await expect(card).toContainText("replay may have changed past differences");
+  await expect(card).not.toContainText("No review is due");
+  await card.getByRole("link", { name: "Review cash evidence" }).click();
+  await expect(page.getByRole("region", { name: "Cash evidence overview" })).toBeVisible();
+});
+
 test("portfolio shows evidence age and dated activity without claiming live balances", async ({ page }) => {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
   const account = report.accounts[0];
@@ -88,6 +172,9 @@ test("account freshness intervals and local review dates persist without journal
       source: "Synthetic terms", maturity_date: null, notice_days: null,
     };
   });
+  report.cash_observations = report.accounts.map(item => ({
+    ...item.cash_observation, account_id: item.id,
+  }));
   report.holdings.forEach(item => {
     if (item.mark_at !== null) item.mark_at = report.as_of;
   });
@@ -107,7 +194,7 @@ test("account freshness intervals and local review dates persist without journal
   const interval = card.getByRole("combobox", { name: `Expected review interval for ${account.name}` });
   await interval.selectOption("7");
   await expect(card).toContainText("Check due");
-  await card.getByRole("button", { name: "Record local review date" }).click();
+  await card.getByRole("button", { name: "Mark account checked today" }).click();
   await expect(card).toContainText("No review is due under your chosen interval.");
   await page.reload();
   const reloaded = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
@@ -115,6 +202,73 @@ test("account freshness intervals and local review dates persist without journal
   await expect(reloaded).toContainText("No review is due under your chosen interval.");
   expect(writes).toBe(0);
   await expect(status).toContainText("saved in this browser only");
+});
+
+test("guided review resumes, records completion, and restarts when journal revision changes", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  report.complete = true;
+  const active = report.accounts.filter(item => item.status === "active");
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+
+  const guided = page.getByRole("region", { name: "Guided portfolio review" });
+  await guided.getByRole("button", { name: "Start account review" }).click();
+  await expect(guided).toContainText(`0 of ${active.length} accounts checked`);
+  for (let index = 0; index < active.length; index++) {
+    const account = active[index];
+    const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
+    await card.getByRole("button", { name: "Mark reviewed in this session" }).click();
+    if (index === 0) {
+      await page.reload();
+      await expect(page.getByRole("region", { name: "Guided portfolio review" }))
+        .toContainText(`1 of ${active.length} accounts checked`);
+    }
+  }
+  await expect(guided).toContainText("Review complete.");
+
+  report.revision++;
+  await page.reload();
+  await expect(page.getByRole("region", { name: "Guided portfolio review" }))
+    .toContainText("The journal changed after this review began");
+  await expect(page.getByRole("button", { name: "Start a new review" })).toBeVisible();
+});
+
+test("guided review completion retains cash differences on retired accounts", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  report.complete = true;
+  const retired = report.accounts[0];
+  report.accounts.forEach(item => { item.status = item.id === retired.id ? "retired" : "active"; });
+  const observation = {
+    balance_gbp: "99", difference_gbp: "-1",
+    timestamp: "2030-01-01T00:00:00Z", available_at: "2030-01-01T00:00:00Z",
+    source: "Synthetic statement", evidence: "Synthetic cash comparison",
+  };
+  retired.cash_observation = observation;
+  report.cash_observations = [...report.cash_observations,
+    { ...observation, account_id: retired.id }];
+  const active = report.accounts.filter(item => item.status === "active");
+  expect(active.length).toBeGreaterThan(0);
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+
+  const guided = page.getByRole("region", { name: "Guided portfolio review" });
+  await guided.getByRole("button", { name: "Start account review" }).click();
+  for (const account of active) {
+    const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
+    await card.getByRole("button", { name: "Mark reviewed in this session" }).click();
+  }
+  await expect(guided).toContainText("Review complete.");
+  await expect(guided.getByRole("list", { name: "Unresolved review items" }))
+    .toContainText(`${retired.name} (retired) has a recorded cash difference`);
+  await expect(guided).not.toContainText("No open evidence issues");
 });
 
 test("review interval updates in separate tabs retain each account's setting", async ({ page, context }) => {
@@ -138,14 +292,22 @@ test("review interval updates in separate tabs retain each account's setting", a
 
   const firstCard = page.locator(".account-maintenance-card").filter({ hasText: accounts[0].name }).first();
   const secondCard = secondTab.locator(".account-maintenance-card").filter({ hasText: accounts[1].name }).first();
-  await firstCard.getByRole("combobox").selectOption("7");
-  await secondCard.getByRole("combobox").selectOption("30");
+  await firstCard.getByRole("combobox", {
+    name: `Expected review interval for ${accounts[0].name}`,
+  }).selectOption("7");
+  await secondCard.getByRole("combobox", {
+    name: `Expected review interval for ${accounts[1].name}`,
+  }).selectOption("30");
   await page.reload();
   await secondTab.reload();
   await expect(page.locator(".account-maintenance-card")
-    .filter({ hasText: accounts[0].name }).first().getByRole("combobox")).toHaveValue("7");
+    .filter({ hasText: accounts[0].name }).first().getByRole("combobox", {
+      name: `Expected review interval for ${accounts[0].name}`,
+    })).toHaveValue("7");
   await expect(secondTab.locator(".account-maintenance-card")
-    .filter({ hasText: accounts[1].name }).first().getByRole("combobox")).toHaveValue("30");
+    .filter({ hasText: accounts[1].name }).first().getByRole("combobox", {
+      name: `Expected review interval for ${accounts[1].name}`,
+    })).toHaveValue("30");
   await secondTab.close();
 });
 
@@ -166,12 +328,19 @@ test("existing browser review settings remain readable and are overridden per ac
   await page.goto("/investment");
 
   const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
-  const interval = card.getByRole("combobox");
+  const interval = card.getByRole("combobox", {
+    name: `Expected review interval for ${account.name}`,
+  });
   await expect(interval).toHaveValue("30");
+  await expect(card.getByRole("combobox", {
+    name: `Savings terms recheck interval for ${account.name}`,
+  })).toHaveValue("");
   await interval.selectOption("14");
   await page.reload();
   await expect(page.locator(".account-maintenance-card").filter({ hasText: account.name })
-    .first().getByRole("combobox")).toHaveValue("14");
+    .first().getByRole("combobox", {
+      name: `Expected review interval for ${account.name}`,
+    })).toHaveValue("14");
 });
 
 test("savings terms surface source checks without comparing advertised rates", async ({ page }) => {
@@ -189,6 +358,9 @@ test("savings terms surface source checks without comparing advertised rates", a
       source: "Synthetic terms", maturity_date: "2030-03-01", notice_days: 30,
     };
   });
+  report.cash_observations = report.accounts.map(item => ({
+    ...item.cash_observation, account_id: item.id,
+  }));
   report.holdings.forEach(item => {
     if (item.mark_at !== null) item.mark_at = report.as_of;
   });
@@ -201,13 +373,31 @@ test("savings terms surface source checks without comparing advertised rates", a
 
   const account = report.accounts.find(item => item.kind === "deposit" && item.status === "active");
   const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
-  await card.getByRole("combobox", { name: `Expected review interval for ${account.name}` }).selectOption("30");
+  await card.getByRole("combobox", { name: `Expected review interval for ${account.name}` }).selectOption("365");
+  await card.getByRole("combobox", {
+    name: `Savings terms recheck interval for ${account.name}`,
+  }).selectOption("30");
   await expect(card).toContainText("Recheck the savings rate, access, notice and maturity terms");
   await expect(card).toContainText("maturity 2030-03-01");
   await expect(card.getByRole("link", { name: "Update this account" }))
     .toHaveAttribute("href", `/investment/update?account_id=${encodeURIComponent(account.id)}`);
   await expect(page.getByRole("region", { name: "Account freshness and next actions" }))
-    .toContainText("platform, fund, subscription, FX, tax and other costs may be missing");
+    .toContainText("fund, subscription, FX, tax and other costs may be missing");
+});
+
+test("direct concentration is bounded to complete recorded holdings", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+
+  const concentration = page.getByRole("region", { name: "Direct investment concentration" });
+  await expect(concentration).toBeVisible();
+  await expect(concentration).toContainText("share of the complete recorded portfolio value");
+  await expect(concentration).toContainText("does not look through funds");
 });
 
 test("unknown cash checks and prices remain explicitly unknown", async ({ page }) => {
@@ -303,7 +493,9 @@ test("account cash check preselects only an account still available for recordin
   } }));
   await page.goto("/investment");
   await page.getByRole("link", { name: `Check cash for ${selected.name}` }).click();
-  await expect(page.getByRole("status")).toContainText("this observation does not update recorded cash");
+  await expect(page).toHaveURL(/\/investment\/record\?record=cash-check/);
+  await expect(page.getByRole("region", { name: "Manual recording" }).getByRole("status"))
+    .toContainText("this observation does not update recorded cash");
   await expect(page.getByLabel("What are you recording?")).toHaveValue("cash_observation");
   const accountSelect = page.getByRole("combobox", { name: "Account" });
   await expect(accountSelect).toHaveValue(selected.id);

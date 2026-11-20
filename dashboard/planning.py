@@ -16,14 +16,16 @@ from investment import InvestmentError
 
 MAX_PROFILE_BYTES = 64 * 1024
 MAX_GOALS = 20
+MAX_GOAL_ACCOUNTS = 50
 PREVIEW_TTL = timedelta(minutes=5)
 AMOUNT_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,2})?$")
 DATE_PATTERN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 LEGACY_GOAL_FIELDS = {"name", "target_amount_gbp", "target_date", "notes"}
-GOAL_FIELDS = LEGACY_GOAL_FIELDS | {
+GOAL_V2_FIELDS = LEGACY_GOAL_FIELDS | {
     "purpose", "access_date", "liquidity", "loss_tolerance",
     "current_amount_gbp", "monthly_contribution_gbp",
 }
+GOAL_FIELDS = GOAL_V2_FIELDS | {"linked_portfolio_id", "linked_account_ids"}
 PURPOSES = {"not_set", "first_home", "retirement", "education",
             "major_purchase", "financial_resilience", "other"}
 LIQUIDITY = {"unknown", "immediate", "within_1_year", "within_5_years", "flexible"}
@@ -52,18 +54,21 @@ def _unique_pairs(pairs):
     return result
 
 
-def _goals(value):
+def _goals(value, allow_legacy=False):
     if type(value) is not list or len(value) > MAX_GOALS:
         raise PlanningError("invalid_goals", 400)
     normalized = []
+    accepted_fields = [GOAL_FIELDS]
+    if allow_legacy:
+        accepted_fields.extend((LEGACY_GOAL_FIELDS, GOAL_V2_FIELDS))
     for item in value:
-        if type(item) is not dict or set(item) not in (
-                LEGACY_GOAL_FIELDS, GOAL_FIELDS):
+        if type(item) is not dict or set(item) not in accepted_fields:
             raise PlanningError("invalid_goal", 400)
         goal = {
             "purpose": "not_set", "access_date": None, "liquidity": "unknown",
             "loss_tolerance": "not_set", "current_amount_gbp": None,
-            "monthly_contribution_gbp": None, **item,
+            "monthly_contribution_gbp": None, "linked_portfolio_id": None,
+            "linked_account_ids": [], **item,
         }
         name, amount, target_date, notes = (
             goal["name"], goal["target_amount_gbp"], goal["target_date"], goal["notes"])
@@ -94,6 +99,19 @@ def _goals(value):
                 or not isinstance(goal["loss_tolerance"], str)
                 or goal["loss_tolerance"] not in LOSS_TOLERANCE):
             raise PlanningError("invalid_goal_constraints", 400)
+        portfolio_id, account_ids = (
+            goal["linked_portfolio_id"], goal["linked_account_ids"])
+        if (portfolio_id is not None and
+                (not isinstance(portfolio_id, str) or not portfolio_id.strip()
+                 or len(portfolio_id) > 200)):
+            raise PlanningError("invalid_goal_links", 400)
+        if (type(account_ids) is not list or len(account_ids) > MAX_GOAL_ACCOUNTS
+                or any(not isinstance(account_id, str) or not account_id.strip()
+                       or len(account_id) > 200 for account_id in account_ids)
+                or len(set(account_ids)) != len(account_ids)
+                or bool(account_ids) != (portfolio_id is not None)
+                or account_ids and goal["current_amount_gbp"] is not None):
+            raise PlanningError("invalid_goal_links", 400)
         normalized.append({
             "id": secrets.token_hex(16),
             "name": name.strip(),
@@ -106,15 +124,57 @@ def _goals(value):
             "loss_tolerance": goal["loss_tolerance"],
             "current_amount_gbp": goal["current_amount_gbp"],
             "monthly_contribution_gbp": goal["monthly_contribution_gbp"],
+            "linked_portfolio_id": portfolio_id,
+            "linked_account_ids": account_ids.copy(),
         })
+    assigned = set()
+    linked_portfolios = set()
+    for goal in normalized:
+        portfolio_id = goal["linked_portfolio_id"]
+        if portfolio_id is None:
+            continue
+        linked_portfolios.add(portfolio_id)
+        for account_id in goal["linked_account_ids"]:
+            key = (portfolio_id, account_id)
+            if key in assigned:
+                raise PlanningError("goal_account_already_assigned", 400)
+            assigned.add(key)
+    if len(linked_portfolios) > 1:
+        raise PlanningError("goal_portfolios_must_match", 400)
     return normalized
 
 
 class PlanningProfile:
-    def __init__(self, path):
+    def __init__(self, path, investment_database=None):
         self.path = Path(path).absolute()
+        self.investment_database = (
+            Path(investment_database).absolute()
+            if investment_database is not None else None)
         self.sessions = MonitoringWorkflowSessions()
         self.lock = threading.RLock()
+
+    def _linked_journal_snapshot(self, goals, now):
+        linked = [goal for goal in goals if goal["linked_account_ids"]]
+        if not linked:
+            return None
+        if self.investment_database is None:
+            raise PlanningError("planning_portfolio_unavailable", 503)
+        from investment.store import read
+
+        try:
+            ledger = read(self.investment_database, now)
+        except (InvestmentError, OSError) as exc:
+            raise PlanningError("planning_portfolio_unavailable", 503) from exc
+        if not ledger.opened:
+            raise PlanningError("planning_portfolio_unavailable", 409)
+        portfolio_id = linked[0]["linked_portfolio_id"]
+        if portfolio_id != ledger.spec["portfolio_id"]:
+            raise PlanningError("planning_portfolio_changed", 409)
+        active_accounts = ledger.active_accounts
+        if any(account_id not in active_accounts
+               for goal in linked for account_id in goal["linked_account_ids"]):
+            raise PlanningError("planning_account_unavailable", 409)
+        return portfolio_id, ledger.revision
 
     def session_payload(self, token, now):
         result = self.sessions.session_payload(token, now)
@@ -154,7 +214,7 @@ class PlanningProfile:
         if (type(value) is not dict
                 or set(value) != {"schema_version", "revision", "saved_at", "goals"}
                 or type(value["schema_version"]) is not int
-                or value["schema_version"] not in (1, 2)
+                or value["schema_version"] not in (1, 2, 3)
                 or type(value["revision"]) is not int or value["revision"] < 1
                 or not isinstance(value["saved_at"], str)
                 or not isinstance(value["goals"], list)):
@@ -174,38 +234,62 @@ class PlanningProfile:
                     or not isinstance(goal.get("id"), str)
                     or not re.fullmatch(r"[0-9a-f]{32}", goal["id"])):
                 raise PlanningError("planning_profile_unavailable", 503)
-            fields = LEGACY_GOAL_FIELDS if value["schema_version"] == 1 else GOAL_FIELDS
+            fields = (
+                LEGACY_GOAL_FIELDS if value["schema_version"] == 1 else
+                GOAL_V2_FIELDS if value["schema_version"] == 2 else GOAL_FIELDS)
             if set(goal) != {"id"} | fields:
                 raise PlanningError("planning_profile_unavailable", 503)
             try:
-                normalized = _goals([{key: goal[key] for key in fields}])[0]
+                normalized = _goals(
+                    [{key: goal[key] for key in fields}], allow_legacy=True)[0]
             except PlanningError as exc:
                 raise PlanningError("planning_profile_unavailable", 503) from exc
             normalized["id"] = goal["id"]
             validated.append(normalized)
         if len(validated) != len(value["goals"]):
             raise PlanningError("planning_profile_unavailable", 503)
+        checked = _goals([{
+            key: goal[key] for key in GOAL_FIELDS
+        } for goal in validated])
+        for normalized, original in zip(checked, validated):
+            normalized["id"] = original["id"]
+        validated = checked
         return {
-            "schema_version": 2, "revision": value["revision"],
+            "schema_version": 3, "revision": value["revision"],
             "saved_at": saved_at, "goals": validated,
             "profile_hash": hashlib.sha256(raw).hexdigest(),
         }
 
-    def preview(self, token, request_id, expected_revision, expected_hash, goals, now):
+    def preview(self, token, request_id, expected_revision, expected_hash, goals,
+                expected_portfolio_id, expected_journal_revision, now):
         if (not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
                 or type(expected_revision) is not int
                 or not isinstance(expected_hash, str)
                 or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)):
             raise PlanningError("invalid_request", 400)
         normalized = _goals(goals)
+        has_links = any(goal["linked_account_ids"] for goal in normalized)
+        if (has_links and (
+                not isinstance(expected_portfolio_id, str)
+                or not expected_portfolio_id.strip() or len(expected_portfolio_id) > 200
+                or type(expected_journal_revision) is not int
+                or expected_journal_revision < 0)
+                or not has_links and
+                (expected_portfolio_id is not None or expected_journal_revision is not None)):
+            raise PlanningError("invalid_request", 400)
         profile = self._read()
         if (expected_revision != profile["revision"]
                 or not secrets.compare_digest(expected_hash, profile["profile_hash"])):
             raise PlanningError("planning_profile_changed")
         now = now.astimezone(timezone.utc)
+        linked_journal_snapshot = self._linked_journal_snapshot(normalized, now)
+        if has_links and linked_journal_snapshot != (
+                expected_portfolio_id, expected_journal_revision):
+            raise PlanningError("planning_portfolio_changed")
         request = {
             "expected_revision": expected_revision, "expected_hash": expected_hash,
             "goals": [{key: goal[key] for key in GOAL_FIELDS} for goal in normalized],
+            "linked_journal_snapshot": linked_journal_snapshot,
         }
         request_hash = hashlib.sha256(_canonical(request)).hexdigest()
         existing = self.sessions.existing_preview(token, request_id, request_hash, now)
@@ -225,6 +309,7 @@ class PlanningProfile:
             "receipt": None,
             "expected_hash": expected_hash,
             "expected_revision": expected_revision,
+            "linked_journal_snapshot": linked_journal_snapshot,
             "goals": normalized,
         }
         self.sessions.remember_preview(token, request_id, request_hash, pending, now)
@@ -239,13 +324,17 @@ class PlanningProfile:
             return pending["receipt"]
         with self.lock:
             with self._file_lock():
+                linked_journal_snapshot = self._linked_journal_snapshot(
+                    pending["goals"], now)
+                if linked_journal_snapshot != pending["linked_journal_snapshot"]:
+                    raise PlanningError("planning_portfolio_changed")
                 current = self._read()
                 if (current["revision"] != pending["expected_revision"]
                         or not secrets.compare_digest(
                             current["profile_hash"], pending["expected_hash"])):
                     raise PlanningError("planning_profile_changed")
                 profile = {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "revision": current["revision"] + 1,
                     "saved_at": now.isoformat().replace("+00:00", "Z"),
                     "goals": pending["goals"],

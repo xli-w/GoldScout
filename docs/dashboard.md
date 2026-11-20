@@ -22,6 +22,11 @@ Then start the dashboard from that folder:
 .\.venv\Scripts\python.exe -m dashboard
 ```
 
+On Windows, `Start-GoldScout.cmd` runs this command from the checkout using its
+default `local-investment/` workspace. It does not install dependencies or open
+a browser; follow the one-time setup above first, then open the printed local
+URL. Close the console window to stop the dashboard.
+
 To preview with synthetic data instead of a real workspace:
 
 ```powershell
@@ -45,11 +50,16 @@ when selecting a journal directly, opt in with `--planning-profile <path>`.
 Viewing does not create that file. Changes require a revision-bound preview and
 explicit confirmation. A companion lock file serializes writes from concurrent
 dashboard instances. The profile stores purpose, target/access dates, liquidity
-needs, comfort with losses, and user-entered current/monthly amounts as local
-plaintext. Simple illustrations assume no growth, interest, fees, tax or
-withdrawals; they do not read account balances and are not forecasts or
-recommendations. Existing v1 goal profiles are read with new constraints marked
-unknown and upgraded only after a confirmed save. It is not part of journal
+needs, comfort with losses, user-entered current/monthly amounts, and optional
+whole-account associations as local plaintext. An account can be assigned to
+only one goal and associations do not move or reserve money. A linked amount
+replaces, rather than adds to, the manual amount and is shown only when the
+complete recorded portfolio value reconciles to its account records. The
+portfolio identity and journal revision are checked at preview and confirmation;
+values are dated records, not live provider balances. Simple illustrations
+assume no growth, interest, fees, tax or withdrawals and are not forecasts or
+recommendations. Existing v1 and v2 goal profiles are read with new fields
+defaulted to unknown or unlinked and upgraded only after a confirmed save. It is not part of journal
 backups or sent to hosted AI. Choose a device and backup location you control.
 
 Normal launches enable manual recording for the selected journal, including
@@ -70,10 +80,38 @@ separate holding and explicit mapping fields; comparison results are displayed
 separately from append-only review-inbox actions. Neither workflow status nor a
 reconciliation match establishes current custody or approves a trade.
 Each account has one status and next action, using a user-selected weekly-to-
-yearly cadence stored only in this browser. The status shows shared portfolio
+yearly cadence stored only in this browser; savings-term rechecks have their
+own independent cadence. The status shows shared portfolio
 valuation dates, account cash and holding evidence; it does not invent an
 account-specific value history or provider agreement. A complete value remains
 complete only for its recorded date, and an older complete value can be overdue.
+Current missing values and recorded cash differences take priority over
+choosing a cadence; a later matching cash check does not resolve an earlier
+difference. Historical performance limitations are presented separately from
+current attention, without hiding correction-related cash replay warnings.
+Account cards show their next action first; recorded cash, valuation dates and
+other account facts remain in each card's expandable details.
+**Guided account review** keeps a local checklist across active accounts. It
+resumes after a browser restart when the journal revision is unchanged; after
+any journal record changes, the old checklist is retained but marked stale and
+must be restarted. Completion counts accounts reviewed, not issues resolved:
+remaining missing values, cash differences, overdue reminders and checks
+affected by corrections stay visible in the completion summary and account actions. This progress is
+browser-local, is not included in journal backups, and does not change the
+journal.
+The overview also shows the largest direct holding exposures against complete
+recorded value. It does not look through funds or assess suitability or risk.
+Explicit account/platform charges can be recorded as fees and reduce recorded
+cash without being treated as an external withdrawal. The fee total still omits
+many possible costs, including fund charges, taxes, FX, spread and slippage.
+Setup and recording forms also save incomplete drafts in the same browser and
+workspace context. Only form fields are restored; a full preview and its
+acknowledgement checkbox are not resumed. The separate uncertain-save safeguard
+retains an exact pending confirmation reference so only that same save can be
+retried; it blocks new entries until resolved. Recovery re-entry is not saved.
+If browser storage is unavailable or malformed, the page surfaces that state
+instead of claiming the draft was saved. Drafts are local plaintext browser
+data and are not part of journal backups.
 Savings-term reminders use only dated entered facts and direct users to verify
 rates, access, notice and maturity with the provider; they do not compare
 obtainable returns. Recorded fill fees are not a full cost assessment. Cash
@@ -94,6 +132,12 @@ of price movements. A browser-local review marker can anchor this comparison to
 the complete valuation date last reviewed; it stores only a date and journal
 revision, not a journal snapshot. It does not establish current balances,
 complete activity, external fees, or custody.
+Saving a comparison point replaces the previous browser-local point. Marking an
+account checked saves a separate reminder date and does not save that comparison
+point or resolve a discrepancy. Neither is included in a journal backup.
+Changes to a saved comparison point are reflected in other tabs on the same
+browser origin. If it cannot be read, comparison is unavailable rather than
+silently choosing another date; the saved data is not changed.
 For recorded portfolios, a selected comparison date remains selected across
 refreshes while still available; otherwise the comparison asks for a new date.
 Demo dates move with its synthetic clock, so its selection follows the same

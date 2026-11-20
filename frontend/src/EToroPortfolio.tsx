@@ -9,6 +9,21 @@ type Instrument = {
   netContracts: string; netCurrentExposureAssetCurrency: string;
   netCurrentExposureAccountCurrency: string; avgLeverage: string;
 };
+type ClosedTrade = {
+  positionId: number; instrumentId: number; closeTimestamp: string;
+  isBuy: boolean; units: string;
+  orderId?: number;
+  socialTradeId?: number; parentPositionId?: number;
+  netProfit?: string; closeRate?: string; leverage?: string; openRate?: string;
+  stopLossRate?: string | null; takeProfitRate?: string | null;
+  investment?: string; initialInvestment?: string; fees?: string;
+  openTimestamp?: string; trailingStopLoss?: boolean;
+};
+type ClosedTradeHistory = {
+  status: "not_requested" | "available" | "unavailable";
+  from_date: string | null; through_date: string | null; received_at: string | null;
+  trades: ClosedTrade[]; error_code?: string;
+};
 type Mirror = {
   mirror_id: number; positions: Instrument[]; mirrorAvailableCash?: string;
   totals?: Record<string, string>;
@@ -17,6 +32,7 @@ export type EToroSnapshot = {
   schema_version: 1; environment: "real" | "demo"; account_id: number;
   source_as_of: string; account_currency: string; account_totals: Record<string, string>;
   direct_positions: Instrument[]; mirrors: Mirror[];
+  closed_trade_history: ClosedTradeHistory;
   coverage: Record<string, string>;
   gbp_balance: null | {
     status: string; amount_gbp?: string; source_balance?: string;
@@ -60,6 +76,50 @@ function isInstrument(value: unknown): value is Instrument {
     typeof value.avgLeverage === "string";
 }
 
+function isClosedTrade(value: unknown): value is ClosedTrade {
+  if (!object(value) || typeof value.positionId !== "number" ||
+      !Number.isSafeInteger(value.positionId) || value.positionId <= 0 ||
+      typeof value.instrumentId !== "number" || !Number.isSafeInteger(value.instrumentId) ||
+      value.instrumentId <= 0 || !hasTimezone(value.closeTimestamp) ||
+      typeof value.isBuy !== "boolean" || typeof value.units !== "string") return false;
+  for (const key of ["positionId", "instrumentId", "orderId", "socialTradeId", "parentPositionId"]) {
+    const id = value[key];
+    if (key in value && (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0)) return false;
+  }
+  for (const key of [
+    "netProfit", "closeRate", "leverage", "openRate", "investment",
+    "initialInvestment", "fees", "units",
+  ]) {
+    if (key in value && typeof value[key] !== "string") return false;
+  }
+  for (const key of ["stopLossRate", "takeProfitRate"]) {
+    if (key in value && value[key] !== null && typeof value[key] !== "string") return false;
+  }
+  for (const key of ["openTimestamp"]) {
+    if (key in value && !hasTimezone(value[key])) return false;
+  }
+  for (const key of ["isBuy", "trailingStopLoss"]) {
+    if (key in value && typeof value[key] !== "boolean") return false;
+  }
+  return true;
+}
+
+function isClosedTradeHistory(value: unknown): value is ClosedTradeHistory {
+  if (!object(value) ||
+      !["not_requested", "available", "unavailable"].includes(String(value.status)) ||
+      !(value.from_date === null || typeof value.from_date === "string") ||
+      !(value.through_date === null || typeof value.through_date === "string") ||
+      !(value.received_at === null || hasTimezone(value.received_at)) ||
+      !Array.isArray(value.trades) || !value.trades.every(isClosedTrade) ||
+      value.error_code !== undefined && typeof value.error_code !== "string") return false;
+  if (value.status === "available")
+    return typeof value.from_date === "string" && typeof value.through_date === "string" &&
+      hasTimezone(value.received_at) && value.error_code === undefined;
+  if (value.status === "unavailable") return typeof value.error_code === "string";
+  return value.from_date === null && value.through_date === null &&
+    value.received_at === null && value.trades.length === 0 && value.error_code === undefined;
+}
+
 function isSnapshot(value: unknown): value is EToroSnapshot {
   return object(value) && value.schema_version === 1 &&
     (value.environment === "real" || value.environment === "demo") &&
@@ -69,7 +129,8 @@ function isSnapshot(value: unknown): value is EToroSnapshot {
     Array.isArray(value.mirrors) && value.mirrors.every(mirror => object(mirror) &&
       Number.isSafeInteger(mirror.mirror_id) && Array.isArray(mirror.positions) &&
       mirror.positions.every(isInstrument)) &&
-    object(value.coverage) && (value.gbp_balance === null || object(value.gbp_balance));
+    object(value.coverage) && isClosedTradeHistory(value.closed_trade_history) &&
+    (value.gbp_balance === null || object(value.gbp_balance));
 }
 
 async function responseJson(response: Response): Promise<unknown> {
@@ -92,7 +153,7 @@ async function get<T>(path: string, guard: (value: unknown) => value is T): Prom
 async function post(path: string, csrf: string, body: unknown): Promise<unknown> {
   const response = await fetch(path, {
     method: "POST", credentials: "same-origin", cache: "no-store",
-    redirect: "error", signal: AbortSignal.timeout(35000),
+    redirect: "error",     signal: AbortSignal.timeout(70000),
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
     body: JSON.stringify(body),
   });
@@ -257,6 +318,49 @@ function SnapshotView({ snapshot, now }: { snapshot: EToroSnapshot; now: number 
         positions={mirror.positions} />
     </section>)}
   </div>;
+}
+
+function ClosedTradeHistoryView({ history }: { history: ClosedTradeHistory }) {
+  return <section className="etoro-section" aria-label="Closed trade history preview">
+    <h3>Closed-trade history preview</h3>
+    {history.status === "not_requested" && <p role="status">
+      No closed-trade history has been requested in this dashboard session.
+      Choose “Refresh once now” to request it.
+    </p>}
+    {history.status === "unavailable" && <p role="status">
+      Closed-trade history is unavailable ({history.error_code}). The current portfolio snapshot remains separate;
+      no history rows are assumed.
+    </p>}
+    {history.status === "available" && <>
+      <p>eToro returned {history.trades.length} closed trades from {history.from_date} through {history.through_date};
+        received {providerTimestamp(history.received_at)}. Newest close first; the read is limited to 1,000 rows.</p>
+      {history.trades.length === 0 ? <p>No closed trades were returned in this window. This does not describe
+        open positions or activity outside the requested period.</p> : <div className="table-scroll">
+        <table><thead><tr>
+          <th>Opened (UTC)</th><th>Closed (UTC)</th><th>Instrument / position</th>
+          <th>Side</th><th>Units</th><th>Open / close rate (quote currency unknown)</th>
+          <th>Leverage</th><th>Investment (currency unspecified)</th>
+          <th>Fees (currency unspecified)</th><th>Net profit (currency unspecified)</th>
+        </tr></thead><tbody>{history.trades.map((trade, index) =>
+          <tr key={`${trade.positionId ?? "unknown"}:${trade.orderId ?? "unknown"}:${index}`}>
+            <td>{trade.openTimestamp ? providerTimestamp(trade.openTimestamp) : "Not returned"}</td>
+            <td>{providerTimestamp(trade.closeTimestamp)}</td>
+            <td>{trade.instrumentId ?? "Not returned"} / {trade.positionId ?? "Not returned"}</td>
+            <td>{trade.isBuy === undefined ? "Not returned" : trade.isBuy ? "Buy" : "Sell"}</td>
+            <td>{trade.units ?? "Not returned"}</td>
+            <td>{trade.openRate ?? "Not returned"} / {trade.closeRate ?? "Not returned"}</td>
+            <td>{trade.leverage ?? "Not returned"}</td>
+            <td>{trade.investment ?? "Not returned"}</td>
+            <td>{trade.fees ?? "Not returned"}</td>
+            <td>{trade.netProfit ?? "Not returned"}</td>
+          </tr>)}</tbody></table>
+      </div>}
+      <p className="position-note">This endpoint reports closed trades only and does not provide row-level currency,
+        instrument type or an account identifier. Its association with the selected portfolio account is not
+        independently verified. Amounts are not GBP values, are not mapped to journal events, and do not update
+        the journal.</p>
+    </>}
+  </section>;
 }
 
 function waitingForStartup(session: Session | null, portfolio: PortfolioState | null) {
@@ -464,7 +568,7 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       throw new Error("Check eToro status before requesting another read.");
     if (!session?.csrf || typeof session.read_generation !== "number" || !session.connection)
       throw new Error("The local eToro session is unavailable; reload status.");
-    if (!window.confirm(`Request one eToro read for ${session.connection.environment} account ${session.connection.account_id} now? Verify account eligibility and permission to display the data. A key with trading permissions can place, modify or cancel orders if exposed or misused. This read does not update the journal.`)) return;
+    if (!window.confirm(`Request one eToro read for ${session.connection.environment} account ${session.connection.account_id} now? It fetches the current portfolio and up to 365 calendar days of closed-trade history (maximum 1,000 rows). Confirm that this API use and transient in-memory display are permitted. History rows do not identify their currency, instrument type or account, are not journal evidence, and will not update the journal. A key with trading permissions can place, modify or cancel orders if exposed or misused.`)) return;
     const generation = statusGeneration;
     refreshInFlight = true;
     readingRef.current = true; setReading(true);
@@ -472,7 +576,9 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       let failedCode = "";
       try {
         const result = await post("/api/investment/v1/etoro/refresh", session.csrf, {
-          confirm_read: true, read_generation: session.read_generation,
+          confirm_read: true, confirm_closed_trade_history: true,
+          history_retention_rights_verified: true,
+          read_generation: session.read_generation,
           revision: session.connection.revision, account_id: session.connection.account_id,
           environment: session.connection.environment,
         });
@@ -519,12 +625,18 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       <summary>About eToro data and permissions</summary>
       <p>Instrument types and individual position legs are not provided. Exposure is net by instrument;
         copied positions appear separately. Pending-order details are unavailable beyond reserved cash.</p>
+      <p>Closed-trade history is fetched only by an explicitly confirmed manual refresh, for up to 365 calendar
+        days and 1,000 rows. Startup refresh reads the current portfolio only. History is kept in memory for
+        this dashboard session and is not saved.</p>
+      <p>The closed-trade response does not identify row-level currency, instrument type or account. It is a
+        separate provider view, not a transaction import or journal update.</p>
       <p>The GBP balance is a separate, unsynchronized read with unverified coverage and source time.
         No holdings valuation, conversion or journal import is inferred.</p>
       <p>Keys stay in private server-side settings and account evidence is never sent to hosted AI.
         Only consent and account ID are saved; the portfolio remains in memory for this dashboard run.</p>
       <p>Revocation cannot guarantee cancellation of an already sent read or prevent cross-instance races.
-        Refresh checks the account binding before the separate balance request; the initial connection read does not yet have a confirmed binding.</p>
+        Refresh checks the account binding before the separate balance and history requests; the initial connection
+        read does not yet have a confirmed binding.</p>
     </details>
     {error && <p role="alert" className="investment-warnings">{error}</p>}
     {statusError && <p role="alert" className="investment-warnings">{statusError}</p>}
@@ -576,6 +688,7 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       {portfolio.last_status !== "success" && <p role="status">Last refresh status: {portfolio.last_status}.
         The displayed source snapshot is not refreshed.</p>}
       <SnapshotView snapshot={portfolio.snapshot} now={now} />
+      <ClosedTradeHistoryView history={portfolio.snapshot.closed_trade_history} />
       {bridgeReady && snapshot && journal && <EToroJournalBridge key={bridgeKey} snapshot={snapshot} journal={journal} />}
       {!bridgeReady && journal?.source_mode === "recorded" && <p className="position-note">
         Side-by-side review is unavailable until a valid, bound real-account read and journal are available.
@@ -632,6 +745,8 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
         </select>
       </label>
       <fieldset><legend>Connection checks</legend>
+        <p>Closed-trade history is collected only by a separately confirmed manual read.
+          Startup permission covers current portfolio snapshots only.</p>
         <label className="setup-check"><input type="checkbox" checked={readScope}
           onChange={event => { setReadScope(event.target.checked); if (event.target.checked) setTradeRisk(false); else setStartupRefresh(false); }} />
           I verified this key has Read-only permission.</label>
@@ -643,7 +758,8 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
           I verified my account is eligible for this API use.</label>
         <label className="setup-check"><input type="checkbox" checked={retention}
           onChange={event => setRetention(event.target.checked)} />
-          I verified rights for local display and transient in-memory processing; I understand only consent and account ID are saved.</label>
+          I verified rights for local display and transient in-memory processing of portfolio data and, when manually requested,
+          up to 365 calendar days of closed-trade history; I understand only consent and account ID are saved.</label>
       </fieldset>
       <button type="submit" disabled={busy || revoking}>Connect and retrieve once</button>
       </form>

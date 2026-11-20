@@ -1208,6 +1208,42 @@ class InvestmentTests(unittest.TestCase):
         self.assertEqual(result["holdings"][0]["quantity"], "40")
         self.assertEqual([a["cash_gbp"] for a in result["accounts"]], ["393.25", "180.1"])
 
+    def test_account_charge_reduces_value_without_becoming_an_external_withdrawal(self):
+        initialize(self.database, self.spec, NOW)
+        import_events(self.database, [empty_opening(broker="100")], NOW)
+        charged_at = NOW + timedelta(days=1)
+        import_events(self.database, [
+            ev("platform-charge", "account_fee", at=charged_at, amount_gbp="2.50")
+        ], charged_at)
+
+        result = snapshot(self.database, charged_at)
+        self.assertEqual(result["equity_gbp"], "97.5")
+        self.assertEqual(result["net_contributions_gbp"], "0")
+        self.assertEqual(result["recorded_fees_gbp"], "2.5")
+        self.assertEqual(result["recorded_account_fees"], [{
+            "id": "platform-charge", "type": "account_fee", "account_id": "broker",
+            "role": "unassigned", "amount_gbp": "2.50",
+            "timestamp": iso(charged_at), "available_at": iso(charged_at),
+            "evidence": "explicit synthetic test evidence",
+        }])
+        self.assertEqual(result["since_baseline_gain_gbp"], "-2.5")
+        self.assertEqual(result["twr_pct"], "-2.5")
+        from jsonschema import Draft202012Validator, FormatChecker
+
+        schema = json.loads((Path(__file__).parents[1] / "investment" /
+                             "response-v2.schema.json").read_text(encoding="utf-8"))
+        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+        self.assertEqual(list(validator.iter_errors(result)), [])
+
+        before = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "Negative cash"):
+            import_events(self.database, [
+                ev("oversized-charge", "account_fee", at=charged_at + timedelta(days=1),
+                   amount_gbp="1000")
+            ], charged_at + timedelta(days=1))
+        self.assertEqual(self.database.read_bytes(), before)
+        self.assertEqual(snapshot(self.database, charged_at)["equity_gbp"], "97.5")
+
     def test_read_hash_unchanged_and_restart_replay(self):
         self.init_demo()
         before = self.database.read_bytes()

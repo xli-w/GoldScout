@@ -3,7 +3,7 @@
   "title": "Offline investment opening snapshot",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_income_events", "recorded_flow_events", "recorded_corrections", "recorded_profile_changes", "recorded_scope_additions_gbp", "recorded_scope_additions", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "role_accounting", "role_accounting_at", "role_assignments", "proposal", "warnings", "limitations"],
+  "required": ["schema_version", "source_mode", "portfolio_id", "revision", "generated_at", "as_of", "baseline_as_of", "currency", "complete", "equity_gbp", "net_contributions_gbp", "since_baseline_gain_gbp", "lifetime_gain_gbp", "recorded_fees_gbp", "recorded_interest_gbp", "recorded_dividends_gbp", "recorded_income_gbp", "recorded_fee_events", "recorded_account_fees", "recorded_income_events", "recorded_flow_events", "recorded_corrections", "recorded_profile_changes", "recorded_scope_additions_gbp", "recorded_scope_additions", "twr_pct", "max_drawdown_pct", "accounts", "cash_observations", "valuation_history", "holdings", "role_accounting", "role_accounting_at", "role_assignments", "proposal", "warnings", "limitations"],
   "properties": {
     "schema_version": {"const": 2},
     "source_mode": {"enum": ["recorded", "demo"]},
@@ -25,6 +25,10 @@
     "recorded_fee_events": {
       "type": "array", "maxItems": 10000,
       "items": {"$ref": "#/$defs/recordedFeeEvent"}
+    },
+    "recorded_account_fees": {
+      "type": "array", "maxItems": 10000,
+      "items": {"$ref": "#/$defs/recordedAccountFee"}
     },
     "recorded_income_events": {
       "type": "array", "maxItems": 10000,
@@ -205,6 +209,20 @@
         "evidence": {"$ref": "#/$defs/text"}
       }
     },
+    "recordedAccountFee": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "account_id", "role", "amount_gbp", "timestamp", "available_at", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
+        "type": {"const": "account_fee"},
+        "role": {"enum": ["core", "dynamic", "unassigned"]},
+        "account_id": {"$ref": "#/$defs/text"},
+        "amount_gbp": {"$ref": "#/$defs/nonnegativeDecimal"},
+        "timestamp": {"$ref": "#/$defs/utc"},
+        "available_at": {"$ref": "#/$defs/utc"},
+        "evidence": {"$ref": "#/$defs/text"}
+      }
+    },
     "recordedIncomeEvent": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "type", "account_id", "product_id", "role", "role_evidence", "amount_gbp", "timestamp", "available_at", "evidence"],
@@ -250,7 +268,7 @@
         "id": {"$ref": "#/$defs/text"},
         "original_event_id": {"$ref": "#/$defs/text"},
         "replacement_event_id": {"$ref": "#/$defs/text"},
-        "replaced_type": {"enum": ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "split", "mark"]},
+        "replaced_type": {"enum": ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "account_fee", "split", "mark"]},
         "role": {"enum": ["core", "dynamic", "unassigned"]},
         "role_evidence": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
         "account_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},

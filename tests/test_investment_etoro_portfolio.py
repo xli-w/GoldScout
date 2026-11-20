@@ -48,6 +48,45 @@ def aggregate():
     }
 
 
+def balance_document():
+    return {"balances": [{
+        "accountId": "12345", "accountType": "Trading",
+        "balance": 105, "currency": "USD", "displayBalance": 82.25,
+        "displayCurrency": "GBP", "exchangeRate": 0.78,
+    }]}
+
+
+def closed_trade(order_id=201):
+    return {
+        "netProfit": Decimal("-1.25"),
+        "closeRate": Decimal("12.5"),
+        "closeTimestamp": "2026-11-18T15:04:05Z",
+        "positionId": 101,
+        "instrumentId": 7,
+        "isBuy": True,
+        "leverage": 1,
+        "openRate": Decimal("10.5"),
+        "openTimestamp": "2026-11-10T09:30:00+00:00",
+        "orderId": order_id,
+        "investment": Decimal("50"),
+        "initialInvestment": Decimal("50"),
+        "fees": Decimal("0.25"),
+        "units": Decimal("4"),
+    }
+
+
+def full_closed_trade(order_id=201):
+    trade = closed_trade(order_id)
+    trade.update({
+        "socialTradeId": 301,
+        "parentPositionId": 102,
+        "stopLossRate": Decimal("9.5"),
+        "takeProfitRate": None,
+        "trailingStopLoss": False,
+    })
+    return trade
+
+
 def encoded(value):
     return json.dumps(
         value, separators=(",", ":"),
@@ -123,9 +162,106 @@ class PortfolioProjectionTests(unittest.TestCase):
         self.assertIsNone(result["gbp_balance"]["source_as_of"])
         self.assertEqual(result["gbp_balance"]["received_at"], "2026-11-19T12:00:00.000000Z")
         self.assertEqual(result["account_totals"]["accountBalance"], "105")
+        self.assertEqual(result["closed_trade_history"]["trades"], [])
         for call in transport.call_args_list:
             self.assertTrue(etoro._headers_valid(call.args[1]))
         self.assertEqual(transport.call_count, 2)
+
+    def test_manual_history_uses_bounded_fixed_get_pages_and_keeps_unknown_currency(self):
+        first_page = [full_closed_trade(index) for index in range(1, 1001)]
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()), encoded(first_page), encoded([]),
+        ])
+        result = collect_portfolio(
+            transport, lambda: {
+                "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+            }, "real", now=lambda: NOW, include_closed_history=True)
+        history = result["closed_trade_history"]
+        self.assertEqual(history["status"], "available")
+        self.assertEqual(history["from_date"], "2025-11-20")
+        self.assertEqual(history["through_date"], "2026-11-19")
+        self.assertEqual(history["received_at"], "2026-11-19T12:00:00.000000Z")
+        self.assertEqual(len(history["trades"]), 1000)
+        self.assertEqual(history["trades"][0]["netProfit"], "-1.25")
+        self.assertEqual(history["trades"][0]["socialTradeId"], 301)
+        self.assertEqual(history["trades"][0]["stopLossRate"], "9.5")
+        self.assertIsNone(history["trades"][0]["takeProfitRate"])
+        self.assertFalse(history["trades"][0]["trailingStopLoss"])
+        self.assertEqual(history["trades"][0]["closeTimestamp"], "2026-11-18T15:04:05.000000Z")
+        self.assertEqual(history["trades"][0]["openTimestamp"], "2026-11-10T09:30:00.000000Z")
+        self.assertNotIn("currency", history["trades"][0])
+        self.assertEqual(
+            [call.args[0] for call in transport.call_args_list[2:]],
+            [
+                etoro.CLOSED_TRADE_HISTORY_PATHS["real"]
+                + "?minDate=2025-11-20&page=1&pageSize=1000",
+                etoro.CLOSED_TRADE_HISTORY_PATHS["real"]
+                + "?minDate=2025-11-20&page=2&pageSize=1000",
+            ])
+        self.assertEqual(
+            len({call.args[1]["x-request-id"] for call in transport.call_args_list}), 4)
+
+    def test_history_over_limit_is_unavailable_without_returning_partial_rows(self):
+        page = [closed_trade(index) for index in range(1, 1001)]
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()),
+            encoded(page), encoded([closed_trade(2000)]),
+        ])
+        result = collect_portfolio(
+            transport, lambda: {
+                "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+            }, "real", now=lambda: NOW, include_closed_history=True)
+        history = result["closed_trade_history"]
+        self.assertEqual(history["status"], "unavailable")
+        self.assertEqual(history["error_code"], "history_limit_exceeded")
+        self.assertEqual(history["trades"], [])
+        self.assertEqual(transport.call_count, 4)
+
+    def test_history_failure_does_not_hide_a_valid_current_snapshot(self):
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()),
+            etoro.EToroError("permission_refused"),
+        ])
+        result = collect_portfolio(
+            transport, lambda: {
+                "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+            }, "real", now=lambda: NOW, include_closed_history=True)
+        self.assertEqual(result["account_id"], 12345)
+        self.assertEqual(result["closed_trade_history"]["status"], "unavailable")
+        self.assertEqual(result["closed_trade_history"]["error_code"], "permission_refused")
+
+    def test_history_schema_mismatch_is_explicitly_unavailable(self):
+        bad_trade = closed_trade()
+        bad_trade["isBuy"] = "buy"
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()), encoded([bad_trade]),
+        ])
+        result = collect_portfolio(
+            transport, lambda: {
+                "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+            }, "real", now=lambda: NOW, include_closed_history=True)
+        self.assertEqual(result["closed_trade_history"]["status"], "unavailable")
+        self.assertEqual(result["closed_trade_history"]["error_code"], "schema_invalid")
+        self.assertEqual(result["closed_trade_history"]["trades"], [])
+
+    def test_history_rows_outside_the_displayed_window_are_unavailable(self):
+        for close_timestamp in (
+                "2025-11-19T23:59:59Z", "2026-11-20T00:00:00Z"):
+            with self.subTest(close_timestamp=close_timestamp):
+                trade = closed_trade()
+                trade["closeTimestamp"] = close_timestamp
+                transport = Mock(side_effect=[
+                    encoded(aggregate()), encoded(balance_document()), encoded([trade]),
+                ])
+                result = collect_portfolio(
+                    transport, lambda: {
+                        "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+                    }, "real", now=lambda: NOW, include_closed_history=True)
+                self.assertEqual(result["account_id"], 12345)
+                self.assertEqual(result["closed_trade_history"]["status"], "unavailable")
+                self.assertEqual(
+                    result["closed_trade_history"]["error_code"], "history_date_out_of_range")
+                self.assertEqual(result["closed_trade_history"]["trades"], [])
 
     def test_gbp_balance_identity_or_currency_mismatch_is_unavailable(self):
         balance = {"balances": [{

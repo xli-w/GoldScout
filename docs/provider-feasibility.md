@@ -16,7 +16,7 @@ configurable; no account values or personal identifiers belong in these docs.
 | --- | --- | --- |
 | NatWest Digital Regular Saver | Manual normalized GBP evidence | Exact saver's Excel/PDF export, fields, balance clock, history, applicable terms |
 | Moneybox S&S LISA | Manual normalized evidence and separately evidenced wrapper notes | Statement format/fields/history; actual funds, fee waivers and transfer terms |
-| eToro | Fixed GET adapter; wizard read and expiring startup refresh require explicit consent | UK/account eligibility, verified Read scope or accepted one-time broader-key risk, credentials, data retention/deletion, schema/completeness and currencies |
+| eToro | Fixed GET adapter; manual closed-trade preview and expiring current-portfolio startup refresh require explicit consent | UK/account eligibility, verified Read scope or accepted one-time broader-key risk, credentials, data retention/deletion, schema/completeness, account association and currencies |
 | Trading 212 | Comparator only; not selected | Actual account fit, beta API limitations, terms and total migration costs |
 | AJ Bell Dodl | LISA cost comparator only | Matched funds, complete charges, transfer effects; no verified API/export schema |
 | TrueLayer / other bank aggregators | Deferred | Personal production eligibility, pricing, exact saver coverage and permitted retention |
@@ -28,13 +28,16 @@ New integration code is offline engineering, not verified account connectivity.
 
 The eToro collector is separately gated and live-unvalidated; the wizard keeps
 a partial provider portfolio observation in memory and shows a separate
-provider-reported GBP balance when available. It is not a GBP journal sync.
+provider-reported GBP balance when available. A separately confirmed manual
+refresh can also show a bounded closed-trade history preview. Neither is a GBP
+journal sync.
 NatWest and Moneybox remain operator-normalized manual evidence until a
 supported route, the exact account fields and permitted retention are verified.
 A manual or partial route must not be labelled a complete live connection.
 
-The dashboard offers one eToro read set per server startup only after separate
-operator consent, verified Read-only key scope and a 1-30 day expiry. This
+The dashboard offers one current-portfolio eToro read set per server startup
+only after separate operator consent, verified Read-only key scope and a 1-30
+day expiry. Manual closed-trade history is never collected at startup. This
 permission is revocable and does not renew itself; failed reads are not retried.
 It is not a periodic watch loop or OS schedule, and the feature is not live
 validated or blanket approval to connect an actual account. The separate
@@ -103,6 +106,17 @@ Keep cash/investment/subaccounts separate. USD equity is not GBP equity, and
 CFDs, copy positions, shorts and financing are not ordinary unleveraged funds.
 Only documented, bounded Read routes belong in the adapter. Missing fields,
 unknown product classification and uncertain snapshot clocks stay unavailable.
+
+The official [List trading history API reference](https://api-portal.etoro.com/api-reference/trading--real/list-trading-history)
+documents a paginated, `minDate`-bounded closed-trade feed. GoldScout can request
+the trailing 365 calendar days only during an explicitly confirmed manual read,
+with a 1,000-row cap; startup refresh remains limited to the current portfolio.
+The projection keeps documented trade fields but does not infer a row's
+currency, instrument type, account identity or complete transaction coverage.
+It is a temporary provider view, not a journal import. Entitlement, exact
+account association, live response behavior and rights for this history use
+remain unvalidated; a refused or malformed history response is shown as
+unavailable without suppressing a valid current portfolio snapshot.
 
 The inherited FAQ review reported no separate API subscription for eligible
 users, not universal eligibility or zero product/trading/data costs.

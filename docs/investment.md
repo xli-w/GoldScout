@@ -14,15 +14,24 @@ python -m dashboard
 
 Source-checkout startup selects the ignored `local-investment/` workspace.
 Installed use requires `--workspace <directory>`. Missing/empty workspaces show
-a wizard; startup, status and preview never write files. Review accounts,
+a wizard; startup, status and preview never write the journal. Review accounts,
 products, cash and long holdings with explicit opening evidence, then confirm
-the bound preview. No login or hand-written profile is required.
+the bound preview. Setup form drafts save in this browser on this computer;
+full previews and acknowledgement checks are not restored. An exact pending
+reference for an uncertain recording save is retained to retry only that save;
+the interface blocks a new entry until it is resolved. Recovery re-entry is not
+saved. No login or hand-written profile is required.
 
 ## Optional personal goals
 
 The Goals page is a separate, optional local profile for purpose, target and
 access dates, liquidity needs, comfort with losses, and amounts the user chooses
-to earmark or contribute. It does not link to account balances. A simple
+to earmark or contribute. A goal may associate one or more whole active accounts
+from one portfolio, with each account assigned to at most one goal. The
+association is a label, not a transfer or reservation. A linked amount is shown
+only when the recorded portfolio value is complete and reconciles to its
+account records; it replaces, never adds to, a manually entered amount. Linked
+values are dated recorded evidence, not current provider balances. A simple
 contribution illustration assumes no growth, interest, fees, tax or withdrawals;
 it is not a forecast or investment recommendation. Editing requires a
 revision-bound preview and explicit save confirmation; viewing does not create
@@ -30,21 +39,32 @@ the profile. The profile is local plaintext outside the journal workspace, is
 not included in journal backups, and is not sent to hosted AI. Source-checkout
 and `--workspace` launches choose a sibling `.goldscout-planning/<workspace-name>.json`
 path. With `--investment-database`, use `--planning-profile <path>` to opt in.
-Existing v1 goal profiles are read with new constraints marked unknown and
-upgraded only after a confirmed save. Protect and back up this file separately
-using storage you control.
+Existing v1 and v2 goal profiles are read with new fields defaulted to unknown
+or unlinked, and upgraded only after a confirmed save. Protect and back up this
+file separately using storage you control.
 
 The portfolio shows one next action per account and lets the user set a local
 browser-only review interval (weekly through yearly). A complete value is
 complete only for its recorded date; an old complete value is overdue under the
 selected interval. Cash, units and price dates remain operator-entered evidence.
 Review intervals and review dates are reminders, not journal records or provider
-checks.
+checks. A guided review walks across active accounts and resumes in the same
+browser while the journal revision is unchanged. Any record change makes old
+progress stale and requires a restart. Its completion summary keeps missing
+values, cash differences and correction-related checks visible; completion is
+not an all-clear. A cash difference or unavailable full value is shown before
+the request to choose a review interval. Earlier differing cash checks remain
+attention items even if the latest check matches.
 Savings accounts can surface missing or overdue rate, access, notice and maturity
-terms, and an approaching recorded maturity date. These are prompts to verify
-current provider information, not rate comparisons or claims about obtainable
-returns. Recorded transaction fees omit fund, platform, subscription, FX, tax and
-other costs. Wrapper contribution limits, LISA eligibility/bonus entitlement,
+terms using a separate browser-only recheck interval, and an approaching
+recorded maturity date. These are prompts to verify current provider
+information, not rate comparisons or claims about obtainable returns. Explicit
+account/platform charges and buy/sell fees are recorded costs; fund, subscription,
+FX, tax, spread, slippage and other costs may be missing. Direct concentration
+shows each named holding's share of complete recorded portfolio value, without
+look-through or a suitability assessment. Net money added is distinct from gain
+since tracking began, which reflects only recorded activity and charges.
+Wrapper contribution limits, LISA eligibility/bonus entitlement,
 fund overlap and suitability are not inferred.
 
 The user may mark a complete recorded value as reviewed. GoldScout stores only
@@ -52,7 +72,16 @@ its date and journal revision in browser storage, then compares that dated point
 with later recorded values using the existing evidence-linked attribution,
 including an unexplained remainder. This marker is not a snapshot of the
 journal; if the valuation point is unavailable or history was corrected, the
-comparison fails closed.
+comparison fails closed. Saving a new comparison point replaces the old one.
+It is separate from marking an account checked for reminder purposes; neither
+action verifies the accounts or resolves discrepancies. Neither browser-only
+setting is included in a journal backup.
+Incomplete setup and recording form drafts are also browser-local and excluded
+from journal backups. A restored recording draft is bound to the exact
+portfolio, journal revision and form route. After a journal change it must be
+discarded rather than reused; no full preview or acknowledgement is restored.
+The separate uncertain-save reference only supports retrying the same
+confirmation, never composing or confirming a different record.
 
 The portfolio's **Back up and practise recovery** section downloads an explicitly
 requested verified SQLite copy with its receipt. It displays the selected
@@ -96,9 +125,13 @@ The documented
 portfolio response does not identify every instrument class or individual
 position leg, and pending-order details are unavailable beyond the provider's
 reserved-cash total. No FX, holdings valuation, or journal import is inferred.
-The portfolio observation exists only in dashboard memory and is not saved as
-history; `.etoro/connection.json` holds consent and account identity, not keys or
-portfolio data.
+After a separately confirmed manual refresh, the panel also displays up to 365
+calendar days of closed-trade history, bounded to 1,000 rows. That history is
+kept in dashboard memory only; it is not fetched at startup or saved as history.
+The API response does not identify row-level currency, instrument type or
+account ID. It is not a complete transaction ledger or journal evidence.
+`.etoro/connection.json` holds consent and account identity, not keys or
+portfolio/history data.
 
 For an available real-account read and a recorded journal, **Review this eToro
 account against your records** lets you explicitly choose and confirm a journal
@@ -115,19 +148,22 @@ copy provider data. No provider data or mapping is saved by this review.
 Startup collection is off unless separately enabled after the initial preview.
 It requires the operator to verify Read-only key scope and expires within
 1-30 days; at most one read set is attempted on each server startup while that
-permission remains active. A broader key may be accepted for a supervised
-one-time read, but cannot enable startup refresh. Status and page loads never
-collect. The operator can revoke startup refresh or explicitly confirm a
-one-time refresh even when startup permission is absent or expired. A revoked
-connection requires reconnecting; a broader key's trading risk is repeated at
-each manual confirmation. Revocation remains available while
+permission remains active; startup reads collect the current portfolio only.
+A broader key may be accepted for a supervised one-time read, but cannot enable
+startup refresh. Status and page loads never collect. The operator can revoke
+startup refresh or explicitly confirm a one-time portfolio/history refresh
+even when startup permission is absent or expired. A revoked connection
+requires reconnecting; a broader key's trading risk is repeated at each manual
+confirmation. Revocation remains available while
 a manual read is waiting for the provider. If revoked during a read,
 the tab treats the read outcome as unverified and blocks further reads pending
 the checks described above. Failed startup reads are not retried automatically.
 Known limitations: revocation cannot guarantee cancellation of an already sent
 request or eliminate races across dashboard instances; an expired local session
 or its shared command rate limit can also prevent revocation. Refresh checks
-the account binding before requesting the separate balance. Do not
+the account binding before requesting the separate balance and history. A
+history failure is reported separately; it does not turn the current portfolio
+snapshot into history or journal evidence. Do not
 rely on the collector when those guarantees are required. The provider
 integration is engineering-only and has not been live-validated; eligibility,
 account-specific response behavior and data-retention rights remain the
@@ -153,8 +189,9 @@ requesting another one. If you change a holdings account to savings/deposit or
 remove an account that has holdings, the wizard asks before removing those
 linked rows; changing a holding's account or investment requires the affected
 completeness checks again. The review shows the preview time in local and UTC
-formats before confirmation.
-Leaving or reloading loses an unsaved draft.
+formats before confirmation. Form values can be resumed in the same browser;
+after returning, recheck all figures and completeness confirmations. Previews
+are always requested afresh.
 
 Fictional setup examples distinguish an investment from the units held in an
 account. Quantity steps and minimum purchases must come from the provider's
@@ -167,8 +204,11 @@ them. Interrupted-setup recovery still requires the original opening clocks to
 reconstruct and verify the exact record. Ambiguous recovery times when clocks
 move back are refused rather than silently choosing an occurrence.
 
-On **Your portfolio**, start with **What needs attention** and the valuation
-date. This is not a live bank balance; latest cash and unit counts can be from
+On **Your portfolio**, start with **What needs attention**, the valuation
+date and the change comparison, then choose **Review accounts**. Historical
+performance limitations are shown separately from immediate value and cash
+issues; they do not prevent normal recording. This is not a live bank balance;
+latest cash and unit counts can be from
 different journal dates. Each holding's price-effective and source-available
 dates are available in a collapsed detail. Optional roles and detailed history
 are collapsed; section shortcuts open the relevant panel. Performance help
@@ -194,8 +234,9 @@ is not a verified return. Expand supporting activity to inspect the effective
 and available times and evidence. Internal transfers are not external money
 flows. An incomplete latest value, contradictory or late evidence, or a
 historical correction prevents the comparison; intermediate gaps are shown
-without filling them. GoldScout does not save a last-review date, independently
-verify the records, or know that all activity and fees have been captured.
+without filling them. An optional browser-local comparison point records a
+valuation date, not proof of an account review. GoldScout does not independently
+verify the records or know that all activity and fees have been captured.
 
 For a regular account review, choose **Update** beside that account. The guided
 page combines recorded cash, the last cash-check difference and holding price
@@ -321,9 +362,10 @@ Financial events include contributions, withdrawals, account transfers,
 buy/sell fills with explicit fees, marks, splits, paid interest and dividends.
 No FX, inferred settlement, automatic interest or distribution entitlement is
 implemented. Missing or unknown facts are not zero.
-The dashboard's recorded-fee total sums only explicitly entered buy/sell fees;
-it is not a full cost-of-ownership measure. Platform/account charges, tax and
-FX may be missing, and spread or slippage are not separately measured.
+The dashboard's recorded-fee total sums explicitly entered buy/sell fees and
+account/platform charges; it is not a full cost-of-ownership measure. Fund
+charges, tax and FX may be missing, and spread or slippage are not separately
+measured.
 
 ## Accounting and reporting
 

@@ -17,6 +17,69 @@ const newAccount = (): Account => ({ id: identifier("account"), binding: identif
   name: "", kind: "", cash: "" });
 const steps = ["Accounts", "Investments held (if any)", "Starting balances", "Review and save"];
 const fixedWarning = "Starting accounts and figures cannot be edited in place. Later changes use a separate, previewed recording process.";
+const SETUP_DRAFT_PREFIX = "goldscout.setup-draft.v1.";
+
+type SetupDraft = {
+  version: 1;
+  workspace: string;
+  portfolioId: string;
+  openingId: string;
+  accounts: Account[];
+  products: Product[];
+  holdings: Holding[];
+  effective: string;
+  available: string;
+  evidence: string;
+  scope: boolean;
+  step: number;
+};
+
+function setupDraftKey(workspace: string) {
+  return `${SETUP_DRAFT_PREFIX}${encodeURIComponent(workspace)}`;
+}
+
+function isSetupDraft(value: unknown, workspace: string): value is SetupDraft {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const draft = value as Record<string, unknown>;
+  const text = (item: unknown, maximum: number) =>
+    typeof item === "string" && item.length <= maximum;
+  const accountIds = Array.isArray(draft.accounts) ? draft.accounts
+    .map(item => typeof item === "object" && item !== null ? item.id : null) : [];
+  const productIds = Array.isArray(draft.products) ? draft.products
+    .map(item => typeof item === "object" && item !== null ? item.id : null) : [];
+  const holdingIds = Array.isArray(draft.holdings) ? draft.holdings
+    .map(item => typeof item === "object" && item !== null ? item.id : null) : [];
+  return Object.keys(draft).sort().join(",") ===
+    "accounts,available,effective,evidence,holdings,openingId,portfolioId,products,scope,step,version,workspace" &&
+    draft.version === 1 && draft.workspace === workspace &&
+    text(draft.portfolioId, 200) && text(draft.openingId, 200) &&
+    Array.isArray(draft.accounts) && draft.accounts.length >= 1 && draft.accounts.length <= 50 &&
+    accountIds.every(id => typeof id === "string" && id.length > 0) &&
+    new Set(accountIds).size === accountIds.length &&
+    draft.accounts.every(item => typeof item === "object" && item !== null &&
+      Object.keys(item).sort().join(",") === "binding,cash,id,kind,name" &&
+      text(item.id, 200) && text(item.binding, 200) && text(item.name, 120) &&
+      text(item.cash, 100) && (item.kind === "" || item.kind === "broker" || item.kind === "deposit")) &&
+    Array.isArray(draft.products) && draft.products.length <= 100 &&
+    productIds.every(id => typeof id === "string" && id.length > 0) &&
+    new Set(productIds).size === productIds.length &&
+    draft.products.every(item => typeof item === "object" && item !== null &&
+      Object.keys(item).sort().join(",") === "currency,id,increment,minimum,name,sleeve" &&
+      text(item.id, 200) && text(item.name, 120) &&
+      (item.sleeve === "" || item.sleeve === "equity" || item.sleeve === "bond") &&
+      (item.currency === "" || item.currency === "GBP") &&
+      text(item.increment, 100) && text(item.minimum, 100)) &&
+    Array.isArray(draft.holdings) && draft.holdings.length <= 5000 &&
+    holdingIds.every(id => typeof id === "string" && id.length > 0) &&
+    new Set(holdingIds).size === holdingIds.length &&
+    draft.holdings.every(item => typeof item === "object" && item !== null &&
+      Object.keys(item).sort().join(",") === "account,id,price,product,quantity" &&
+      text(item.id, 200) && text(item.account, 200) && text(item.product, 200) &&
+      text(item.quantity, 100) && text(item.price, 100)) &&
+    text(draft.effective, 100) && text(draft.available, 100) &&
+    text(draft.evidence, 200) && typeof draft.scope === "boolean" &&
+    Number.isInteger(draft.step) && Number(draft.step) >= 0 && Number(draft.step) <= 2;
+}
 
 function amountIssue(value: string, label: string, positive = false): string | null {
   if (!/^(?:0|[1-9]\d{0,14})(?:\.\d{1,8})?$/.test(value) ||
@@ -62,6 +125,8 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   const [confirmAttempted, setConfirmAttempted] = useState(false);
   const [recoveryEntry, setRecoveryEntry] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [draftStorageError, setDraftStorageError] = useState(false);
+  const [draftDiscardAvailable, setDraftDiscardAvailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -71,6 +136,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   const errorSummary = useRef<HTMLDivElement>(null);
   const portfolioId = useRef(identifier("portfolio"));
   const openingId = useRef(identifier("opening"));
+  const draftReady = useRef(false);
   const recovery = session?.state === "recoverable" ? session.recovery : undefined;
   const investmentAccounts = accounts.filter(account => account.kind === "broker");
 
@@ -97,17 +163,71 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     return () => { active = false; };
   }, []);
   useEffect(() => {
-    if (!dirty || receipt?.status === "completed") return;
+    if (!dirty || receipt?.status === "completed" || !draftStorageError) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     const abandon = (event: MouseEvent) => {
       if (!(event.target instanceof Element)) return;
       const link = event.target.closest("a[href]");
-      if (link && !window.confirm("Leave setup? This private draft exists only in memory and will be lost.")) event.preventDefault();
+      if (link && !window.confirm("The draft could not be saved in this browser. Leave and lose the unsaved progress?"))
+        event.preventDefault();
     };
     window.addEventListener("beforeunload", warn);
     document.addEventListener("click", abandon, true);
     return () => { window.removeEventListener("beforeunload", warn); document.removeEventListener("click", abandon, true); };
-  }, [dirty, receipt]);
+  }, [dirty, draftStorageError, receipt]);
+  useEffect(() => {
+    if (!session) return;
+    draftReady.current = false;
+    if (session.state !== "empty") return;
+    let storedDraftExists = false;
+    try {
+      const raw = window.localStorage.getItem(setupDraftKey(session.workspace));
+      storedDraftExists = raw !== null;
+      if (raw !== null) {
+        if (raw.length > 1_000_000) throw new Error("Saved setup draft is too large to restore.");
+        const value: unknown = JSON.parse(raw);
+        if (!isSetupDraft(value, session.workspace))
+          throw new Error("Saved setup draft is invalid. It was left unchanged.");
+        portfolioId.current = value.portfolioId;
+        openingId.current = value.openingId;
+        setAccounts(value.accounts);
+        setProducts(value.products);
+        setHoldings(value.holdings);
+        setEffective(value.effective);
+        setAvailable(value.available);
+        setEvidence(value.evidence);
+        setScope(value.scope);
+        setStep(value.step);
+        setDirty(true);
+      }
+      setDraftStorageError(false);
+      setDraftDiscardAvailable(false);
+      draftReady.current = true;
+    } catch (failure) {
+      setDraftStorageError(true);
+      setDraftDiscardAvailable(storedDraftExists);
+      setError(failure instanceof Error
+        ? failure.message : "The saved setup draft could not be read. It was not changed.");
+    }
+  }, [session?.state, session?.workspace]);
+  useEffect(() => {
+    if (!draftReady.current || !dirty || session?.state !== "empty" ||
+        recoveryEntry || receipt?.status === "completed") return;
+    try {
+      const draft: SetupDraft = {
+        version: 1, workspace: session.workspace, portfolioId: portfolioId.current,
+        openingId: openingId.current, accounts, products, holdings, effective,
+        available, evidence, scope, step: Math.min(step, 2),
+      };
+      const serialized = JSON.stringify(draft);
+      if (serialized.length > 1_000_000) throw new Error("Setup draft exceeds the browser storage limit.");
+      window.localStorage.setItem(setupDraftKey(session.workspace), serialized);
+      setDraftStorageError(false);
+    } catch {
+      setDraftStorageError(true);
+    }
+  }, [accounts, products, holdings, effective, available, evidence, scope, step,
+    dirty, recoveryEntry, receipt, session?.state, session?.workspace]);
   useEffect(() => { (stepHeading.current ?? heading.current)?.focus(); }, [step, preview, receipt, session?.enabled]);
   useEffect(() => { if (error) errorSummary.current?.focus(); }, [error]);
   useEffect(() => {
@@ -269,7 +389,18 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
       try {
         const result = await setupConfirm(session?.csrf ?? "", preview.preview_id);
         setReceipt(result);
-        if (result.status === "completed") setDirty(false);
+        if (result.status === "completed") {
+          setDirty(false);
+          try {
+            if (session) window.localStorage.removeItem(setupDraftKey(session.workspace));
+            setDraftStorageError(false);
+            setDraftDiscardAvailable(false);
+          } catch {
+            setDraftStorageError(true);
+            setDraftDiscardAvailable(true);
+            setError("Setup completed, but this browser could not clear its saved draft. The journal was saved; remove the leftover draft from this browser's storage before starting another setup.");
+          }
+        }
       } catch {
         throw new Error("The save outcome is unknown or the request was refused. Records may already have been saved. Do not start another setup or delete files. Use Retry same confirmation to check this exact request, or reload for recovery guidance. Error details may be in the terminal window used to start the dashboard.");
       }
@@ -284,6 +415,14 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
         throw new Error("The previous setup could not be verified for recovery. Keep all setup files unchanged. If starting figures were not retained, re-entering and explicitly reviewing the original figures is required. Do not guess balances or create a replacement. Check the terminal window used to start the dashboard for error details.");
       }
     });
+  };
+  const discardSetupDraft = () => {
+    try {
+      if (session) window.localStorage.removeItem(setupDraftKey(session.workspace));
+      window.location.reload();
+    } catch {
+      setError("The saved browser draft could not be cleared. Keep this page open; no journal records were changed.");
+    }
   };
   const reenterOpening = () => {
     if (!recovery?.requires_opening || confirmAttempted) return;
@@ -306,8 +445,10 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   return <section className="investment-setup" aria-label="Investment setup" aria-busy={busy}>
     <h1 ref={heading} tabIndex={-1}>Let's set up your portfolio</h1>
     {!receipt && session && !blocked && <p className="setup-draft-note">{session.state === "recoverable"
-      ? "Re-entered figures are lost if you leave or reload. Existing setup files may already contain saved records."
-      : "Your draft is not saved until you confirm. Leaving or reloading loses your progress."}</p>}
+      ? "Re-entered recovery figures are not saved as a draft. Existing setup files may already contain saved records."
+      : draftStorageError
+        ? "This browser could not save the private draft. Keep this page open or finish before leaving."
+        : "Your private setup draft is saved in this browser on this computer. Previews and confirmations are never resumed; check starting figures and holdings again after returning."}</p>}
     {!receipt && !preview && !blocked && !recoveryEntry && session?.state === "recoverable" && step === 0 && <p className="setup-intro">
       Check or exactly reconstruct the original setup. Do not start a replacement portfolio.</p>}
     {!receipt && !preview && !blocked && session?.state === "empty" && step === 0 && <>
@@ -335,6 +476,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     </details>
     {error && <div role="alert" tabIndex={-1} ref={errorSummary} className="investment-warnings">
       <p>{error}</p>
+      {draftDiscardAvailable && <button type="button" onClick={discardSetupDraft}>Discard saved setup draft</button>}
       {Object.entries(fieldErrors).length > 0 && <ul aria-label="Fields to correct">
         {Object.entries(fieldErrors).map(([key, message]) => <li key={key}>
           <a href={`#${fieldTarget(key)}`} onClick={event => {

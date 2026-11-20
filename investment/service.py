@@ -44,6 +44,20 @@ def report(ledger, now, source_mode="recorded"):
             if value.get("type") in ("buy", "sell") and
             value["id"] not in ledger.superseded_ids
         ]
+        recorded_account_fees = [
+            _reported_timestamps({
+                "id": value["id"], "type": "account_fee",
+                "account_id": value["account_id"],
+                "role": value.get("role", "unassigned"),
+                "amount_gbp": value["amount_gbp"],
+                "timestamp": value["timestamp"],
+                "available_at": value["available_at"],
+                "evidence": value["evidence"],
+            }, ("timestamp", "available_at"))
+            for value in ledger.ids.values()
+            if value.get("type") == "account_fee" and
+            value["id"] not in ledger.superseded_ids
+        ]
         recorded_income_events = [
             _reported_timestamps({
                 "id": value["id"], "type": value["type"],
@@ -218,6 +232,7 @@ def report(ledger, now, source_mode="recorded"):
             "recorded_dividends_gbp": fmt(recorded_dividends),
             "recorded_income_gbp": fmt(recorded_interest + recorded_dividends),
             "recorded_fee_events": recorded_fee_events,
+            "recorded_account_fees": recorded_account_fees,
             "recorded_income_events": recorded_income_events,
             "recorded_flow_events": recorded_flow_events,
             "recorded_corrections": recorded_corrections,

@@ -15,6 +15,7 @@ async function fixture(page) {
   };
   const session = {
     enabled: true, csrf: "synthetic-csrf", opened: true,
+    portfolio_id: report.portfolio_id, revision: report.revision,
     accounts: report.accounts.filter(item => item.status === "active").map(({ id, name, kind }) => ({ id, name, kind })),
     products: [...new Map(report.holdings.map(item => [item.product_id, {
       id: item.product_id, name: item.name, sleeve: item.sleeve,
@@ -32,6 +33,56 @@ async function fixture(page) {
   await page.clock.setFixedTime(new Date("2030-01-01T12:00:00Z"));
   return { report, session, account, holding };
 }
+
+test("recording drafts resume only for the same journal revision and never reuse a preview", async ({ page }) => {
+  const { account, session } = await fixture(page);
+  let previews = 0;
+  await page.route("**/api/investment/v1/recording/preview", route => {
+    previews++;
+    return route.abort();
+  });
+  const url = `/investment/record?record=account-update&account_id=${account.id}&kind=cash_observation`;
+  await page.goto(url);
+  await page.getByLabel("Observed GBP balance").fill("99.50");
+  await page.getByLabel("Statement/source description").fill("Synthetic monthly statement");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T11:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T11:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic comparison");
+  await expect.poll(() => page.evaluate(() => {
+    const key = Object.keys(localStorage).find(item => item.includes("recording-draft"));
+    return key ? JSON.parse(localStorage.getItem(key)).values.amount : null;
+  })).toBe("99.50");
+
+  await page.reload();
+  await expect(page.getByText("A draft was restored from this browser. Its preview and confirmation were not saved; check all details and request a fresh preview."))
+    .toBeVisible();
+  await expect(page.getByLabel("Observed GBP balance")).toHaveValue("99.50");
+  await expect(page.getByLabel("Statement/source description")).toHaveValue("Synthetic monthly statement");
+  expect(previews).toBe(0);
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect.poll(() => previews).toBe(1);
+
+  session.revision++;
+  await page.reload();
+  await expect(page.getByRole("alert")).toContainText("no longer matches the current journal revision");
+  await expect(page.getByLabel("Observed GBP balance")).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Discard saved draft" })).toBeVisible();
+  expect(previews).toBe(1);
+});
+
+test("malformed saved recording drafts are surfaced and can be explicitly discarded", async ({ page }) => {
+  const { account, report } = await fixture(page);
+  const route = `?record=account-update&account_id=${account.id}&kind=cash_observation`;
+  const key = `goldscout.recording-draft.v1.${encodeURIComponent(report.portfolio_id)}.${encodeURIComponent(route)}`;
+  await page.goto("/");
+  await page.evaluate(savedKey => localStorage.setItem(savedKey, "{"), key);
+  await page.goto(`/investment/record${route}`);
+  await expect(page.getByRole("alert")).toContainText("saved recording draft could not be read");
+  await expect(page.getByLabel("Observed GBP balance")).toHaveValue("");
+  await page.getByRole("button", { name: "Discard saved draft" }).click();
+  await expect(page.getByText(/saved recording draft could not be read/)).toHaveCount(0);
+  expect(await page.evaluate(savedKey => localStorage.getItem(savedKey), key)).toBeNull();
+});
 
 test("guided account review links evidence to safe drafts without making updates", async ({ page }) => {
   const { account, holding } = await fixture(page);

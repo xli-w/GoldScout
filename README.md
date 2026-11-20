@@ -5,7 +5,7 @@ savings, a first-home LISA and longer-term investments. It records
 operator-supplied evidence; it does not verify custody, choose investments,
 move money or execute trades.
 
-## Set up and start on Windows
+## Start on Windows
 
 GoldScout is currently distributed as a source checkout, not a desktop installer.
 From the repository folder in PowerShell, install the dashboard dependencies and
@@ -18,39 +18,74 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-Start GoldScout from the same folder whenever you want to use it:
+After the one-time setup, double-click `Start-GoldScout.cmd` from the checkout.
+Alternatively, start GoldScout from the same folder in PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe -m dashboard
 ```
 
 In a source checkout, records are stored in the ignored `local-investment/`
-folder. The first run guides you through choosing accounts and entering starting
-figures. Review the preview before confirming; nothing is saved before that
-confirmation. Cash-only setup skips investment details. If an investment
-account has holdings, include them rather than omitting them.
-The startup wizard also offers an optional, explicitly approved eToro read.
-It displays a separate provider snapshot; it never imports balances into the GBP
-journal. See [the eToro connection guide](docs/investment.md#optional-etoro-connection).
+folder. Installed use requires selecting the same private folder with
+`--workspace <directory>` on each start. The dashboard has no sign-in and must
+stay on this computer; keep the records and backups private.
+
+## Set up
+
+The first run guides you through accounts and starting figures. Have dated
+sources for cash and all holdings at the same current point in time. For each
+investment you also need its provider's GBP price, supported quantity step and
+minimum purchase. A price may be left blank if unknown; do not guess the other
+rules. Cash-only setup skips investment details. Review the preview before
+confirming; nothing is saved to the journal before confirmation. Setup and
+recording drafts save in this browser on this computer. Full previews and
+acknowledgement checkboxes are never restored. If a recording save has an
+uncertain outcome, its exact retry reference is retained so the same save can
+be checked; the app blocks a new entry until it is resolved. Recovery re-entry
+is deliberately not saved.
 
 For investment accounts, list each different investment once, then enter its
 quantity for each account that holds it. Use current figures for the same point
 in time; setup records them when you request the preview and cannot be
 backdated.
 
-After setup, choose **Add a record** for future updates; no restart is needed.
-For a regular review, choose **Update** beside an account to see its recorded
-cash, last cash check and holdings, then work through transactions and price
-checks. Previews show the impact on valuation and performance before saving.
-The portfolio can also compare two recorded valuations, showing recorded money
-movements, income and fees separately from any unexplained remainder.
+The optional eToro connection shows a separate provider snapshot and, after an
+explicit manual refresh, up to 365 calendar days of closed-trade history. It
+does not populate the journal and is live-unvalidated. Basic use does not
+require it.
+See [the connection guide](docs/investment.md#optional-etoro-connection).
+
+## Review
+
+On **Your portfolio**, check the recorded value and date, **What needs
+attention**, and the comparison between recorded values. Choose **Review
+accounts** to start a guided review across active accounts. Progress resumes in
+this browser; a journal change makes the old progress stale and requires a new
+review. Update each account using dated sources: record transactions, compare
+cash, and check holdings and prices. Each record has its own preview and
+confirmation. A cash check does not change the recorded balance.
+
+Choose an account review interval and, for savings accounts, a separate terms
+recheck interval. After checking an account, mark its reminder date. Separately,
+save a complete portfolio value for a future comparison. Drafts, review
+progress, and reminders are local browser data, are not included in the journal
+backup, and can be lost if the browser is cleared.
+They are not evidence that accounts are current. An unexplained remainder is
+not a verified investment return. Missing historical performance does not stop
+you from recording and reviewing your portfolio.
+
 Manual recording is enabled for normal local launches. For viewing without
 journal writes, add `--investment-read-only` to your usual startup command,
 keeping the same workspace. This also prevents first-run setup from saving.
 
-Installed use requires selecting the same private folder with
-`--workspace <directory>` on each start. The dashboard has no sign-in and must
-stay on this computer; keep the records and backups private.
+## Back up and recover
+
+Use **Back up and practise recovery** on the portfolio page to request a verified
+journal backup and rehearse checking a copy. The ZIP is unencrypted; store it
+protected and off this computer. The backup does not include goals, browser
+reminders, setup receipts or source documents. Save those separately. A
+rehearsal does not install a backup or overwrite the active journal. See
+[backup and recovery](docs/investment-journal.md#backup-and-restore).
 
 See [setup and operations](docs/investment.md) and [dashboard development](docs/dashboard.md).
 
@@ -65,6 +100,14 @@ These use synthetic evidence, not account access.
 
 ## Boundaries
 
+- The journal supports GBP cash and GBP-priced long equity/bond holdings in
+  deposit and investment accounts. It records contributions, withdrawals,
+  transfers, buys, sells, splits, paid interest/dividends, prices and cash checks.
+  It does not convert other currencies or infer missing transactions.
+- Explicit GBP account/platform charges can be recorded as fees, not deposits
+  or withdrawals. Tax, FX, fund charges, spread, slippage and other costs remain
+  outside a complete cost history. Do not enter a balancing flow to disguise an
+  unsupported charge or reconcile a difference.
 - One opening-evidence journal format, wire `schema_version=2`. Older journals
   are explicitly rejected, with no migration or compatibility mode.
 - Exact GBP accounting, replay, valuation, cash observations and

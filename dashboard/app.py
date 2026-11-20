@@ -119,7 +119,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
     planning = None
     if planning_profile is not None:
         from dashboard.planning import PlanningProfile
-        planning = PlanningProfile(planning_profile)
+        planning = PlanningProfile(planning_profile, investment_database)
     if investment_recording_enabled:
         if investment_database is None or intelligence_demo:
             raise ValueError("Investment recording requires a selected recorded investment store")
@@ -254,13 +254,16 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         from dashboard.monitoring_workflow import WorkflowError
         try:
             payload = await bounded_json(request, maximum=131072, strict=True)
-            required = {"request_id", "expected_revision", "expected_hash", "goals"}
+            required = {"request_id", "expected_revision", "expected_hash", "goals",
+                        "expected_portfolio_id", "expected_journal_revision"}
             if type(payload) is not dict or set(payload) != required:
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
             result = planning.preview(
                 request.cookies.get("investment_planning_session"),
                 payload["request_id"], payload["expected_revision"],
-                payload["expected_hash"], payload["goals"], clock())
+                payload["expected_hash"], payload["goals"],
+                payload["expected_portfolio_id"], payload["expected_journal_revision"],
+                clock())
             return JSONResponse(result)
         except PlanningError as exc:
             return JSONResponse(status_code=exc.status, content={"error": exc.code})
@@ -742,8 +745,12 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         try:
             payload = await bounded_json(request, maximum=1024, strict=True)
             if (type(payload) is not dict or set(payload) != {
-                    "confirm_read", "read_generation", "revision", "account_id", "environment"}
+                    "confirm_read", "confirm_closed_trade_history",
+                    "history_retention_rights_verified", "read_generation",
+                    "revision", "account_id", "environment"}
                     or payload["confirm_read"] is not True
+                    or payload["confirm_closed_trade_history"] is not True
+                    or payload["history_retention_rights_verified"] is not True
                     or type(payload["read_generation"]) is not int
                     or payload["read_generation"] < 0
                     or type(payload["revision"]) is not int or payload["revision"] < 1
@@ -753,7 +760,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             return await run_in_threadpool(
                 etoro_connection.refresh_explicitly, clock(),
                 manual_confirmed=True, generation=payload["read_generation"],
-                expected_connection=(payload["revision"], payload["account_id"], payload["environment"]))
+                expected_connection=(payload["revision"], payload["account_id"], payload["environment"]),
+                history_confirmed=True)
         except ManualRefreshRejected as exc:
             return JSONResponse(status_code=409, content={
                 "error": "etoro_refresh_rejected", "message": str(exc)})

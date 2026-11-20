@@ -28,7 +28,7 @@ def balance():
 
 class FixtureTransport:
     def __init__(self, complete=None):
-        self.payloads = list(complete or [encoded(aggregate()), balance()])
+        self.payloads = list(complete or [encoded(aggregate()), balance(), encoded([])])
         self.paths = []
 
     def __call__(self, path, headers):
@@ -205,15 +205,29 @@ class EToroConnectionTests(unittest.TestCase):
         generation = manager.begin_generation()
         expected = (1, 12345, "real")
         result = manager.refresh_explicitly(
-            NOW, manual_confirmed=True, generation=generation, expected_connection=expected)
+            NOW, manual_confirmed=True, generation=generation, expected_connection=expected,
+            history_confirmed=True)
         self.assertEqual(result["state"], "refreshed")
-        self.assertEqual(len(transport.paths), 2)
+        self.assertEqual(len(transport.paths), 3)
         self.assertEqual(manager.status(NOW)["state"], "connected")
         manager.revoke(NOW)
         with self.assertRaises(InvestmentError):
             manager.refresh_explicitly(
-                NOW, manual_confirmed=True, generation=generation, expected_connection=expected)
-        self.assertEqual(len(transport.paths), 2)
+                NOW, manual_confirmed=True, generation=generation, expected_connection=expected,
+                history_confirmed=True)
+        self.assertEqual(len(transport.paths), 3)
+
+    def test_manual_refresh_requires_separate_closed_history_confirmation(self):
+        manager = self.manager(FixtureTransport())
+        preview = self.connect(manager)
+        manager.confirm("synthetic-session", preview["preview_id"], True, False, None, NOW)
+        transport = FixtureTransport()
+        manager.transport_factory = lambda: transport
+        with self.assertRaisesRegex(InvestmentError, "closed-trade history read"):
+            manager.refresh_explicitly(
+                NOW, manual_confirmed=True, generation=manager.begin_generation(),
+                expected_connection=(1, 12345, "real"))
+        self.assertEqual(transport.paths, [])
 
     def test_expired_startup_permission_allows_only_confirmed_manual_refresh(self):
         manager = self.manager(FixtureTransport())
@@ -229,7 +243,7 @@ class EToroConnectionTests(unittest.TestCase):
         self.assertEqual(transport.paths, [])
         result = restarted.refresh_explicitly(
             later, manual_confirmed=True, generation=restarted.begin_generation(),
-            expected_connection=(1, 12345, "real"))
+            expected_connection=(1, 12345, "real"), history_confirmed=True)
         self.assertEqual(result["state"], "refreshed")
         self.assertEqual(restarted.status(later)["state"], "expired")
 
@@ -245,7 +259,7 @@ class EToroConnectionTests(unittest.TestCase):
         with self.assertRaises(InvestmentError):
             manager.refresh_explicitly(
                 NOW, manual_confirmed=True, generation=generation,
-                expected_connection=(1, 12345, "real"))
+                expected_connection=(1, 12345, "real"), history_confirmed=True)
         self.assertEqual(len(second_transport.paths), 2)
 
     def test_revoke_is_immediate_and_expiry_is_bounded(self):
@@ -282,6 +296,7 @@ class EToroConnectionTests(unittest.TestCase):
         self.assertFalse(restarted._worker.is_alive(), "startup refresh did not finish")
         self.assertEqual(restarted.status(NOW)["last_status"], "success")
         self.assertEqual(len(refreshed.paths), 2)
+        self.assertFalse(any("trade/history" in path for path in refreshed.paths))
 
     def test_startup_refresh_does_not_publish_a_different_account(self):
         manager = self.manager(FixtureTransport())
@@ -301,7 +316,7 @@ class EToroConnectionTests(unittest.TestCase):
         restarted = self.manager(refresh_transport)
         result = restarted.refresh_explicitly(
             NOW, manual_confirmed=True, generation=restarted.begin_generation(),
-            expected_connection=(1, 12345, "real"))
+            expected_connection=(1, 12345, "real"), history_confirmed=True)
         self.assertEqual(result["state"], "refresh_failed")
         self.assertEqual(result["error_code"], "account_binding_changed")
         self.assertIsNone(restarted.snapshot)
@@ -374,7 +389,7 @@ class EToroConnectionTests(unittest.TestCase):
                     else:
                         result = fresh.refresh_explicitly(
                             NOW, manual_confirmed=True, generation=fresh.begin_generation(),
-                            expected_connection=(1, 12345, "real"))
+                            expected_connection=(1, 12345, "real"), history_confirmed=True)
                         self.assertEqual(result["error_code"], "refresh_unavailable")
                     self.assertEqual(fresh.status(NOW)["last_status"], "refresh_unavailable")
                     self.assertIsNone(fresh.snapshot)

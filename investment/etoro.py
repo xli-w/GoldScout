@@ -33,6 +33,7 @@ Source snapshots may lag ~10 seconds; caller records receipt/availability clocks
 """
 
 from decimal import Decimal
+from datetime import date
 import ipaddress
 import json
 import socket
@@ -53,9 +54,17 @@ AGGREGATE_PORTFOLIO_PATHS = {
     "real": "/api/v1/trading/info/aggregate-portfolio",
     "demo": "/api/v1/trading/info/demo/aggregate-portfolio",
 }
+CLOSED_TRADE_HISTORY_PATHS = {
+    "real": "/api/v1/trading/info/trade/history",
+    "demo": "/api/v1/trading/info/trade/demo/history",
+}
 _BALANCE_PATH = re.compile(
     r"/api/v1/balances/trading/[1-9][0-9]{0,18}"
     r"\?displayCurrency=GBP&expand=equityDetails")
+_CLOSED_TRADE_HISTORY_PATH = re.compile(
+    r"/api/v1/trading/info/trade/(?:demo/)?history"
+    r"\?minDate=(?P<min_date>\d{4}-\d{2}-\d{2})"
+    r"&page=(?P<page>[12])&pageSize=1000")
 MAX_BYTES = 1024 * 1024
 MAX_ITEMS = 1000
 _DEADLINE_SECONDS = 15.0
@@ -130,9 +139,20 @@ class EToroTransport:
 
     @staticmethod
     def _allowed_path(path):
-        return (path == PORTFOLIO_PATH
+        if type(path) is not str:
+            return False
+        if (path == PORTFOLIO_PATH
                 or path in AGGREGATE_PORTFOLIO_PATHS.values()
-                or type(path) is str and _BALANCE_PATH.fullmatch(path) is not None)
+                or _BALANCE_PATH.fullmatch(path) is not None):
+            return True
+        match = _CLOSED_TRADE_HISTORY_PATH.fullmatch(path)
+        if match is None:
+            return False
+        try:
+            date.fromisoformat(match.group("min_date"))
+        except ValueError:
+            return False
+        return True
 
     def get(self, path, headers):
         if not self._allowed_path(path):

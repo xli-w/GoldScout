@@ -111,10 +111,10 @@ export function standardRecord(kind: string, common: {
     ...common, type: kind, account_id: input.accountId, currency: "GBP",
   };
   if (input.role !== "unassigned" &&
-      ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell"].includes(kind))
+      ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "account_fee"].includes(kind))
     value.role = input.role;
   if (kind === "interest" || kind === "dividend") value.role_evidence = input.roleEvidence;
-  if (["contribution", "withdrawal", "interest", "dividend", "transfer"].includes(kind))
+  if (["contribution", "withdrawal", "interest", "dividend", "transfer", "account_fee"].includes(kind))
     value.amount_gbp = input.amount;
   if (kind === "transfer") value.destination_account_id = input.destinationAccountId;
   if (["dividend", "buy", "sell", "mark", "split"].includes(kind)) {

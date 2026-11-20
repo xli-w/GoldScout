@@ -35,6 +35,8 @@ export type InvestmentSnapshot = {
   recorded_fee_events: { id: string; type: "buy" | "sell"; account_id: string;
     product_id: string; role: string; quantity: string; price_gbp: string; fee_gbp: string;
     timestamp: string; available_at: string; evidence: string }[];
+  recorded_account_fees: { id: string; type: "account_fee"; account_id: string;
+    role: string; amount_gbp: string; timestamp: string; available_at: string; evidence: string }[];
   recorded_income_events: { id: string; type: "interest" | "dividend"; account_id: string;
     product_id: string | null; amount_gbp: string; timestamp: string;
     role: string; role_evidence: string | null; available_at: string; evidence: string }[];
@@ -42,7 +44,8 @@ export type InvestmentSnapshot = {
     account_id: string; destination_account_id: string | null; amount_gbp: string;
     role: string; timestamp: string; available_at: string; evidence: string }[];
   recorded_corrections: { id: string; original_event_id: string; replacement_event_id: string;
-    replaced_type: "contribution" | "withdrawal" | "transfer" | "interest" | "dividend" | "buy" | "sell" | "split" | "mark";
+    replaced_type: "contribution" | "withdrawal" | "transfer" | "interest" | "dividend" |
+      "buy" | "sell" | "account_fee" | "split" | "mark";
     account_id: string | null; role: string; role_evidence: string | null;
     original_amount_gbp: string | null; replacement_amount_gbp: string | null; timestamp: string;
     available_at: string; evidence: string }[];
@@ -159,26 +162,26 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
   const correctionReplayWarnings = data.warnings.filter(warning =>
     warning.startsWith("Historical correction replay may have changed past cash-observation differences."));
   const cashWarnings = data.warnings.filter(warning =>
-    warning.startsWith("Recorded cash observation"));
+    warning.startsWith("Recorded cash observation") || /^\d+ recorded cash observations/.test(warning));
   const otherWarnings = data.warnings.filter(warning =>
     !(warning === "A complete common-clock valuation is unavailable." && !data.complete)
-    && !correctionWarnings.includes(warning)
+    && !(data.recorded_corrections.length > 0 && correctionWarnings.includes(warning))
     && !correctionReplayWarnings.includes(warning)
-    && !cashWarnings.includes(warning));
-  const correctionDetails = [...correctionWarnings,
-    ...(hasDifferences ? [] : correctionReplayWarnings)];
-  const needsAttention = !data.complete || data.recorded_corrections.length > 0 ||
-    data.baseline_as_of === null || data.twr_pct === null || data.max_drawdown_pct === null ||
-    hasDifferences || otherWarnings.length > 0;
+    && !(hasDifferences && cashWarnings.includes(warning)));
+  const needsAttention = !data.complete || hasDifferences ||
+    correctionReplayWarnings.length > 0 || otherWarnings.length > 0;
+  const hasPerformanceLimit = data.recorded_corrections.length > 0 ||
+    data.baseline_as_of === null || data.twr_pct === null || data.max_drawdown_pct === null;
   const priceAction = (holding: OpeningSnapshot["holdings"][number]) => data.source_mode === "recorded"
     ? <NavLink aria-label={`Add a checked price for ${holding.name} in ${accountDisplay(data, holding.account_id)}`}
       to={`/investment/record?record=missing-price&account_id=${encodeURIComponent(holding.account_id)}&product_id=${encodeURIComponent(holding.product_id)}`}>
       add a checked price
     </NavLink>
     : <NavLink to="/investment-guide#recording-prices">how to add a checked price</NavLink>;
-  return <section className="history-group investment-next-steps" aria-label="What needs attention">
+  return <>
+  <section className="history-group investment-next-steps" aria-label="What needs attention">
     <h2>What needs attention</h2>
-    {!needsAttention && <p>No issues are flagged in the recorded information.</p>}
+    {!needsAttention && <p>No missing total or recorded cash differences are flagged. This does not verify your accounts.</p>}
     {needsAttention && <ul>
       {!data.complete && <li>
         {unmarked.length > 0
@@ -198,20 +201,10 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
               <p>Use a source that supports the price and both dates. Later information cannot fill an earlier valuation.</p></>
           : "No complete total is available for this date. Missing is not zero; check the dates and source. Later information cannot fill an earlier gap."}
       </li>}
-      {data.recorded_corrections.length > 0
-        ? <li>A correction made past performance unavailable; no new starting point was created.
-          {" "}<a href="#investment-corrections" onClick={() => openDisclosure("investment-records")}>Review correction history</a>.
-          {correctionDetails.length > 0 && <details className="help-disclosure">
-            <summary>Correction details</summary>
-            <ul>{correctionDetails.map(warning => <li key={warning}>{warning}</li>)}</ul>
-          </details>}</li>
-        : data.baseline_as_of === null
-        ? <li>Performance has no complete starting value. Later information cannot recreate missing past returns.
-          {" "}<NavLink to="/investment-guide#performance-gaps">Learn more</NavLink>.</li>
-        : (data.twr_pct === null || data.max_drawdown_pct === null) &&
-          <li>Some performance figures are unavailable; complete totals do not restore past history.
-            {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>View performance history</a>.</li>}
-      {hasDifferences && <li>Recorded cash observations differ from the journal; they do not change balances or show the current one.
+      {(hasDifferences || correctionReplayWarnings.length > 0) && <li>
+        {hasDifferences && <>Recorded cash observations differ from the journal; they do not change balances or show the current one. </>}
+        {correctionReplayWarnings.length > 0 && <>A correction may have changed earlier reported cash differences.
+          Compare prior reports with the original observations and correction evidence. </>}
         {" "}<a href="#investment-accounts" onClick={onReviewCashEvidence}>Review cash evidence</a>.
         {(cashWarnings.length > 0 || correctionReplayWarnings.length > 0) && <details className="help-disclosure">
           <summary>Cash evidence details</summary>
@@ -220,10 +213,45 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
       </li>}
       {otherWarnings.map(warning => <li key={warning}>{warning}</li>)}
     </ul>}
-  </section>;
+  </section>
+  {hasPerformanceLimit && <section className="history-group" aria-label="Historical performance limitations">
+    <h2>About past performance</h2>
+    {data.recorded_corrections.length > 0
+      ? <><p>A correction made past performance unavailable; no new starting point was created.
+        {" "}<a href="#investment-corrections" onClick={() => openDisclosure("investment-records")}>Review correction history</a>.</p>
+        {correctionWarnings.length > 0 && <details className="help-disclosure">
+          <summary>Correction details</summary>
+          <ul>{correctionWarnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
+        </details>}</>
+      : data.baseline_as_of === null
+      ? <p>Performance has no complete starting value. Later information cannot recreate missing past returns.
+        {" "}<NavLink to="/investment-guide#performance-gaps">Learn more</NavLink>.</p>
+      : <p>Some performance figures are unavailable; complete totals do not restore past history.
+        {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>View performance history</a>.</p>}
+    <p>You can continue to record and review your portfolio without those historical figures.</p>
+  </section>}
+  </>;
 }
 
 function AccountAndHoldingsSummary({ data, now }: { data: OpeningSnapshot; now: number }) {
+  const concentration = useMemo(() => {
+    if (!data.complete || data.equity_gbp === null ||
+        data.holdings.some(item => item.value_gbp === null)) return null;
+    const portfolioValue = new Decimal(data.equity_gbp);
+    if (portfolioValue.lte(0)) return null;
+    const byProduct = new Map<string, { name: string; value: Decimal }>();
+    for (const holding of data.holdings) {
+      const current = byProduct.get(holding.product_id);
+      const value = new Decimal(holding.value_gbp!);
+      byProduct.set(holding.product_id, {
+        name: holding.name,
+        value: (current?.value ?? new Decimal(0)).plus(value),
+      });
+    }
+    return [...byProduct.entries()].map(([id, item]) => ({ id, ...item }))
+      .sort((left, right) => right.value.comparedTo(left.value));
+  }, [data]);
+
   return <section className="history-group portfolio-summary" id="investment-account-summary" aria-label="Accounts and investments">
     <h2>Your accounts and investments</h2>
     <p className="position-note">Latest journal entries, not live balances; dates may differ from the valuation.</p>
@@ -289,6 +317,26 @@ function AccountAndHoldingsSummary({ data, now }: { data: OpeningSnapshot; now: 
         </tr>)}</tbody>
       </table></div>
     </details>}
+    {data.holdings.length > 0 && <section className="history-group" aria-label="Direct investment concentration">
+      <h3>Largest direct investments</h3>
+      {!concentration || data.equity_gbp === null
+        ? <p>A concentration percentage is unavailable until a complete recorded portfolio value is available.</p>
+        : <>
+          <p className="position-note">Share of the complete recorded portfolio value dated {timestamp(data.as_of)}.
+            Investments held across accounts are combined by their journal identity.</p>
+          <ul>{concentration.slice(0, 5).map(item =>
+            <li key={item.id}>{item.name} ({item.id}): {pounds(item.value.toString())}
+              {" "}· {item.value.div(data.equity_gbp!).mul(100).toFixed(1)}% of portfolio value</li>)}
+            {concentration.length > 5 && (() => {
+              const otherValue = concentration.slice(5).reduce(
+                (total, item) => total.plus(item.value), new Decimal(0));
+              return <li>Other direct investments: {pounds(otherValue.toString())}
+                {" "}· {otherValue.div(data.equity_gbp!).mul(100).toFixed(1)}%</li>;
+            })()}
+          </ul>
+          <p className="position-note">This measures only the named holdings recorded directly. It does not look through funds to their underlying assets and is not a diversification, suitability or risk assessment.</p>
+        </>}
+    </section>}
   </section>;
 }
 
@@ -327,6 +375,7 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
   const recentCandidates = candidates.slice(-100);
   const shownCandidates = start && !recentCandidates.includes(start)
     ? [start, ...recentCandidates] : recentCandidates;
+  const usingCheckpoint = !selected && checkpointTimestamp !== null;
 
   let unavailable: string | null = null;
   if (data.recorded_corrections.length) {
@@ -339,7 +388,9 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
   } else if (!start) {
     unavailable = selected ? "The selected earlier valuation is no longer available. Choose another date."
       : checkpointTimestamp
-        ? "The saved review valuation is no longer available. Review the journal history before choosing another date."
+        ? checkpointTimestamp === end.timestamp
+          ? `No newer complete recorded value is available yet. Return after updating your records${shownCandidates.length > 0 ? ", or choose an earlier value below" : ""}.`
+          : "The saved review valuation is no longer available. Review the journal history before choosing another date."
         : "At least two complete recorded valuations are needed. A later source cannot fill an earlier gap.";
   }
 
@@ -349,6 +400,7 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
   const flows = data.recorded_flow_events.filter(within);
   const income = data.recorded_income_events.filter(within);
   const fees = data.recorded_fee_events.filter(within);
+  const accountFees = data.recorded_account_fees.filter(within);
   const scope = data.recorded_scope_additions.filter(within);
   const records = [
     ...flows.map(item => ({ ...item, description: item.type === "transfer"
@@ -356,6 +408,7 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
       : `${item.type === "contribution" ? "Money added" : "Money withdrawn"}: ${pounds(item.amount_gbp, true)} · ${accountDisplay(data, item.account_id)}` })),
     ...income.map(item => ({ ...item, description: `${item.type === "interest" ? "Interest" : "Dividend"} received: ${pounds(item.amount_gbp, true)} · ${accountDisplay(data, item.account_id)}` })),
     ...fees.map(item => ({ ...item, description: `Recorded ${item.type === "buy" ? "purchase" : "sale"} fee: ${pounds(item.fee_gbp, true)} · ${productReference(data, item.product_id)} · ${accountDisplay(data, item.account_id)}` })),
+    ...accountFees.map(item => ({ ...item, description: `Recorded account/platform charge: ${pounds(item.amount_gbp, true)} · ${accountDisplay(data, item.account_id)}` })),
     ...scope.map(item => ({ ...item, description: `Account added to tracked scope: ${pounds(item.amount_gbp, true)} · ${accountDisplay(data, item.account_id)}` })),
   ].sort((a, b) => microseconds(a.timestamp) < microseconds(b.timestamp) ? -1
     : microseconds(a.timestamp) > microseconds(b.timestamp) ? 1 : 0);
@@ -363,7 +416,10 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
   const added = sum(flows.filter(item => item.type === "contribution").map(item => item.amount_gbp));
   const withdrawn = sum(flows.filter(item => item.type === "withdrawal").map(item => item.amount_gbp));
   const received = sum(income.map(item => item.amount_gbp));
-  const paidFees = sum(fees.map(item => item.fee_gbp));
+  const paidFees = sum([
+    ...fees.map(item => item.fee_gbp),
+    ...accountFees.map(item => item.amount_gbp),
+  ]);
   const scopeAdded = sum(scope.map(item => item.amount_gbp));
   const net = added.minus(withdrawn);
   if (!unavailable && start && end &&
@@ -380,18 +436,20 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
     microseconds(point.timestamp) < microseconds(end.timestamp) && !point.complete).length : 0;
 
   return <section className="history-group value-changes"
-    aria-label={checkpointTimestamp ? "What changed since your last review?" : "Changes between recorded values"}>
-    <h2>{checkpointTimestamp ? "What changed since your last review?" : "What changed between recorded values?"}</h2>
+    aria-label={usingCheckpoint ? "What changed since your saved value?" : "Changes between recorded values"}>
+    <h2>{usingCheckpoint ? "What changed since your saved value?" : "What changed between recorded values?"}</h2>
     <p className="position-note">Compare dated journal valuations, not live account balances.
       The comparison uses recorded evidence only and cannot establish that all transactions or prices are present.</p>
+    {!usingCheckpoint && <p className="position-note">Selecting an earlier value does not save it as your comparison point.</p>}
     {shownCandidates.length > 0 && !data.recorded_corrections.length && <label className="value-change-select">
       Earlier recorded valuation
-      <select value={start?.timestamp ?? selected?.timestamp ?? shownCandidates[shownCandidates.length - 1].timestamp}
+      <select value={start?.timestamp ?? selected?.timestamp ?? (checkpointTimestamp ? "" : shownCandidates[shownCandidates.length - 1].timestamp)}
         onChange={event => {
           const index = candidates.findIndex(point => point.timestamp === event.target.value);
           if (index >= 0) onSelect({ portfolioId: data.portfolio_id, sourceMode: data.source_mode,
             timestamp: event.target.value, fromLatest: candidates.length - index });
         }}>
+        {!selected && !start && checkpointTimestamp && <option value="">Choose an earlier value</option>}
         {selected && !start && <option value={selected.timestamp}>Previously selected date unavailable</option>}
         {shownCandidates.map(point => <option key={point.timestamp} value={point.timestamp}>
           {point.timestamp} · {pounds(point.equity_gbp, true)}
@@ -409,10 +467,10 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
         <div><dt>Money withdrawn to outside</dt><dd>{pounds(withdrawn.toString(), true)}</dd></div>
         <div><dt>Value added by including accounts</dt><dd>{pounds(scopeAdded.toString(), true)}</dd></div>
         <div><dt>Recorded interest and dividends</dt><dd>{pounds(received.toString(), true)}</dd></div>
-        <div><dt>Recorded purchase and sale fees</dt><dd>{pounds(paidFees.toString(), true)}</dd></div>
+        <div><dt>Recorded trade and account charges</dt><dd>{pounds(paidFees.toString(), true)}</dd></div>
         <div><dt>Unexplained remainder</dt><dd>{pounds(remainder.toString(), true)}</dd></div>
       </dl>
-      <p className="position-note">The remainder is the value change after adding withdrawals and recorded fees and subtracting deposits, newly included account value and recorded income. It can include price movements, missing records or other differences; it is not a verified investment return. Fees and income are only those explicitly recorded. Transfers between tracked accounts do not change the portfolio total.</p>
+      <p className="position-note">The remainder is the value change after adding withdrawals and recorded charges and subtracting deposits, newly included account value and recorded income. It can include price movements, missing records or other differences; it is not a verified investment return. Charges and income are only those explicitly recorded. Transfers between tracked accounts do not change the portfolio total.</p>
       <details className="help-disclosure"><summary>Supporting recorded activity ({records.length})</summary>
         <p>Records effective after the earlier valuation and through the later valuation, inclusive. Same-time records are not shown in journal order.</p>
         {records.length === 0 ? <p>No activity in these categories is recorded for these dates; that does not prove none occurred.</p>
@@ -446,6 +504,11 @@ function RecentActivity({ data }: { data: OpeningSnapshot }) {
       id: event.id, timestamp: event.timestamp, clockLabel: "Effective at",
       available: event.available_at, evidence: event.evidence,
       description: `${event.type === "buy" ? "Purchase" : "Sale"}: ${event.quantity} units of ${productReference(data, event.product_id)} · ${accountDisplay(data, event.account_id)} · recorded fee ${pounds(event.fee_gbp, true)}`,
+    })),
+    ...data.recorded_account_fees.map(event => ({
+      id: event.id, timestamp: event.timestamp, clockLabel: "Effective at",
+      available: event.available_at, evidence: event.evidence,
+      description: `Account/platform charge: ${pounds(event.amount_gbp, true)} · ${accountDisplay(data, event.account_id)}`,
     })),
     ...data.recorded_corrections.map(event => ({
       id: event.id, timestamp: event.timestamp, clockLabel: "Correction recorded at",
@@ -663,7 +726,7 @@ type RecordingProduct = { id: string; name: string; sleeve: "equity" | "bond";
   quantity_increment: string; minimum_notional_gbp: string };
 type CorrectableEvent = {
   id: string; type: "contribution" | "withdrawal" | "transfer" | "interest" | "dividend" |
-    "buy" | "sell" | "split" | "mark";
+    "buy" | "sell" | "account_fee" | "split" | "mark";
   account_id: string; currency: "GBP"; timestamp: string; available_at: string; evidence: string;
   amount_gbp?: string; destination_account_id?: string; product_id?: string;
   quantity?: string; price_gbp?: string; fee_gbp?: string; ratio?: string;
@@ -672,12 +735,67 @@ type RecordingSession = { enabled: boolean; csrf: string | null;
   opened: boolean; accounts: RecordingAccount[]; products: RecordingProduct[];
   latest_correctable_event: CorrectableEvent | null; correctable_events: CorrectableEvent[];
   current_balances: Record<string, string>;
-  current_holdings: { account_id: string; product_id: string; quantity: string }[] };
+  current_holdings: { account_id: string; product_id: string; quantity: string }[];
+  portfolio_id?: string; revision?: number };
 type RecordingPreview = { preview_id: string; revision: number; event: Record<string, unknown>;
   before: InvestmentSnapshot; after: InvestmentSnapshot;
   expires_at: string };
 type OpeningHoldingInput = { account_id: string; product_id: string; quantity: string; price_gbp: string };
 type ScopeHoldingInput = OpeningHoldingInput & { existing: boolean };
+type RecordingDraftValues = {
+  kind: string; role: string; assignmentAsset: string; accountId: string; destinationAccountId: string;
+  productId: string; amount: string; price: string; quantity: string; fee: string; source: string;
+  evidence: string; roleEvidence: string; effectiveAt: string; availableAt: string;
+  balances: Record<string, string>; openingHoldings: OpeningHoldingInput[];
+  correctionEventId: string; profileAction: string; profileTarget: string; profileEntityId: string;
+  profileName: string; newProductId: string; newProductSleeve: string; newProductIncrement: string;
+  newProductMinimum: string; newAccountId: string; newAccountName: string; newAccountBinding: string;
+  newAccountKind: string; newAccountCash: string; scopeBalances: Record<string, string>;
+  scopeHoldings: ScopeHoldingInput[]; ratio: string;
+};
+type RecordingDraft = { version: 1; portfolio_id: string; revision: number;
+  route: string; values: RecordingDraftValues };
+
+const RECORDING_DRAFT_PREFIX = "goldscout.recording-draft.v1.";
+
+function recordingDraftKey(portfolioId: string, route: string) {
+  return `${RECORDING_DRAFT_PREFIX}${encodeURIComponent(portfolioId)}.${encodeURIComponent(route)}`;
+}
+
+function isRecordingDraft(value: unknown, portfolioId: string, revision: number,
+  route: string): value is RecordingDraft {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const draft = value as Record<string, unknown>;
+  const values = draft.values;
+  if (typeof values !== "object" || values === null || Array.isArray(values)) return false;
+  const fields = values as Record<string, unknown>;
+  const strings = [
+    "kind", "role", "assignmentAsset", "accountId", "destinationAccountId", "productId",
+    "amount", "price", "quantity", "fee", "source", "evidence", "roleEvidence",
+    "effectiveAt", "availableAt", "correctionEventId", "profileAction", "profileTarget",
+    "profileEntityId", "profileName", "newProductId", "newProductSleeve", "newProductIncrement",
+    "newProductMinimum", "newAccountId", "newAccountName", "newAccountBinding", "newAccountKind",
+    "newAccountCash", "ratio",
+  ];
+  const isText = (item: unknown) => typeof item === "string" && item.length <= 2000;
+  const isStringMap = (item: unknown) => typeof item === "object" && item !== null &&
+    !Array.isArray(item) && Object.keys(item).length <= 100 &&
+    Object.values(item).every(value => typeof value === "string" && value.length <= 200);
+  const isOpeningRows = (item: unknown) => Array.isArray(item) && item.length <= 5000 &&
+    item.every(row => typeof row === "object" && row !== null &&
+      isText(row.account_id) && isText(row.product_id) &&
+      isText(row.quantity) && isText(row.price_gbp));
+  const isScopeRows = (item: unknown) => Array.isArray(item) && item.length <= 5000 &&
+    item.every(row => typeof row === "object" && row !== null &&
+      isText(row.account_id) && isText(row.product_id) &&
+      isText(row.quantity) && isText(row.price_gbp) && typeof row.existing === "boolean");
+  return draft.version === 1 && draft.portfolio_id === portfolioId &&
+    draft.revision === revision && draft.route === route &&
+    Object.keys(fields).length === strings.length + 4 &&
+    strings.every(key => isText(fields[key])) &&
+    isStringMap(fields.balances) && isOpeningRows(fields.openingHoldings) &&
+    isStringMap(fields.scopeBalances) && isScopeRows(fields.scopeHoldings);
+}
 
 function losesReportedMetrics(preview: RecordingPreview): string[] {
   const { before, after } = preview;
@@ -731,14 +849,15 @@ function RecordingImpact({ preview }: { preview: RecordingPreview }) {
 
 const recordNames: Record<string, string> = {
   contribution: "Money added", withdrawal: "Money withdrawn", transfer: "Transfer between my accounts",
-  interest: "Interest received", dividend: "Dividend received", cash_observation: "Check a cash balance",
+  interest: "Interest received", dividend: "Dividend received", account_fee: "Account or platform charge",
+  cash_observation: "Check a cash balance",
   buy: "Investment bought", sell: "Investment sold", mark: "Update an investment price",
   split: "Share or unit split", role_assignment: "Assign an optional role",
   profile_change: "Change an account or investment", scope_addition: "Add an existing account",
   correction: "Correct an earlier record", opening: "Starting balances",
 };
 const recordGroups = [
-  { id: "money", name: "Money and income", kinds: ["contribution", "withdrawal", "transfer", "interest", "dividend"] },
+  { id: "money", name: "Money, income and charges", kinds: ["contribution", "withdrawal", "transfer", "interest", "dividend", "account_fee"] },
   { id: "investment", name: "Investments", kinds: ["buy", "sell", "mark", "split"] },
   { id: "balance", name: "Check a cash balance", kinds: ["cash_observation"] },
   { id: "other", name: "Something else", kinds: ["role_assignment", "profile_change", "scope_addition", "correction"] },
@@ -804,7 +923,7 @@ function RecordReview({ preview, session }: { preview: RecordingPreview; session
   const newProduct = typeof event.product === "object" && event.product !== null
     ? event.product as Record<string, unknown> : null;
   const defaultRole = (item: Record<string, unknown>) =>
-    typeof item.type === "string" && ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell"].includes(item.type)
+    typeof item.type === "string" && ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "account_fee"].includes(item.type)
       && item.role === undefined;
   return <section className="record-review" aria-label="Record summary">
     <h4>{recordNames[kind] ?? label(kind)} — check before saving</h4>
@@ -928,12 +1047,61 @@ function InvestmentRecording() {
   });
   const [pending, setPending] = useState<PendingRecording | null>(pendingState.pending);
   const [storageError, setStorageError] = useState(pendingState.error);
+  const [draftKey, setDraftKey] = useState<string | null>(null);
+  const [draftStatus, setDraftStatus] = useState<"loading" | "none" | "saved" | "stale" | "error">("loading");
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [draftError, setDraftError] = useState("");
   const resolvedConfirmation = useRef(false);
 
   useEffect(() => {
     let active = true;
     setSession(null);
     setPreview(null);
+    setDraftReady(false);
+    setDraftDirty(false);
+    setDraftKey(null);
+    setDraftStatus("loading");
+    setDraftError("");
+    setKind("");
+    setRole("unassigned");
+    setAssignmentAsset("cash");
+    setAccountId("");
+    setDestinationAccountId("");
+    setProductId("");
+    setAmount("");
+    setPrice("");
+    setQuantity("");
+    setFee("");
+    setSource("");
+    setEvidence("");
+    setRoleEvidence("");
+    setEffectiveAt("");
+    setAvailableAt("");
+    setBalances({});
+    setOpeningHoldings([]);
+    setCorrectionEventId("");
+    setProfileAction("add_product");
+    setProfileTarget("product");
+    setProfileEntityId("");
+    setProfileName("");
+    setNewProductId("");
+    setNewProductSleeve("equity");
+    setNewProductIncrement("");
+    setNewProductMinimum("");
+    setNewAccountId("");
+    setNewAccountName("");
+    setNewAccountBinding("");
+    setNewAccountKind("broker");
+    setNewAccountCash("");
+    setScopeBalances({});
+    setScopeHoldings([]);
+    setRatio("");
+    setPriceTargetStatus(null);
+    setCashTargetStatus(null);
+    setUpdateTargetStatus(null);
+    setImpactAcknowledged(false);
+    setMessage(null);
     async function refreshSession() {
       try {
         const result = await recordingRequest<RecordingSession>(
@@ -956,8 +1124,8 @@ function InvestmentRecording() {
         if (accountUpdate) {
           const requestedKind = params.get("kind") ?? "";
           const allowed = cashAccount?.kind === "broker"
-            ? ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "cash_observation", "mark"]
-            : ["contribution", "withdrawal", "transfer", "interest", "cash_observation"];
+            ? ["contribution", "withdrawal", "transfer", "interest", "dividend", "account_fee", "buy", "sell", "cash_observation", "mark"]
+            : ["contribution", "withdrawal", "transfer", "interest", "account_fee", "cash_observation"];
           const matches = result.opened && cashAccount && allowed.includes(requestedKind) &&
             (requestedKind !== "mark" || (product && stillHeld));
           setPreview(null);
@@ -1014,6 +1182,60 @@ function InvestmentRecording() {
         setScopeHoldings(current => current.length ? current : result.current_holdings.map(holding => ({
           ...holding, price_gbp: "", existing: true,
         })));
+        if (result.portfolio_id && Number.isSafeInteger(result.revision) && result.revision! >= 0) {
+          const key = recordingDraftKey(result.portfolio_id, search);
+          setDraftKey(key);
+          try {
+            const raw = window.localStorage.getItem(key);
+            if (raw === null) {
+              setDraftStatus("none");
+            } else if (raw.length > 1_000_000) {
+              setDraftStatus("error");
+              setDraftError("Saved recording draft is too large to restore. It was left unchanged.");
+            } else {
+              const saved: unknown = JSON.parse(raw);
+              if (!isRecordingDraft(saved, result.portfolio_id, result.revision!, search)) {
+                setDraftStatus("stale");
+                setDraftError("This saved draft no longer matches the current journal revision or record type. Discard it before entering a new record.");
+              } else {
+                const values = saved.values;
+                setKind(values.kind);
+                setRole(values.role as "core" | "dynamic" | "unassigned");
+                setAssignmentAsset(values.assignmentAsset as "cash" | "holding");
+                setAccountId(values.accountId);
+                setDestinationAccountId(values.destinationAccountId);
+                setProductId(values.productId);
+                setAmount(values.amount); setPrice(values.price); setQuantity(values.quantity);
+                setFee(values.fee); setSource(values.source); setEvidence(values.evidence);
+                setRoleEvidence(values.roleEvidence); setEffectiveAt(values.effectiveAt);
+                setAvailableAt(values.availableAt); setBalances(values.balances);
+                setOpeningHoldings(values.openingHoldings);
+                setCorrectionEventId(values.correctionEventId);
+                setProfileAction(values.profileAction as "add_product" | "rename" | "retire");
+                setProfileTarget(values.profileTarget as "account" | "product");
+                setProfileEntityId(values.profileEntityId); setProfileName(values.profileName);
+                setNewProductId(values.newProductId);
+                setNewProductSleeve(values.newProductSleeve as "equity" | "bond");
+                setNewProductIncrement(values.newProductIncrement);
+                setNewProductMinimum(values.newProductMinimum);
+                setNewAccountId(values.newAccountId); setNewAccountName(values.newAccountName);
+                setNewAccountBinding(values.newAccountBinding);
+                setNewAccountKind(values.newAccountKind as "broker" | "deposit");
+                setNewAccountCash(values.newAccountCash); setScopeBalances(values.scopeBalances);
+                setScopeHoldings(values.scopeHoldings); setRatio(values.ratio);
+                setDraftDirty(true);
+                setDraftStatus("saved");
+              }
+            }
+          } catch {
+            setDraftStatus("error");
+            setDraftError("The saved recording draft could not be read. It was not changed.");
+          }
+        } else {
+          setDraftKey(null);
+          setDraftStatus("none");
+        }
+        setDraftReady(true);
       } catch (error) {
         if (active) setLoadError(error instanceof Error ? error.message : "recording_session_unavailable");
       }
@@ -1021,6 +1243,40 @@ function InvestmentRecording() {
     void refreshSession();
     return () => { active = false; };
   }, [search]);
+  useEffect(() => {
+    if (!draftReady || !draftDirty || !draftKey ||
+        draftStatus === "stale" || draftStatus === "error" || preview || pending || !session ||
+        !session.portfolio_id || typeof session.revision !== "number" ||
+        !Number.isSafeInteger(session.revision)) return;
+    try {
+      const values: RecordingDraftValues = {
+        kind, role, assignmentAsset, accountId, destinationAccountId, productId,
+        amount, price, quantity, fee, source, evidence, roleEvidence, effectiveAt,
+        availableAt, balances, openingHoldings, correctionEventId, profileAction,
+        profileTarget, profileEntityId, profileName, newProductId, newProductSleeve,
+        newProductIncrement, newProductMinimum, newAccountId, newAccountName,
+        newAccountBinding, newAccountKind, newAccountCash, scopeBalances,
+        scopeHoldings, ratio,
+      };
+      const raw = JSON.stringify({
+        version: 1, portfolio_id: session.portfolio_id, revision: session.revision,
+        route: search, values,
+      } satisfies RecordingDraft);
+      if (raw.length > 1_000_000) throw new Error("Recording draft exceeds the browser storage limit.");
+      window.localStorage.setItem(draftKey, raw);
+      setDraftStatus("saved");
+      setDraftError("");
+    } catch (error) {
+      setDraftStatus("error");
+      setDraftError(error instanceof Error ? error.message : "The recording draft could not be saved.");
+    }
+  }, [draftReady, draftDirty, draftKey, draftStatus, preview, pending, session, search,
+    kind, role, assignmentAsset, accountId, destinationAccountId, productId, amount,
+    price, quantity, fee, source, evidence, roleEvidence, effectiveAt, availableAt,
+    balances, openingHoldings, correctionEventId, profileAction, profileTarget,
+    profileEntityId, profileName, newProductId, newProductSleeve, newProductIncrement,
+    newProductMinimum, newAccountId, newAccountName, newAccountBinding, newAccountKind,
+    newAccountCash, scopeBalances, scopeHoldings, ratio]);
   useEffect(() => {
     const changed = (event: StorageEvent) => {
       if (event.key !== PENDING_RECORDING_KEY && event.key !== null) return;
@@ -1069,7 +1325,7 @@ function InvestmentRecording() {
         const replacement: Record<string, unknown> = {
           ...original, id: crypto.randomUUID(), available_at: available, evidence,
         };
-        if (["contribution", "withdrawal", "interest", "dividend", "transfer"].includes(original.type))
+        if (["contribution", "withdrawal", "interest", "dividend", "transfer", "account_fee"].includes(original.type))
           replacement.amount_gbp = amount;
         if (original.type === "interest" || original.type === "dividend")
           replacement.role_evidence = roleEvidence;
@@ -1184,7 +1440,15 @@ function InvestmentRecording() {
       resolvedConfirmation.current = true;
       setPending(null);
       setPreview(null);
-      setMessage("Record committed. Refreshing the recorded portfolio.");
+      let savedDraftNotice = "";
+      try {
+        if (draftKey) window.localStorage.removeItem(draftKey);
+        setDraftStatus("none");
+        setDraftDirty(false);
+      } catch {
+        savedDraftNotice = " The old browser draft could not be cleared; it is bound to the previous journal revision and will not be restored.";
+      }
+      setMessage(`Record committed. Refreshing the recorded portfolio.${savedDraftNotice}`);
       const updateAccount = new URLSearchParams(search).get("account_id");
       if (updateTargetStatus === "matched" && updateAccount)
         window.location.assign(`/investment/update?account_id=${encodeURIComponent(updateAccount)}`);
@@ -1249,15 +1513,36 @@ function InvestmentRecording() {
   const correction = session.correctable_events.find(item => item.id === correctionEventId) ?? null;
   const recordType = kind === "correction" ? correction?.type : kind;
   const availableKinds = opened
-    ? ["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "split",
+    ? ["contribution", "withdrawal", "transfer", "interest", "dividend", "account_fee", "buy", "sell", "split",
       "mark", "cash_observation", "role_assignment", "profile_change", "scope_addition",
       ...(session.correctable_events.length ? ["correction"] : [])]
     : ["opening"];
   const selectedProduct = session.products.find(product => product.id === productId);
+  const discardRecordingDraft = () => {
+    try {
+      if (draftKey) window.localStorage.removeItem(draftKey);
+      setDraftStatus("none");
+      setDraftDirty(false);
+      setDraftError("");
+    } catch {
+      setDraftStatus("error");
+      setDraftError("The saved draft could not be cleared from this browser.");
+    }
+  };
 
   return <section className="history-group investment-recording" aria-label="Manual recording">
     <h2>Record details</h2>
     <p>Enter a completed transaction or sourced figure. Review the preview before saving; entries are not independently verified.</p>
+    {draftStatus === "saved" && <p className="position-note">
+      A draft was restored from this browser. Its preview and confirmation were not saved; check all details and request a fresh preview.
+    </p>}
+    {draftStatus === "stale" || draftStatus === "error" ? <div role="alert">
+      <p>{draftError}</p><button type="button" onClick={discardRecordingDraft}>Discard saved draft</button>
+    </div> : null}
+    {draftStatus === "none" && session.portfolio_id && <p className="position-note">
+      Unsaved form details are saved in this browser on this computer. Previews are always requested afresh.
+      If an earlier save had an uncertain result, its exact retry reference is retained and a new entry is blocked until it is resolved.
+    </p>}
     {updateTargetStatus === "matched" && <p className="position-note">
       Started from a guided account update. Check the preselected account against your source.
       {" "}<NavLink to={`/investment/update?account_id=${encodeURIComponent(new URLSearchParams(search).get("account_id") ?? "")}`}>Return to the account review</NavLink>.
@@ -1291,7 +1576,11 @@ function InvestmentRecording() {
       <button type="button" disabled={busy || (!pending && losesReportedMetrics(preview).length > 0 && !impactAcknowledged)}
         onClick={() => void confirmPreview()}>{pending ? "Retry same confirmation" : "Confirm and append record"}</button>
       <button type="button" disabled={busy || Boolean(pending)} onClick={() => setPreview(null)}>Cancel preview</button>
-    </div> : <form className="recording-form" onSubmit={makePreview}>
+    </div> : <form className="recording-form" onSubmit={makePreview}
+      onChange={() => setDraftDirty(true)}
+      onClickCapture={event => {
+        if (event.target instanceof Element && event.target.closest("button")) setDraftDirty(true);
+      }}>
       {opened && <label>What are you recording?<select required value={kind}
         onChange={event => {
           setKind(event.target.value); setCorrectionEventId("");
@@ -1306,7 +1595,7 @@ function InvestmentRecording() {
       </select></label>}
       <details className="help-disclosure"><summary>Which record should I choose?</summary>
         <p>Money added or withdrawn changes recorded cash; a transfer moves cash between tracked accounts. Buy or sell records a completed trade; a price update changes valuation only.</p>
-        <p>A cash check compares a source with recorded cash without changing it. Add an account when bringing existing assets into view, not when depositing money.</p>
+        <p>A cash check compares a source with recorded cash without changing it. Record an account/platform charge as a cost, not as an external withdrawal. Add an account when bringing existing assets into view, not when depositing money.</p>
         <p>Roles are optional labels, not targets or trade approval. Match the role already recorded; unassigned is not core or dynamic.</p>
       </details>
       {["contribution", "withdrawal"].includes(kind) && <p className="recording-preflight">
@@ -1334,7 +1623,7 @@ function InvestmentRecording() {
           {label(item.type)} · {item.id} · {timestamp(item.timestamp)}
         </option>)}
       </select></label>}
-      {["contribution", "withdrawal", "transfer", "interest", "dividend", "buy", "sell", "role_assignment"].includes(kind) &&
+      {["contribution", "withdrawal", "transfer", "interest", "dividend", "account_fee", "buy", "sell", "role_assignment"].includes(kind) &&
         <label>Optional role<select aria-label="Optional role" aria-describedby="record-role-help" value={role} onChange={event => {
           setRole(event.target.value as "core" | "dynamic" | "unassigned"); setRoleEvidence("");
         }}>
@@ -1516,12 +1805,13 @@ function InvestmentRecording() {
         <option value="">Choose investment</option>
         {session.products.map(product => <option key={product.id} value={product.id}>{product.name} ({product.id})</option>)}
       </select></label>}
-      {(["contribution", "withdrawal", "interest", "dividend", "transfer", "cash_observation", "role_assignment"]
+      {(["contribution", "withdrawal", "interest", "dividend", "transfer", "account_fee", "cash_observation", "role_assignment"]
         .includes(kind) || kind === "correction" &&
-        ["contribution", "withdrawal", "interest", "dividend", "transfer"].includes(recordType ?? "")) &&
+        ["contribution", "withdrawal", "interest", "dividend", "transfer", "account_fee"].includes(recordType ?? "")) &&
         <label>{kind === "cash_observation" ? "Observed GBP balance" :
           kind === "correction" ? "Corrected GBP amount" :
-          kind === "role_assignment" && assignmentAsset === "holding" ? "Number of units to label" : "GBP amount"}
+          kind === "role_assignment" && assignmentAsset === "holding" ? "Number of units to label" :
+          kind === "account_fee" ? "Charge amount (GBP)" : "GBP amount"}
           <input required inputMode="decimal"
             value={amount}
             onChange={event => setAmount(event.target.value)} />
@@ -1635,15 +1925,26 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
   useEffect(() => {
     if (!data || data.source_mode !== "recorded") {
       setCheckpoint(null);
+      setCheckpointError("");
       return;
     }
-    try {
-      setCheckpoint(readReviewCheckpoint(data.portfolio_id));
-      setCheckpointError("");
-    } catch (reason) {
-      setCheckpointError(reason instanceof Error
-        ? reason.message : "The saved review checkpoint could not be read.");
+    const portfolioId = data.portfolio_id;
+    const key = `goldscout.review-checkpoint.v1.${portfolioId}`;
+    function loadCheckpoint() {
+      try {
+        setCheckpoint(readReviewCheckpoint(portfolioId));
+        setCheckpointError("");
+      } catch {
+        setCheckpoint(null);
+        setCheckpointError("The saved comparison point could not be read. It was not changed; check this browser's saved data before continuing.");
+      }
     }
+    function onStorage(event: StorageEvent) {
+      if (event.key === null || event.key === key) loadCheckpoint();
+    }
+    loadCheckpoint();
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [data?.portfolio_id, data?.source_mode]);
 
   function markReviewed() {
@@ -1673,6 +1974,7 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
   ] : [];
   return <article className="investment-view">
     <div className="record-toolbar">
+      {data?.source_mode === "recorded" && <a className="record-action" href="#account-review">Review accounts</a>}
       {data?.source_mode === "recorded" && <NavLink className="record-action" to="/investment/record">Add a record</NavLink>}
       <button className="icon-button refresh" aria-label="Refresh investment" disabled={query.isFetching} onClick={() => void query.refetch()}>
         <RefreshCw size={19} className={query.isFetching ? "spin" : ""} />
@@ -1702,30 +2004,36 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
             <div><span>Net money added</span><strong className={metricValues[1].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[1]}</strong><small>Deposits less withdrawals</small></div>
             <div><span>Gain since tracking began</span><strong className={metricValues[2].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[2]}</strong><small>Net of recorded fees</small></div>
           </section>
+          <p className="position-note">Net money added is deposits less withdrawals, not investment gain. Gain since tracking began subtracts recorded net flows and newly included account value from the value change; it reflects only activity and charges entered in the journal. Percentage return is separate and needs complete evidence at relevant dates. Missing history makes it unavailable, not zero.</p>
           <InvestmentNextSteps data={data} onReviewCashEvidence={() => {
             if (accountsRef.current) accountsRef.current.open = true;
           }} />
-          {data.source_mode === "recorded" && <AccountMaintenance data={data} now={now} />}
-          {data.source_mode === "recorded" && <RecoveryPanel />}
+          {checkpointError
+            ? <p role="status">The value comparison is unavailable because the saved comparison point could not be read.</p>
+            : <RecordedValueChanges data={data} selection={valueChangeSelection}
+              onSelect={setValueChangeSelection}
+              checkpointTimestamp={checkpoint?.portfolioId === data.portfolio_id
+                ? checkpoint.valuationTimestamp : null} />}
           <section className="history-group review-checkpoint" aria-label="Review continuity">
-            <h2>Since your last review</h2>
-            <p className="position-note">A review checkpoint stores the date and journal revision only in this browser.
-              It does not snapshot, alter or verify journal evidence.</p>
+            <h2>Save a value for next time</h2>
+            <p className="position-note">This saves the complete portfolio value's date and journal revision in this browser only.
+              It replaces the previous comparison point; it does not mark accounts checked or verify their balances.</p>
             {checkpointError && <p role="alert">{checkpointError}</p>}
-            {checkpoint && <p>Last marked {timestamp(checkpoint.savedAt)} at journal revision {checkpoint.journalRevision}.
-              {" "}The comparison starts from the complete recorded value dated {timestamp(checkpoint.valuationTimestamp)}.
+            {checkpoint && <p>Saved {timestamp(checkpoint.savedAt)} at journal revision {checkpoint.journalRevision}.
+              {" "}The saved comparison point is the complete recorded value dated {timestamp(checkpoint.valuationTimestamp)}.
               {checkpoint.journalRevision !== data.revision && " Journal records have changed since that checkpoint."}</p>}
-            {!checkpoint && <p>No review checkpoint is saved in this browser yet.</p>}
+            {!checkpoint && !checkpointError && <p>No comparison point is saved in this browser yet.</p>}
             <button type="button" disabled={data.source_mode !== "recorded" || !data.complete || !data.as_of || Boolean(checkpointError)}
-              onClick={markReviewed}>Mark this complete recorded value as reviewed</button>
-            {(!data.complete || !data.as_of) && <p role="status">A checkpoint is unavailable until a complete recorded value exists.</p>}
+              onClick={markReviewed}>Save this value for the next comparison</button>
+            {(!data.complete || !data.as_of) && <p role="status">A comparison point is unavailable until a complete recorded value exists.</p>}
           </section>
-          <RecordedValueChanges data={data} selection={valueChangeSelection}
-            onSelect={setValueChangeSelection}
-            checkpointTimestamp={checkpoint?.portfolioId === data.portfolio_id
-              ? checkpoint.valuationTimestamp : null} />
+          {data.source_mode === "recorded" && <AccountMaintenance data={data} now={now}
+            onReviewCashEvidence={() => {
+              if (accountsRef.current) accountsRef.current.open = true;
+            }} />}
           <AccountAndHoldingsSummary data={data} now={now} />
           <RecentActivity data={data} />
+          {data.source_mode === "recorded" && <RecoveryPanel />}
         </>}
     <EToroPortfolioPanel journal={data} now={now} />
     {data && <>
@@ -1800,9 +2108,9 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
             <summary>Journal records</summary>
           <section className="history-group" aria-label="Recorded fees and income">
             <h2>Recorded fees and income</h2>
-            <p className="position-note">The fee total sums only explicitly recorded buy/sell fees, including any before the baseline. It is not an all-in cost total: platform or account charges, tax and FX may be missing, and spread or slippage are not separately measured.</p>
+            <p className="position-note">The total includes explicitly recorded trade fees and account/platform charges, including any before the baseline. It is not an all-in cost total: fund charges inside prices, tax, FX and other costs may be missing; spread or slippage are not separately measured.</p>
             <dl className="health-facts">
-              <div><dt>Recorded transaction fees</dt><dd>{pounds(data.recorded_fees_gbp)}</dd></div>
+              <div><dt>Recorded trade and account charges</dt><dd>{pounds(data.recorded_fees_gbp)}</dd></div>
               <div><dt>Recorded interest</dt><dd>{pounds(data.recorded_interest_gbp)}</dd></div>
               <div><dt>Recorded dividends</dt><dd>{pounds(data.recorded_dividends_gbp)}</dd></div>
               <div><dt>Recorded income total</dt><dd>{pounds(data.recorded_income_gbp)}</dd></div>
@@ -1818,6 +2126,19 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
                       <td>{label(event.role)}</td><td>{accountReference(data, event.account_id)}</td>
                       <td>{productReference(data, event.product_id)}</td><td>{event.quantity}</td>
                       <td>{pounds(event.price_gbp)}</td><td>{pounds(event.fee_gbp)}</td>
+                      <td>{timestamp(event.available_at)}</td><td>{event.evidence}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </>}
+            {data.recorded_account_fees.length > 0 && <>
+              <h3>Recorded account and platform charges</h3>
+              <p className="position-note">Showing the latest {Math.min(data.recorded_account_fees.length, 100)} journal entries in original order.</p>
+              <div className="table-scroll" tabIndex={0} aria-label="Recorded account charge history">
+                <table>
+                  <thead><tr><th>Effective at (UTC)</th><th>Role</th><th>Account</th><th>Amount</th><th>Available at</th><th>Evidence</th></tr></thead>
+                  <tbody>{data.recorded_account_fees.slice(-100).map(event =>
+                    <tr key={event.id}><td>{timestamp(event.timestamp)}</td><td>{label(event.role)}</td>
+                      <td>{accountReference(data, event.account_id)}</td><td>{pounds(event.amount_gbp)}</td>
                       <td>{timestamp(event.available_at)}</td><td>{event.evidence}</td></tr>)}</tbody>
                 </table>
               </div>
