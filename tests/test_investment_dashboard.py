@@ -3,12 +3,15 @@ import io
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from dashboard.app import create_app
+from dashboard.investment_recording import RecordingSessions
 from fastapi.testclient import TestClient
 from investment import InvestmentError
 from dashboard.investment_demo import demo_opening_snapshot
@@ -360,6 +363,181 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(retried.json()["revision"], 2)
             self.assertEqual(
                 snapshot(self.path, OPENING_NOW)["recorded_interest_gbp"], "5")
+
+    def test_profile_change_confirmation_does_not_depend_on_post_commit_read(self):
+        self.now = OPENING_NOW + timedelta(hours=1)
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        with self.client(
+                investment_database=self.path,
+                investment_recording_enabled=True) as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            rename = {
+                "id": "rename-retry", "type": "profile_change",
+                "timestamp": iso(self.now), "available_at": iso(self.now),
+                "evidence": "Synthetic product documentation", "action": "rename",
+                "target": "product", "entity_id": "equity", "name": "Renamed equity",
+            }
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "rename-retry", "event": rename}, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            original_read = investment_store.read
+            calls = 0
+
+            def fail_post_commit(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    raise InvestmentError("Synthetic post-commit read failure")
+                return original_read(*args, **kwargs)
+
+            with patch("dashboard.investment_recording.read", side_effect=fail_post_commit):
+                confirmed = client.post(
+                    "/api/investment/v1/recording/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(confirmed.status_code, 200, confirmed.text)
+            self.assertEqual(confirmed.json(), {"id": "rename-retry", "revision": 2})
+            self.assertEqual(calls, 1)
+            retried = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(retried.status_code, 200, retried.text)
+            self.assertEqual(retried.json(), {"id": "rename-retry", "revision": 2})
+            session = client.get("/api/investment/v1/recording/session")
+            self.assertEqual(session.status_code, 200, session.text)
+            self.assertEqual(session.json()["products"][0]["name"], "Renamed equity")
+            value = event("after-rename", "interest", self.now, "bank", amount_gbp="5")
+            next_preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "after-rename", "event": value}, headers=headers)
+            self.assertEqual(next_preview.status_code, 200, next_preview.text)
+            receipt = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": next_preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(receipt.status_code, 200, receipt.text)
+            self.assertEqual(receipt.json()["revision"], 3)
+
+    def test_confirmation_does_not_adopt_an_intervening_profile_change(self):
+        self.now = OPENING_NOW + timedelta(hours=1)
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        with self.client(
+                investment_database=self.path,
+                investment_recording_enabled=True) as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1",
+                       "X-CSRF-Token": session["csrf"]}
+            rename = {
+                "id": "rename-expected", "type": "profile_change",
+                "timestamp": iso(self.now), "available_at": iso(self.now),
+                "evidence": "Synthetic product documentation", "action": "rename",
+                "target": "product", "entity_id": "equity", "name": "Renamed equity",
+            }
+            preview = client.post(
+                "/api/investment/v1/recording/preview",
+                json={"request_id": "rename-expected", "event": rename}, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            real_commit = investment_store.commit_record
+
+            def commit_then_external_change(*args, **kwargs):
+                receipt = real_commit(*args, **kwargs)
+                other = {**rename, "id": "external-rename", "entity_id": "bond",
+                         "name": "External bond name"}
+                import_events(self.path, [other], self.now)
+                return receipt
+
+            with patch("dashboard.investment_recording.commit_record",
+                       side_effect=commit_then_external_change):
+                confirmed = client.post(
+                    "/api/investment/v1/recording/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(confirmed.status_code, 200, confirmed.text)
+            self.assertEqual(confirmed.json(), {"id": "rename-expected", "revision": 2})
+            retried = client.post(
+                "/api/investment/v1/recording/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(retried.json(), confirmed.json())
+            session = client.get("/api/investment/v1/recording/session")
+            self.assertEqual(session.status_code, 409)
+            self.assertEqual(session.json()["error"], "investment_store_changed")
+
+    def test_concurrent_confirmations_publish_profile_in_commit_order(self):
+        self.now = OPENING_NOW + timedelta(hours=1)
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        sessions = RecordingSessions(self.path, lambda: self.now)
+        token, _ = sessions.session(None, self.now, create=True)
+        interest = event("concurrent-interest", "interest", self.now, "bank", amount_gbp="5")
+        first = sessions.preview(token, "interest", interest, self.now)
+        committed = threading.Event()
+        release = threading.Event()
+        second_started = threading.Event()
+        second_committed = threading.Event()
+        real_commit = investment_store.commit_record
+
+        def delayed_commit(database, preview, now):
+            receipt = real_commit(database, preview, now)
+            if receipt["id"] == "concurrent-interest":
+                committed.set()
+                if not release.wait(5):
+                    raise AssertionError("First confirmation was not released")
+            else:
+                second_committed.set()
+            return receipt
+
+        def confirm_second(preview_id):
+            second_started.set()
+            return sessions.confirm(token, preview_id, self.now)
+
+        rename = {
+            "id": "concurrent-rename", "type": "profile_change",
+            "timestamp": iso(self.now), "available_at": iso(self.now),
+            "evidence": "Synthetic product documentation", "action": "rename",
+            "target": "product", "entity_id": "equity", "name": "Renamed equity",
+        }
+        with patch("dashboard.investment_recording.commit_record", side_effect=delayed_commit):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                pending = executor.submit(sessions.confirm, token, first["preview_id"], self.now)
+                try:
+                    self.assertTrue(committed.wait(5))
+                    second = sessions.preview(token, "rename", rename, self.now)
+                    later = executor.submit(confirm_second, second["preview_id"])
+                    self.assertTrue(second_started.wait(5))
+                    self.assertFalse(second_committed.wait(0.2))
+                finally:
+                    release.set()
+                self.assertEqual(pending.result(timeout=5)["revision"], 2)
+                self.assertEqual(later.result(timeout=5)["revision"], 3)
+        self.assertEqual(sessions.session_payload(token, self.now)["products"][0]["name"],
+                         "Renamed equity")
+
+    def test_scope_confirmation_replays_same_clock_evidence(self):
+        self.now = OPENING_NOW + timedelta(days=1)
+        initialize(self.path, profile(), OPENING_NOW)
+        initial = {**opening(), "holdings": []}
+        buy = event("same-clock-buy", "buy", self.now, "broker",
+                    product_id="equity", quantity="1", price_gbp="10", fee_gbp="0")
+        import_events(self.path, [initial, buy], self.now)
+        sessions = RecordingSessions(self.path, lambda: self.now)
+        token = sessions.session_payload(None, self.now)["_token"]
+        scope = {
+            "id": "same-clock-scope", "type": "scope_addition",
+            "timestamp": iso(self.now), "available_at": iso(self.now),
+            "evidence": "Synthetic account evidence",
+            "account": {"id": "new-bank", "name": "New bank", "kind": "deposit",
+                        "binding": "new-bank-test", "currency": "GBP"},
+            "balances_gbp": {"bank": "1000", "broker": "90", "new-bank": "20"},
+            "holdings": [{"account_id": "broker", "product_id": "equity",
+                          "quantity": "1", "price_gbp": "10"}],
+        }
+        preview = sessions.preview(token, "scope", scope, self.now)
+        self.assertEqual(sessions.confirm(token, preview["preview_id"], self.now),
+                         {"id": "same-clock-scope", "revision": 3})
+        self.assertIn("new-bank", [account["id"] for account in
+                                   sessions.session_payload(token, self.now)["accounts"]])
 
     def test_confirmation_missing_store_race_is_retryable_with_same_preview(self):
         self.now = OPENING_NOW

@@ -36,7 +36,7 @@ export function App() {
   const [now, setNow] = useState(Date.now());
   const [valueChangeSelection, setValueChangeSelection] = useState<ValueChangeSelection | null>(null);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(timer);
   }, []);
 
@@ -79,9 +79,9 @@ export function App() {
     : intelligence.data ? `Snapshot ${timestamp(intelligence.data.generated_at)}` : "Source unknown";
   return <div className="shell">
     <aside className="sidebar">
-      <NavLink to="/investment" className="brand" aria-label="GoldScout portfolio records">
+      <NavLink to="/investment" className="brand" aria-label="GoldScout Portfolio Manager">
         <span className="brand-mark"><Activity size={24} /></span>
-        <span className="brand-name">GoldScout<small>Portfolio records</small></span>
+        <span className="brand-name">GoldScout<small>Portfolio Manager</small></span>
       </NavLink>
       <div className="nav-groups">
         <div className="nav-section"><span className="nav-section-label">PORTFOLIO</span>

@@ -748,6 +748,7 @@ test("revision-zero recovery prefills only the original locked profile and recon
   const api = await setupRoutes(page, {
     state: "recoverable", recovery: recovery(), partial: true, uncommitted: true,
   });
+
   await page.goto("/setup");
   await expect(page.getByRole("button", { name: "Preview verified recovery" })).toHaveCount(0);
   await page.getByRole("button", { name: "Re-enter original opening evidence" }).click();
@@ -782,6 +783,23 @@ test("revision-zero recovery prefills only the original locked profile and recon
   await expect(page.getByRole("status")).toContainText("Journal committed: no");
   await expect(page.getByRole("button", { name: "Open portfolio" })).toHaveCount(0);
   expect(api.calls.map(call => call.path)).toEqual(["preview", "confirm"]);
+});
+
+test("re-entered recovery evidence warns before unloading, including from guidance", async ({ page }) => {
+  await setupRoutes(page, { state: "recoverable", recovery: recovery() });
+  await page.goto("/setup");
+  await page.getByRole("button", { name: "Re-enter original opening evidence" }).click();
+  await page.getByLabel("Cash for Synthetic savings (GBP)").fill("1234.56");
+  const isUnloadBlocked = () => page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(await isUnloadBlocked()).toBe(true);
+  await page.getByRole("button", { name: "Back to recovery guidance" }).click();
+  expect(await isUnloadBlocked()).toBe(true);
+  await page.getByRole("button", { name: "Re-enter original opening evidence" }).click();
+  await expect(page.getByLabel("Cash for Synthetic savings (GBP)")).toHaveValue("1234.56");
 });
 
 test("reconstructed opening hash refusal cannot advance to confirmation or edit original identities", async ({ page }) => {

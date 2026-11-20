@@ -30,3 +30,28 @@ test("goal scenarios remain unavailable when user inputs are missing and do not 
   assert.equal(result?.months, 1);
   assert.equal(result?.with_monthly_contributions_gbp, null);
 });
+
+test("incomplete or invalid amounts do not crash the goal form", () => {
+  const goal = {
+    target_amount_gbp: "1000", target_date: "2030-04-15",
+    current_amount_gbp: "100", monthly_contribution_gbp: "10",
+  };
+  for (const [field, value] of [
+    ["target_amount_gbp", "oops"],
+    ["target_amount_gbp", "0"],
+    ["current_amount_gbp", ""],
+    ["monthly_contribution_gbp", "1."],
+  ]) {
+    assert.equal(goalScenario({ ...goal, [field]: value }, new Date("2030-01-01T00:00:00Z")), null);
+  }
+});
+
+test("large contribution illustrations retain the pennies", () => {
+  const result = goalScenario({
+    target_amount_gbp: "999999999999999.99", target_date: "2113-05-01",
+    current_amount_gbp: "999999999999999.99",
+    monthly_contribution_gbp: "999999999999999.99",
+  }, new Date("2030-01-01T00:00:00Z"));
+  assert.equal(result?.months, 1000);
+  assert.equal(result?.with_monthly_contributions_gbp, "1000999999999999989.99");
+});

@@ -27,6 +27,7 @@ test("local goals require review and confirmation and remain separate from portf
     expect(body.expected_hash).toBe(hash);
     expect(body.expected_portfolio_id).toBeNull();
     expect(body.expected_journal_revision).toBeNull();
+    expect(body.goals.every(goal => !("id" in goal))).toBe(true);
     goals = body.goals.map((goal, index) => ({ id: `${index}`.padStart(32, "0"), ...goal }));
     await route.fulfill({ json: {
       preview_id: "synthetic-preview", revision: revision + 1,
@@ -81,6 +82,50 @@ test("local goals require review and confirmation and remain separate from portf
   await expect(page.getByLabel("Target amount (GBP, optional)")).toHaveValue("25000.00");
   await expect(page.getByLabel("Purpose")).toHaveValue("first_home");
   await expect(page.getByLabel("Manual amount set aside (GBP, used only without linked accounts)")).toHaveValue("5000.00");
+  await page.getByLabel("Goal name").fill("Updated home goal");
+  await page.getByLabel("Earliest access date (optional)").fill("");
+  await page.getByLabel("Manual amount set aside (GBP, used only without linked accounts)").fill("");
+  await page.getByLabel("Expected monthly contribution (GBP, optional)").fill("");
+  await page.getByRole("button", { name: "Preview changes" }).click();
+  await expect(page.getByRole("region", { name: "Review goals before saving" }))
+    .toContainText("Updated home goal");
+  expect(goals[0].access_date).toBeNull();
+  expect(goals[0].current_amount_gbp).toBeNull();
+  expect(goals[0].monthly_contribution_gbp).toBeNull();
+  await page.getByRole("button", { name: "Confirm and save locally" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved as local planning revision 2");
+});
+
+test("linked goal amounts retain exact fractional recorded values", async ({ page }) => {
+  const report = await recordedPortfolio(page);
+  const holding = report.holdings[0];
+  const account = report.accounts.find(item => item.id === holding.account_id);
+  report.accounts.forEach(item => { item.cash_gbp = "0"; });
+  report.holdings.forEach(item => { item.value_gbp = "0"; });
+  holding.value_gbp = "100000.0000110000000001";
+  report.equity_gbp = holding.value_gbp;
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.route("**/api/investment/v1/planning/session", route => route.fulfill({
+    json: { enabled: true, csrf: "synthetic-csrf", revision: 0,
+      profile_hash: "c".repeat(64), goals: [] },
+  }));
+  await page.goto("/planning");
+  await page.getByRole("button", { name: "Add a goal" }).click();
+  await page.getByRole("checkbox", { name: `${account.name} (${account.id})` }).check();
+  await expect(page.getByText(/Linked recorded amount:/)).toBeVisible();
+  await expect(page.getByText(/Linked account amount unavailable/)).toHaveCount(0);
+
+  holding.value_gbp = "0.0000000000000001";
+  report.equity_gbp = holding.value_gbp;
+  await page.reload();
+  await page.getByRole("button", { name: "Add a goal" }).click();
+  await page.getByRole("checkbox", { name: `${account.name} (${account.id})` }).check();
+  await page.getByLabel("Target amount (GBP, optional)").fill("1000");
+  await page.getByLabel("Target date (optional)").fill("2035-01-01");
+  await expect(page.getByText("Simple contribution illustration")).toBeVisible();
 });
 
 test("linked goals use a whole recorded account once and bind preview to its journal revision", async ({ page }) => {

@@ -93,7 +93,7 @@ test.describe("eToro within the portfolio", () => {
     await page.reload();
     await expect(etoro).toContainText("Startup permission expired");
     await expect(etoro).toContainText("The displayed source snapshot is not refreshed");
-    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
+    await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeEnabled();
     session.state = "revoked";
     session.last_status = "startup_refresh_revoked";
     session.connection.revoked_at = "2026-07-01T10:00:00Z";
@@ -712,7 +712,7 @@ test.describe("eToro within the portfolio", () => {
     await etoro.getByLabel(/I verified rights for local display/).check();
     await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
     await started;
-    const revoke = etoro.getByRole("button", { name: connected ? "Revoke startup refresh" : "Stop connection read" });
+    const revoke = etoro.getByRole("button", { name: connected ? "Revoke startup refresh" : "Stop current read" });
     await expect(revoke).toBeEnabled();
     page.once("dialog", dialog => dialog.accept());
     await revoke.click();

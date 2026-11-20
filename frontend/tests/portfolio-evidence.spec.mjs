@@ -75,7 +75,7 @@ test("a correction keeps cash review actionable when replay shows a match", asyn
   await page.goto("/investment");
 
   const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
-  await card.getByRole("combobox").selectOption("7");
+  await card.getByRole("combobox", { name: `Expected review interval for ${account.name}` }).selectOption("7");
   await card.getByRole("button", { name: "Mark account checked today" }).click();
   await expect(card).toContainText("Action needed");
   await expect(card).toContainText("replay may have changed past differences");
@@ -190,15 +190,17 @@ test("account freshness intervals and local review dates persist without journal
 
   const status = page.getByRole("region", { name: "Account freshness and next actions" });
   const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
-  await expect(card).toContainText("Freshness unknown");
+  await expect(card).toContainText("Choose how often you expect to review this account.");
   const interval = card.getByRole("combobox", { name: `Expected review interval for ${account.name}` });
   await interval.selectOption("7");
   await expect(card).toContainText("Check due");
+  if (account.kind === "deposit")
+    await card.getByRole("combobox", { name: `Savings terms recheck interval for ${account.name}` }).selectOption("7");
   await card.getByRole("button", { name: "Mark account checked today" }).click();
   await expect(card).toContainText("No review is due under your chosen interval.");
   await page.reload();
   const reloaded = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
-  await expect(reloaded.getByRole("combobox")).toHaveValue("7");
+  await expect(reloaded.getByRole("combobox", { name: `Expected review interval for ${account.name}` })).toHaveValue("7");
   await expect(reloaded).toContainText("No review is due under your chosen interval.");
   expect(writes).toBe(0);
   await expect(status).toContainText("saved in this browser only");
@@ -396,7 +398,7 @@ test("direct concentration is bounded to complete recorded holdings", async ({ p
 
   const concentration = page.getByRole("region", { name: "Direct investment concentration" });
   await expect(concentration).toBeVisible();
-  await expect(concentration).toContainText("share of the complete recorded portfolio value");
+  await expect(concentration).toContainText("Share of the complete recorded portfolio value");
   await expect(concentration).toContainText("does not look through funds");
 });
 

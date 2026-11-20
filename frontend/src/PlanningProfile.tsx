@@ -13,9 +13,10 @@ const emptyGoal = (): DraftGoal => ({
   loss_tolerance: "not_set", current_amount_gbp: null, monthly_contribution_gbp: null,
   linked_portfolio_id: null, linked_account_ids: [],
 });
-const draft = (goal: PlanningGoal): DraftGoal => ({
-  ...goal, linked_account_ids: [...goal.linked_account_ids], key: goal.id,
+const draft = ({ id, ...goal }: PlanningGoal): DraftGoal => ({
+  ...goal, linked_account_ids: [...goal.linked_account_ids], key: id,
 });
+const GoalDecimal = Decimal.clone({ precision: 500 });
 
 function recordedAccountValues(data: InvestmentSnapshot | null) {
   if (!data || data.source_mode !== "recorded" || !data.complete ||
@@ -24,22 +25,22 @@ function recordedAccountValues(data: InvestmentSnapshot | null) {
       data.holdings.some(holding => holding.value_gbp === null)) return null;
   const allValues = new Map<string, Decimal>();
   for (const account of data.accounts)
-    allValues.set(account.id, new Decimal(account.cash_gbp!));
+    allValues.set(account.id, new GoalDecimal(account.cash_gbp!));
   for (const holding of data.holdings)
     allValues.set(holding.account_id,
-      (allValues.get(holding.account_id) ?? new Decimal(0)).plus(holding.value_gbp!));
+      (allValues.get(holding.account_id) ?? new GoalDecimal(0)).plus(holding.value_gbp!));
   const total = [...allValues.values()].reduce(
-    (value, amount) => value.plus(amount), new Decimal(0));
+    (value, amount) => value.plus(amount), new GoalDecimal(0));
   if (!total.eq(data.equity_gbp)) return null;
   return new Map(data.accounts.filter(account => account.status === "active")
-    .map(account => [account.id, allValues.get(account.id) ?? new Decimal(0)]));
+    .map(account => [account.id, allValues.get(account.id) ?? new GoalDecimal(0)]));
 }
 
 function linkedGoalValue(goal: Pick<GoalInput, "linked_portfolio_id" | "linked_account_ids">,
   data: InvestmentSnapshot | null, values: Map<string, Decimal> | null) {
   if (!goal.linked_account_ids.length || !data || !values ||
       goal.linked_portfolio_id !== data.portfolio_id) return null;
-  let total = new Decimal(0);
+  let total = new GoalDecimal(0);
   for (const id of goal.linked_account_ids) {
     const value = values.get(id);
     if (!value) return null;
@@ -109,7 +110,8 @@ export function PlanningProfilePage() {
   function updateGoal(key: string,
     field: Exclude<keyof GoalInput, "linked_portfolio_id" | "linked_account_ids">, value: string) {
     setGoals(current => current.map(goal => goal.key === key
-      ? { ...goal, [field]: field === "target_amount_gbp" || field === "target_date"
+      ? { ...goal, [field]: ["target_amount_gbp", "target_date", "access_date",
+        "current_amount_gbp", "monthly_contribution_gbp"].includes(field)
         ? value || null : value }
       : goal));
     setPreview(null);
@@ -342,7 +344,7 @@ export function PlanningProfilePage() {
           {(() => {
             const linkedAmount = linkedGoalValue(goal, portfolio, accountValues);
             const scenarioGoal = goal.linked_account_ids.length > 0
-              ? { ...goal, current_amount_gbp: linkedAmount?.toString() ?? null }
+              ? { ...goal, current_amount_gbp: linkedAmount?.toFixed() ?? null }
               : goal;
             const scenario = goalScenario(scenarioGoal);
             return <>

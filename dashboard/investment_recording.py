@@ -25,6 +25,7 @@ class RecordingSessions:
         self.database = database
         self.clock = clock
         self.lock = threading.Lock()
+        self.confirm_lock = threading.Lock()
         self.sessions = {}
         self.path_identity = self._path_identity()
         ledger = read(database, clock())
@@ -185,6 +186,10 @@ class RecordingSessions:
         return response
 
     def confirm(self, token, preview_id, now):
+        with self.confirm_lock:
+            return self._confirm(token, preview_id, now)
+
+    def _confirm(self, token, preview_id, now):
         now = clock(now)
         _, record = self.session(token, now)
         if record is None:
@@ -197,20 +202,25 @@ class RecordingSessions:
                 return pending["receipt"]
             if pending["expires"] <= now:
                 raise RecordingError("preview_expired", 409)
-        self._verify_store()
+        ledger = self._verify_store()
         try:
+            value = pending["value"]["event"]
+            # Full replay validates the preview and commit; only derive the resulting profile here.
+            if value.get("type") == "scope_addition":
+                ledger.spec["accounts"].append(value["account"])
+            elif value.get("type") == "profile_change":
+                if value["action"] == "add_product":
+                    ledger.spec["products"].append(value["product"])
+                elif value["action"] == "rename":
+                    collection = ledger.spec["accounts" if value["target"] == "account" else "products"]
+                    next(item for item in collection if item["id"] == value["entity_id"])["name"] = value["name"]
+            profile_hash = digest(canonical(ledger.spec))
             receipt = commit_record(self.database, pending["value"], now)
         except InvestmentError as exc:
             if isinstance(exc.__cause__, (sqlite3.Error, OSError)):
                 raise RecordingError("investment_store_unavailable", 503) from exc
             raise RecordingError("confirmation_rejected", 409) from exc
         with self.lock:
-            pending["receipt"] = receipt
-        try:
-            ledger = read(self.database, now)
-        except InvestmentError as exc:
-            raise RecordingError("investment_store_unavailable", 503) from exc
-        self.profile_hash = digest(canonical(ledger.spec))
-        with self.lock:
+            self.profile_hash = profile_hash
             pending["receipt"] = receipt
         return receipt

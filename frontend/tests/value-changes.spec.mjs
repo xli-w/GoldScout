@@ -272,7 +272,7 @@ test("compares chosen recorded values with exact sourced activity and an unexpla
   await expect(changes).toContainText("Money withdrawn to outside£20.00");
   await expect(changes).toContainText("Value added by including accounts£10.004");
   await expect(changes).toContainText("Recorded interest and dividends£2.003");
-  await expect(changes).toContainText("Recorded purchase and sale fees£0.002");
+  await expect(changes).toContainText("Recorded trade and account charges£0.002");
   await expect(changes).toContainText("Unexplained remainder£37.001");
   await expect(changes).toContainText("1 incomplete valuation point");
   await expect(changes).toContainText("not a verified investment return");

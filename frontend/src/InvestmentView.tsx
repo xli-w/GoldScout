@@ -1171,7 +1171,7 @@ function InvestmentRecording() {
           setCashTargetStatus(null);
           if (result.accounts.length && !accountId) setAccountId(result.accounts[0].id);
           if (result.products.length && !productId) setProductId(result.products[0].id);
-          if (result.opened) setKind(current => current === "opening" ? "" : current);
+          setKind(result.opened ? "" : "opening");
         }
         if (!accountUpdate && result.accounts.length > 1 && !destinationAccountId)
           setDestinationAccountId(result.accounts[1].id);

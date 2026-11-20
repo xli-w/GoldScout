@@ -163,18 +163,22 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     return () => { active = false; };
   }, []);
   useEffect(() => {
-    if (!dirty || receipt?.status === "completed" || !draftStorageError) return;
+    const unsavedRecovery = session?.state === "recoverable";
+    if (!dirty || receipt?.status === "completed" || (!draftStorageError && !unsavedRecovery)) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     const abandon = (event: MouseEvent) => {
       if (!(event.target instanceof Element)) return;
       const link = event.target.closest("a[href]");
-      if (link && !window.confirm("The draft could not be saved in this browser. Leave and lose the unsaved progress?"))
+      const message = unsavedRecovery
+        ? "Recovery figures are not saved in this browser. Leave and lose the re-entered progress?"
+        : "The draft could not be saved in this browser. Leave and lose the unsaved progress?";
+      if (link && !window.confirm(message))
         event.preventDefault();
     };
     window.addEventListener("beforeunload", warn);
     document.addEventListener("click", abandon, true);
     return () => { window.removeEventListener("beforeunload", warn); document.removeEventListener("click", abandon, true); };
-  }, [dirty, draftStorageError, receipt]);
+  }, [dirty, draftStorageError, receipt, session?.state]);
   useEffect(() => {
     if (!session) return;
     draftReady.current = false;
@@ -426,14 +430,16 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   };
   const reenterOpening = () => {
     if (!recovery?.requires_opening || confirmAttempted) return;
-    setAccounts(recovery.profile.accounts.map(a => ({ ...a, cash: "" })));
-    setProducts(recovery.profile.products.map(p => ({
-      id: p.id, name: p.name, sleeve: p.sleeve, currency: p.currency,
-      increment: p.quantity_increment, minimum: p.minimum_notional_gbp,
-    })));
-    setHoldings([]); setEffective(""); setAvailable(""); setEvidence("");
-    setPreview(null); setOpeningContextConfirmed(false);
-    setHoldingsCoverage({}); setFieldErrors({}); setError(""); setScope(true);
+    if (!dirty) {
+      setAccounts(recovery.profile.accounts.map(a => ({ ...a, cash: "" })));
+      setProducts(recovery.profile.products.map(p => ({
+        id: p.id, name: p.name, sleeve: p.sleeve, currency: p.currency,
+        increment: p.quantity_increment, minimum: p.minimum_notional_gbp,
+      })));
+      setHoldings([]); setEffective(""); setAvailable(""); setEvidence("");
+      setOpeningContextConfirmed(false); setHoldingsCoverage({}); setScope(true);
+    }
+    setPreview(null); setFieldErrors({}); setError("");
     setStep(2); setRecoveryEntry(true); setDirty(true);
   };
   const expired = preview !== null && Date.parse(preview.expires_at) <= now;

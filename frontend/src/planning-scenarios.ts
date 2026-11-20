@@ -1,5 +1,7 @@
 import Decimal from "decimal.js";
 
+const GoalDecimal = Decimal.clone({ precision: 500 });
+
 export type GoalScenarioInput = {
   target_amount_gbp: string | null;
   target_date: string | null;
@@ -20,6 +22,10 @@ export type GoalScenario = {
 export function goalScenario(goal: GoalScenarioInput, today = new Date()): GoalScenario | null {
   if (goal.target_amount_gbp === null || goal.target_date === null ||
     goal.current_amount_gbp === null) return null;
+  const amount = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+  if (!amount.test(goal.target_amount_gbp) || !amount.test(goal.current_amount_gbp) ||
+      goal.monthly_contribution_gbp !== null && !amount.test(goal.monthly_contribution_gbp))
+    return null;
   const targetDate = new Date(`${goal.target_date}T00:00:00Z`);
   if (!Number.isFinite(targetDate.getTime())) return null;
 
@@ -30,12 +36,13 @@ export function goalScenario(goal: GoalScenarioInput, today = new Date()): GoalS
     firstContribution.setUTCMonth(firstContribution.getUTCMonth() + 1);
   }
 
-  const target = new Decimal(goal.target_amount_gbp);
-  const current = new Decimal(goal.current_amount_gbp);
+  const target = new GoalDecimal(goal.target_amount_gbp);
+  if (target.lte(0)) return null;
+  const current = new GoalDecimal(goal.current_amount_gbp);
   const noMore = current;
-  const gap = (amount: Decimal) => Decimal.max(new Decimal(0), target.minus(amount)).toFixed(2);
+  const gap = (amount: Decimal) => GoalDecimal.max(new GoalDecimal(0), target.minus(amount)).toFixed(2);
   const monthly = goal.monthly_contribution_gbp === null
-    ? null : current.plus(new Decimal(goal.monthly_contribution_gbp).mul(months));
+    ? null : current.plus(new GoalDecimal(goal.monthly_contribution_gbp).mul(months));
   return {
     months,
     current_amount_gbp: current.toFixed(2),
