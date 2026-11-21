@@ -196,6 +196,7 @@ test("account freshness intervals and local review dates persist without journal
   await expect(card).toContainText("Check due");
   if (account.kind === "deposit")
     await card.getByRole("combobox", { name: `Savings terms recheck interval for ${account.name}` }).selectOption("7");
+  await page.clock.setFixedTime(new Date("2030-01-02T00:00:30Z"));
   await card.getByRole("button", { name: "Mark account checked today" }).click();
   await expect(card).toContainText("No review is due under your chosen interval.");
   await page.reload();
@@ -204,6 +205,51 @@ test("account freshness intervals and local review dates persist without journal
   await expect(reloaded).toContainText("No review is due under your chosen interval.");
   expect(writes).toBe(0);
   await expect(status).toContainText("saved in this browser only");
+
+  await page.clock.setFixedTime(new Date("2030-01-01T23:30:00Z"));
+  await page.reload();
+  await expect(page.locator(".account-maintenance-card").filter({ hasText: account.name }).first())
+    .toContainText("Review this account's records");
+});
+
+test("local review actions use the action time rather than the last display refresh", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  const account = report.accounts.find(item => item.status === "active");
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.clock.setFixedTime(new Date("2030-01-02T00:00:00Z"));
+  await page.goto("/investment");
+  const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
+  await card.getByRole("combobox", { name: `Expected review interval for ${account.name}` }).selectOption("7");
+
+  await page.clock.setFixedTime(new Date("2030-01-02T00:00:30Z"));
+  await card.getByRole("button", { name: "Mark account checked today" }).click();
+  const preferenceKey = `goldscout.account-maintenance.v1.${encodeURIComponent(report.portfolio_id)}.account.${encodeURIComponent(account.id)}`;
+  expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).reviewedAt, preferenceKey))
+    .toBe("2030-01-02T00:00:30.000Z");
+  await page.clock.setFixedTime(new Date("2030-01-02T00:00:45Z"));
+  const guided = page.getByRole("region", { name: "Guided portfolio review" });
+  await guided.getByRole("button", { name: "Start account review" }).click();
+  await card.getByRole("button", { name: "Mark reviewed in this session" }).click();
+  for (const other of report.accounts.filter(item => item.status === "active" && item.id !== account.id)) {
+    await page.locator(".account-maintenance-card").filter({ hasText: other.name }).first()
+      .getByRole("button", { name: "Mark reviewed in this session" }).click();
+  }
+  await expect(guided).toContainText("Review complete.");
+  await expect(guided).not.toContainText(`${account.name} reminder is due`);
+  await page.getByRole("button", { name: "Save this value for the next comparison" }).click();
+
+  const saved = await page.evaluate(({ portfolioId, accountId }) => ({
+    cycle: JSON.parse(localStorage.getItem(`goldscout.guided-review.v1.${encodeURIComponent(portfolioId)}`)),
+    preference: JSON.parse(localStorage.getItem(`goldscout.account-maintenance.v1.${encodeURIComponent(portfolioId)}.account.${encodeURIComponent(accountId)}`)),
+    checkpoint: JSON.parse(localStorage.getItem(`goldscout.review-checkpoint.v1.${portfolioId}`)),
+  }), { portfolioId: report.portfolio_id, accountId: account.id });
+  expect(saved.cycle.startedAt).toBe("2030-01-02T00:00:45.000Z");
+  expect(saved.preference.reviewedAt).toBe("2030-01-02T00:00:45.000Z");
+  expect(saved.checkpoint.savedAt).toBe("2030-01-02T00:00:45.000Z");
 });
 
 test("guided review resumes, records completion, and restarts when journal revision changes", async ({ page }) => {

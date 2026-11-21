@@ -1951,7 +1951,7 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
     if (!data || data.source_mode !== "recorded" || !data.complete || !data.as_of) return;
     const saved: ReviewCheckpoint = {
       portfolioId: data.portfolio_id, valuationTimestamp: data.as_of,
-      savedAt: new Date(now).toISOString(), journalRevision: data.revision,
+      savedAt: new Date().toISOString(), journalRevision: data.revision,
     };
     try {
       localStorage.setItem(`goldscout.review-checkpoint.v1.${data.portfolio_id}`,

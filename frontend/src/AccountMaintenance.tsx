@@ -101,8 +101,15 @@ function readReviewCycle(portfolioId: string): ReviewCycle | null {
   return item as ReviewCycle;
 }
 
+function isReviewDue(preference: AccountPreference | undefined, now: number) {
+  if (preference?.intervalDays == null) return false;
+  if (preference.reviewedAt === null) return true;
+  const age = now - Date.parse(preference.reviewedAt);
+  return !Number.isFinite(age) || age < 0 || age >= preference.intervalDays * 86400000;
+}
+
 function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
-  preferences: PreferenceState, now: number) {
+  preferences: PreferenceState, now: number, reviewNow: number) {
   const unresolved: string[] = [];
   if (!data.complete) unresolved.push("portfolio value is incomplete");
   for (const accountId of activeIds) {
@@ -150,9 +157,7 @@ function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
       unresolved.push(`${account.name} savings terms are missing or past their separate chosen interval`);
     if (maturityDays !== null && maturityDays <= 90)
       unresolved.push(`${account.name} has an approaching recorded maturity date`);
-    if (preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
-      (preference.reviewedAt === null ||
-      now - Date.parse(preference.reviewedAt) >= preference.intervalDays * 86400000))
+    if (isReviewDue(preference, reviewNow))
       unresolved.push(`${account.name} reminder is due`);
   }
   for (const account of data.accounts.filter(item => item.status === "retired")) {
@@ -226,7 +231,8 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
     cycle.accountIds.every((id, index) => id === activeIds[index]);
   const checkedIds = currentCycle ? cycle.checkedAccountIds : [];
   const nextAccount = activeIds.find(id => !checkedIds.includes(id));
-  const unresolved = unresolvedReviewItems(data, activeIds, preferences, now);
+  const reviewNow = Date.now();
+  const unresolved = unresolvedReviewItems(data, activeIds, preferences, now, reviewNow);
   const unmatchedPreferences = useMemo(() => Object.keys(preferences)
     .filter(id => !data.accounts.some(account => account.id === id)), [data.accounts, preferences]);
 
@@ -259,7 +265,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
     try {
       const next: ReviewCycle = {
         version: 1, portfolioId: data.portfolio_id, revision: data.revision,
-        startedAt: new Date(now).toISOString(), accountIds: activeIds,
+        startedAt: new Date().toISOString(), accountIds: activeIds,
         checkedAccountIds: [],
       };
       localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
@@ -281,7 +287,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
       setCycle(next);
       const preference = preferences[accountId];
       if (preference?.intervalDays == null ||
-          update(accountId, { reviewedAt: new Date(now).toISOString() }))
+          update(accountId, { reviewedAt: new Date().toISOString() }))
         setError("");
     } catch {
       setError("The browser could not save review progress. No journal record was changed.");
@@ -356,9 +362,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
           termsAge > preference.termsIntervalDays * 86400000));
       const maturityNeedsCheck = account.kind === "deposit" &&
         maturityDays !== null && maturityDays <= 90;
-      const reviewDue = preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
-        (preference.reviewedAt === null ||
-        now - Date.parse(preference.reviewedAt) >= preference.intervalDays * 86400000);
+      const reviewDue = isReviewDue(preference, reviewNow);
       const needsAction = !data.complete || missingPrice || cashDifference || earlierCashDifference ||
         correctionCouldChangeChecks;
       const reviewNeeded = stale || savingsTermsStale || maturityNeedsCheck || cashCheckStale || reviewDue;
@@ -470,7 +474,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
               Mark reviewed in this session
             </button>}
           {preference && !currentCycle && <button type="button" disabled={error !== ""}
-            onClick={() => update(account.id, { reviewedAt: new Date(now).toISOString() })}>
+            onClick={() => update(account.id, { reviewedAt: new Date().toISOString() })}>
             Mark account checked today
           </button>}
         </div>

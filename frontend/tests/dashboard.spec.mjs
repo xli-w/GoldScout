@@ -1109,6 +1109,28 @@ test("portfolio shortcuts prioritize accounts and keep optional details availabl
   await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
 });
 
+test("mobile navigation keeps every destination visible without sideways scrolling", async ({ page }) => {
+  let workspace = "demo";
+  await page.route("**/api/v1/settings", route => route.fulfill({ json: { workspace } }));
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (workspace of ["demo", "investment"]) {
+      await page.goto("/investment");
+      const sidebar = page.locator(".sidebar");
+      const links = sidebar.locator("nav a");
+      await expect(links).toHaveCount(workspace === "investment" ? 5 : 4);
+      await expect(page.getByRole("region", { name: "Investment totals" })).toBeVisible();
+      expect(await links.evaluateAll(elements => elements.every(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.left >= 0 && bounds.right <= window.innerWidth;
+      }))).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.evaluate(() => window.scrollTo(0, 500));
+      expect(await sidebar.evaluate(element => element.getBoundingClientRect().bottom)).toBeLessThanOrEqual(0);
+    }
+  }
+});
+
 test("monitoring observation staging uses structured fields and readable reconciliation", async ({ page }) => {
   let submitted;
   await page.route("**/api/investment/v1/monitoring/reviews", route =>
