@@ -145,7 +145,7 @@ test("saved review checkpoint anchors the next evidence-linked change comparison
     page.getByRole("button", { name: "Refresh investment" }).click(),
   ]);
   const changes = page.getByRole("region", { name: "What changed since your saved value?" });
-  await expect(changes).toContainText("From 2026-01-04T12:00:00Z");
+  await expect(changes).toContainText("From Jan 4, 2026, 12:00:00 PM UTC");
   await expect(changes).toContainText("Unexplained remainder£0.988");
 });
 

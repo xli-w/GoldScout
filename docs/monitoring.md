@@ -176,6 +176,10 @@ remain the operator's responsibility.
 
 ## Dashboard inbox and local workflow
 
+On **Your portfolio**, open **Optional checks**, then **Review checks and
+compare account figures**. This separate workflow tracks review statuses and
+compares manually entered source figures; it is not the guided account review.
+
 The dashboard can read an explicitly selected review store without
 authentication or mutation. Select the same existing `--monitoring-reviews`
 store with the investment database and monitoring profile. The inbox displays

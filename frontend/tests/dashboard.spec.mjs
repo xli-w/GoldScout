@@ -644,7 +644,7 @@ test.describe("eToro within the portfolio", () => {
     await etoro.getByRole("button", { name: "Refresh once now" }).click();
     await started;
     if (remount) {
-      await page.getByRole("navigation", { name: "Portfolio navigation" }).getByRole("link", { name: "Help" }).click();
+      await page.getByRole("navigation", { name: "Settings and help navigation" }).getByRole("link", { name: "Help" }).click();
       await page.getByRole("navigation", { name: "Portfolio navigation" }).getByRole("link", { name: "Your portfolio" }).click();
       await expect(etoro.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
     }
@@ -761,9 +761,10 @@ test.describe("eToro within the portfolio", () => {
     page.once("dialog", dialog => dialog.accept());
     await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
     await started;
-    const navigation = page.getByRole("navigation", { name: "Portfolio navigation" });
-    await navigation.getByRole("link", { name: "Help" }).click();
-    await navigation.getByRole("link", { name: "Your portfolio" }).click();
+    await page.getByRole("navigation", { name: "Settings and help navigation" })
+      .getByRole("link", { name: "Help" }).click();
+    await page.getByRole("navigation", { name: "Portfolio navigation" })
+      .getByRole("link", { name: "Your portfolio" }).click();
     await expect(etoro).toContainText("Revocation or a read is still unverified");
     await expect(etoro.getByRole("button", { name: "Refresh once now" })).toBeDisabled();
     releaseRevoke();
@@ -1030,7 +1031,7 @@ test("monitoring shows synthetic findings and invalidates them on failed refresh
   await page.locator("#investment-monitoring > summary").click();
   const section = page.getByRole("region", { name: "Portfolio monitoring", exact: true });
   await expect(section.getByText(/Synthetic monitoring demonstration/)).toBeVisible();
-  await expect(section.getByRole("link", { name: "Open the separate review inbox" })).toHaveAttribute("href", "/investment/reviews");
+  await expect(section.getByRole("link", { name: "Review checks and compare account figures" })).toHaveAttribute("href", "/investment/reviews");
   await expect(section.getByText("Provider connections are not verified. These checks use saved evidence only.")).toBeVisible();
   await expect(section.getByRole("list", { name: "Provider evidence status" })).toHaveCount(0);
   await section.getByText("Source status", { exact: true }).click();
@@ -1061,29 +1062,41 @@ test("monitoring refuses mismatched revisions and malformed responses", async ({
   await section.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(section.getByRole("alert")).toContainText("unavailable");
   await expect(section.getByText(/Synthetic monitoring demonstration/)).toHaveCount(0);
+  await expect(section.getByRole("link", { name: "Review checks and compare account figures" }))
+    .toHaveAttribute("href", "/investment/reviews");
 });
 
 test("portfolio shortcuts prioritize accounts and keep optional details available", async ({ page }) => {
   const snapshot = await (await page.request.get("/api/investment/v1/snapshot")).json();
   snapshot.source_mode = "recorded";
+  let recoverySessionRequests = 0;
+  await page.route("**/api/investment/v1/backup/session", route => {
+    recoverySessionRequests++;
+    return route.fulfill({ json: {
+      enabled: false, csrf: null, archive_limit_bytes: 33558528, database_location: null,
+    } });
+  });
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: snapshot }));
   await page.goto("/investment");
   await expect(page.locator(".record-toolbar").getByRole("link", { name: "Help" })).toHaveCount(0);
-  await expect(page.getByRole("navigation", { name: "Portfolio navigation" })
+  await expect(page.getByRole("navigation", { name: "Settings and help navigation" })
     .getByRole("link", { name: "Help" })).toBeVisible();
   await expect(page.getByRole("region", { name: "What needs attention" })).toBeVisible();
   expect(await page.evaluate(() => {
     const attention = document.querySelector(".investment-next-steps");
-    const accounts = document.querySelector("#investment-account-summary");
-    return Boolean(attention && accounts &&
-      (attention.compareDocumentPosition(accounts) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const accountReview = document.querySelector("#account-review");
+    const comparison = document.querySelector(".value-changes");
+    return Boolean(attention && accountReview && comparison &&
+      (attention.compareDocumentPosition(accountReview) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+      (accountReview.compareDocumentPosition(comparison) & Node.DOCUMENT_POSITION_FOLLOWING));
   })).toBeTruthy();
   const sections = page.getByRole("navigation", { name: "Investment sections" });
   await expect(sections.getByText("Portfolio")).toBeVisible();
   await expect(sections.getByText("Records and checks")).toBeVisible();
-  await expect(sections.getByRole("link", { name: "Accounts and investments" })).toHaveAttribute("href", "#investment-account-summary");
-  await expect(page.getByRole("region", { name: "Accounts and investments" })).toBeVisible();
+  await expect(sections.getByRole("link", { name: "Investments you hold" })).toHaveAttribute("href", "#investment-account-summary");
+  await expect(page.getByRole("region", { name: "Recorded investments" })).toBeVisible();
   await expect(page.getByText(/Latest journal entries, not live balances/)).toBeVisible();
+  await expect(page.locator(".portfolio-summary")).not.toContainText("Accounts and cash");
   const priceDates = page.locator(".portfolio-summary details").filter({
     has: page.getByText("Price dates and source availability", { exact: true }),
   });
@@ -1091,6 +1104,18 @@ test("portfolio shortcuts prioritize accounts and keep optional details availabl
   await expect(priceDates.getByRole("table")).toContainText("Price applies at");
   await expect(priceDates.getByRole("table")).toContainText("Source available from");
   await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
+  const recoveryTools = page.locator(".recovery-tools");
+  await expect(recoveryTools.locator(".recovery-panel")).toHaveCount(0);
+  expect(recoverySessionRequests).toBe(0);
+  expect(await page.evaluate(() => {
+    const records = document.querySelector("#investment-records");
+    const etoro = document.querySelector("#investment-etoro");
+    return Boolean(records && etoro &&
+      (records.compareDocumentPosition(etoro) & Node.DOCUMENT_POSITION_FOLLOWING));
+  })).toBeTruthy();
+  await recoveryTools.locator("summary").click();
+  await expect(recoveryTools.getByRole("region", { name: "Verified backup and recovery" })).toBeVisible();
+  await expect.poll(() => recoverySessionRequests).toBe(1);
   await expect(page.locator("#investment-roles")).not.toHaveAttribute("open", "");
   await page.locator("#investment-roles > summary").focus();
   await page.keyboard.press("Enter");
@@ -1107,6 +1132,15 @@ test("portfolio shortcuts prioritize accounts and keep optional details availabl
   await expect(portfolioValue).toHaveCSS("white-space", "nowrap");
   expect(await portfolioValue.evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
   await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 850, height: 844 });
+  expect(await page.locator(".investment-view .metrics").evaluate(element =>
+    getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(2);
+  expect(await page.locator(".investment-view .metrics strong").evaluateAll(elements =>
+    elements.filter(element => element.textContent.length <= 12).every(element => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return range.getClientRects().length === 1;
+    }))).toBe(true);
 });
 
 test("mobile navigation keeps every destination visible without sideways scrolling", async ({ page }) => {
@@ -1261,7 +1295,7 @@ test("investment workspace opens the portfolio without trading requests", async 
   });
   await page.goto("/");
   await expect(page).toHaveURL(/\/investment$/);
-  await expect(page.getByRole("heading", { name: "Your portfolio", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your Portfolio", level: 1 })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Account navigation" })).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "Records navigation" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Trading demo", exact: true })).toHaveCount(0);
@@ -1418,7 +1452,7 @@ test("next steps reflect incomplete evidence and historical differences without 
   await expect(page.locator("#investment-performance")).toHaveAttribute("open", "");
   expect(mutations).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await page.getByRole("navigation", { name: "Portfolio navigation" })
+  await page.getByRole("navigation", { name: "Settings and help navigation" })
     .getByRole("link", { name: "Help" }).click();
   await page.locator("#backup-recovery > summary").click();
   await expect(page.locator("#backup-recovery")).toHaveAttribute("open", "");
@@ -1641,7 +1675,7 @@ test("investment demo keeps key portfolio figures concise and puts capability de
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
   await expect(page).toHaveURL(/\/investment$/);
-  await expect(page.getByRole("heading", { name: "Your portfolio", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your Portfolio", level: 1 })).toBeVisible();
   await expect(page.getByText("SYNTHETIC DEMO")).toBeVisible();
   await expect(page.getByText("Deposits less withdrawals", { exact: true })).toBeVisible();
   await page.getByText("Optional fund labels", { exact: true }).click();
@@ -1655,7 +1689,7 @@ test("investment demo keeps key portfolio figures concise and puts capability de
   await expect(page.locator(".metrics")).toContainText("GBP");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   expect(errors).toEqual([]);
-  await page.getByRole("navigation", { name: "Portfolio navigation" })
+  await page.getByRole("navigation", { name: "Settings and help navigation" })
     .getByRole("link", { name: "Help" }).click();
   await page.getByText("About your records", { exact: true }).click();
   await expect(page.getByText(/does not recommend allocations or approve orders/)).toBeVisible();
@@ -1665,7 +1699,7 @@ test("help remains usable when recorded investment data is unavailable", async (
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ status: 503, json: { error: "investment_unavailable" } }));
   await page.goto("/investment");
   await expect(page.getByRole("heading", { name: "Investment data unavailable" })).toBeVisible();
-  await page.getByRole("navigation", { name: "Portfolio navigation" })
+  await page.getByRole("navigation", { name: "Settings and help navigation" })
     .getByRole("link", { name: "Help" }).click();
   await page.getByRole("link", { name: "back up your records" }).click();
   await expect(page.locator("#backup-recovery")).toHaveAttribute("open", "");

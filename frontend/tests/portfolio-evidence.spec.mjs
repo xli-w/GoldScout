@@ -31,6 +31,93 @@ test("current account differences take priority over review settings", async ({ 
   await expect(card).toContainText("a later match does not resolve them");
 });
 
+test("workspace review defaults are explicit and unavailable defaults fail closed", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  report.warnings = [];
+  report.cash_observations = [];
+  report.accounts.forEach(item => { item.cash_observation = null; });
+  report.accounts.filter(item => item.kind === "deposit")
+    .forEach(item => { item.terms = null; });
+  const account = report.accounts.find(item => item.kind === "broker" && item.status === "active");
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  let settingsUnavailable = false;
+  await page.route("**/api/v1/settings/session", route => settingsUnavailable
+    ? route.fulfill({ status: 503, json: { error: "settings_unavailable" } })
+    : route.fulfill({ json: {
+      enabled: true, csrf: "synthetic-settings-csrf", revision: 1,
+      preferences: { compact_mode: false, review_interval_days: 30, savings_terms_interval_days: 90 },
+      connection_revision: 0, etoro_credential_revision: "0",
+      connection_settings_enabled: false, connection_overrides: {},
+    } }));
+  await page.goto("/investment");
+
+  let card = page.locator(".account-maintenance-card").filter({ has: page.getByRole("heading", {
+    name: account.name, exact: true,
+  }) });
+  const interval = card.getByRole("combobox", { name: `Expected review interval for ${account.name}` });
+  await expect(interval).toHaveValue("30");
+  await expect(card).toContainText("Using the workspace default.");
+  await interval.selectOption("14");
+  await expect(card).toContainText("Saved for this account in this browser.");
+  await page.reload();
+  card = page.locator(".account-maintenance-card").filter({ has: page.getByRole("heading", {
+    name: account.name, exact: true,
+  }) });
+  await expect(card.getByRole("combobox", { name: `Expected review interval for ${account.name}` }))
+    .toHaveValue("14");
+  await expect(card).toContainText("Saved for this account in this browser.");
+
+  await page.evaluate(portfolioId => {
+    localStorage.removeItem(`goldscout.account-maintenance.v1.${portfolioId}`);
+    for (let index = localStorage.length - 1; index >= 0; index--) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(`goldscout.account-maintenance.v1.${encodeURIComponent(portfolioId)}.account.`))
+        localStorage.removeItem(key);
+    }
+  }, report.portfolio_id);
+  settingsUnavailable = true;
+  await page.reload();
+  card = page.locator(".account-maintenance-card").filter({ has: page.getByRole("heading", {
+    name: account.name, exact: true,
+  }) });
+  await expect(page.getByRole("alert")).toContainText("Workspace review defaults are unavailable");
+  await expect(card.getByRole("combobox", { name: `Expected review interval for ${account.name}` }))
+    .toHaveValue("");
+  await expect(card).toContainText("Freshness unknown");
+  await expect(card).toContainText("No interval is set");
+  await expect(card.getByRole("button", { name: "Mark account checked today" })).toHaveCount(0);
+  const deposit = report.accounts.find(item => item.kind === "deposit" && item.status === "active");
+  expect(deposit).toBeDefined();
+  const depositCard = page.locator(".account-maintenance-card").filter({ has: page.getByRole("heading", {
+    name: deposit.name, exact: true,
+  }) });
+  await depositCard.getByRole("combobox", {
+    name: `Savings terms recheck interval for ${deposit.name}`,
+  }).selectOption("90");
+  await expect(depositCard).toContainText("Saved for this account in this browser.");
+  await expect(depositCard.getByRole("button", { name: "Mark account checked today" })).toHaveCount(0);
+});
+
+test("duplicate account names include their journal IDs in review cards", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  const active = report.accounts.filter(item => item.status === "active");
+  expect(active.length).toBeGreaterThan(1);
+  active[1].name = active[0].name;
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+
+  for (const account of active.slice(0, 2))
+    await expect(page.getByRole("heading", { name: `${account.name} (${account.id})` })).toBeVisible();
+});
+
 test("historical performance limitations remain distinct from current actions", async ({ page }) => {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
   report.source_mode = "recorded";
@@ -126,7 +213,7 @@ test("portfolio shows evidence age and dated activity without claiming live bala
 
   await expect(page.getByRole("region", { name: "Valuation evidence" })).toContainText("age: 2 days");
   await expect(page.getByRole("region", { name: "Valuation evidence" }))
-    .toContainText("Set an expected review interval for each account below");
+    .toContainText("Valuation recorded");
   const summary = page.getByRole("region", { name: "Accounts and investments" });
   await expect(summary).toContainText("Last cash check:");
   await expect(summary).toContainText("difference at that time: -£1.00");

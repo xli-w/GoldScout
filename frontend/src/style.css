@@ -98,6 +98,7 @@
 .account-maintenance-card dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .account-maintenance-card > label { display: grid; gap: 6px; max-width: 360px; font-size: 12px; }
 .account-maintenance-card select { min-height: 36px; padding: 7px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface-raised); color: var(--ink); }
+.account-setting-source { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .account-next-action { padding: 10px 12px; border-left: 3px solid var(--amber); background: var(--surface-raised); font-size: 12px; line-height: 1.5; }
 .account-maintenance-card .recording-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .account-maintenance-card .recording-actions button, .review-checkpoint button,
@@ -216,8 +217,6 @@ button { background: transparent; color: inherit; border: 0; }
 .nav-groups { display: grid; gap: 20px; margin-top: 49px; }
 .nav-section { display: grid; gap: 6px; min-width: 0; }
 .nav-section-label { color: #8a969b; font-size: 9px; letter-spacing: .08em; padding-inline: 13px; }
-.advisory-nav-section { border-top: 1px solid var(--line); padding-top: 15px; }
-.advisory-navigation a.active { color: #624b83; background: #f1edf6; }
 .nav-hint { display: none; }
 nav { display: grid; gap: 5px; }
 nav a { display: flex; align-items: center; gap: 11px; padding: 12px 13px; font-size: 14px; color: #65757a; border-radius: 5px; }
@@ -387,6 +386,9 @@ input, select, textarea { accent-color: #40d899; }
 }
 .metrics > div:last-child { border-right: 1px solid var(--line); }
 .metrics small, .metrics strong.unavailable { color: var(--muted); }
+.investment-view .metrics strong { overflow-wrap: anywhere; }
+.investment-view .metrics .metric-amount-nowrap { white-space: nowrap; overflow-wrap: normal; }
+.investment-view .position-note { font-size: 12px; line-height: 1.6; }
 .investment-boundary { background: #301d21; border-color: #e97883; color: #f5c2c6; }
 .investment-boundary svg { color: var(--red); }
 .investment-warnings, .guide-warning { background: #2a2416; border-color: var(--amber); }
@@ -462,6 +464,7 @@ tbody tr:hover { background: #182b21; }
 
 @media (max-width: 1150px) {
   .shell { grid-template-columns: 185px minmax(0, 1fr); }
+  .investment-view .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
   .shell { display: block; }
@@ -471,7 +474,6 @@ tbody tr:hover { background: #182b21; }
   .nav-section-label, .sidebar-bottom { display: none; }
   .nav-groups { display: grid; gap: 0; overflow: visible; margin-top: 12px; }
   .nav-section { display: block; padding: 0; }
-  .advisory-nav-section { border: 0; padding: 0; margin: 0; }
   .sidebar .nav-section nav { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
   .sidebar .nav-section nav a { display: flex; flex-direction: row; align-items: center; gap: 6px; min-height: 44px; padding: 8px; border: 0; border-radius: 6px; font-size: 12px; line-height: 1.2; white-space: nowrap; }
   .sidebar .nav-section nav a svg { display: block; flex-shrink: 0; }

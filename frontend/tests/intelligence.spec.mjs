@@ -9,7 +9,7 @@ test("synthetic intelligence controls and briefs work without account data",asyn
   const resetStatus=await page.evaluate(async()=>{const snapshot=await(await fetch('/api/v1/intelligence')).json();if(snapshot.source_mode!=='demo')throw new Error('Synthetic intelligence is required');const session=await(await fetch('/api/v1/intelligence/session')).json();const response=await fetch('/api/v1/intelligence/controls',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({request_id:crypto.randomUUID(),database_id:snapshot.database_id,base_revision:snapshot.settings.revision,settings:{enabled:false,calendar_enabled:true,news_enabled:true,ai_enabled:false,mode:'advisory',ai_profile:null}})});return response.status;});
   expect(resetStatus).toBe(202);
   await page.reload();
-  await expect(page.getByRole("heading",{name:"Market context",exact:true})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Market Intelligence",exact:true})).toBeVisible();
   await expect(page.getByText("Synthetic intelligence",{exact:true})).toBeVisible();
   await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("U.S.-focused calendars and Federal Reserve policy news.");
   await expect(page.getByRole("region",{name:"Current source coverage"})).toContainText("UK/global calendars and issuer coverage are unverified");
@@ -67,12 +67,12 @@ test("intelligence header uses its own source instead of cached account status",
   await expect(page.getByRole("heading",{name:"Your portfolio",exact:true})).toBeVisible();
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.source_mode="recorded";
-  await page.getByRole("navigation",{name:"Optional tools navigation"})
-    .getByRole("link",{name:"Market context",exact:true}).click();
+  await page.getByRole("navigation",{name:"Portfolio navigation"})
+    .getByRole("link",{name:"Market Intelligence",exact:true}).click();
   await expect(page.getByRole("heading",{name:"Economic calendar"})).toBeVisible();
   await expect(page.locator(".topbar-status")).toContainText("RECORDED INTELLIGENCE");
   await expect(page.locator(".topbar-status")).not.toContainText("Runtime");
-  await expect(page.locator(".page-heading")).toContainText("Market context");
+  await expect(page.locator(".page-heading")).toContainText("Market Intelligence");
   await expect(page.locator(".page-heading")).not.toContainText("INTELLIGENCE WORKSPACE");
   await page.route("**/api/v1/intelligence",route=>route.abort());
   await page.getByRole("button",{name:"Refresh data"}).click();
@@ -169,7 +169,7 @@ test("intelligence briefs link only loaded evidence and show their validity wind
 
   await expect(page.locator(".page-description")).toHaveCount(0);
   await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("Optional public information");
-  await expect(page.getByRole("navigation",{name:"Optional tools navigation"})).toContainText("Market context");
+  await expect(page.getByRole("navigation",{name:"Portfolio navigation"})).toContainText("Market Intelligence");
   const sections=page.getByRole("navigation",{name:"Intelligence sections"});
   await expect(sections.getByRole("link",{name:"Source evidence"})).toHaveAttribute("href","#intelligence-news");
   await expect(sections.getByRole("link",{name:"Analysis controls"})).toHaveAttribute("href","#intelligence-controls");

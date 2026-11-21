@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Activity, CircleHelp, ListOrdered, LockKeyhole, RefreshCw, Settings as SettingsIcon, Target, Wallet } from "lucide-react";
+import { Activity, CircleHelp, LockKeyhole, RefreshCw, Settings as SettingsIcon, Target, Wallet } from "lucide-react";
 import { IntelligenceView, useIntelligence } from "./IntelligenceView";
 import { InvestmentGuide, InvestmentRecordingPage, InvestmentView } from "./InvestmentView";
 import type { ValueChangeSelection } from "./InvestmentView";
@@ -70,20 +70,25 @@ export function App() {
   if (location.pathname === "/") return <Navigate to="/investment" replace />;
 
   const pages: Record<string, string> = {
-    "/investment": "Your portfolio",
+    "/investment": "Your Portfolio",
     "/investment/record": "Add a record",
     "/investment/update": "Update an account",
     "/investment/reviews": "Review checks",
     "/investment-guide": "Help",
     "/planning": "Goals",
-    "/intelligence": "Market context",
+    "/intelligence": "Market Intelligence",
     "/settings": "Settings",
   };
   const pageName = pages[location.pathname];
-  const reviewDefaults = {
-    reviewIntervalDays: settingsSession.data?.preferences?.review_interval_days ?? 30,
-    termsIntervalDays: settingsSession.data?.preferences?.savings_terms_interval_days ?? 90,
-  };
+  const reviewDefaults = !settingsSession.isError && settingsSession.data?.enabled &&
+    settingsSession.data.preferences
+    ? {
+      reviewIntervalDays: settingsSession.data.preferences.review_interval_days,
+      termsIntervalDays: settingsSession.data.preferences.savings_terms_interval_days,
+    }
+    : null;
+  const reviewDefaultsStatus: "loading" | "unavailable" | "ready" = settingsSession.isPending ? "loading"
+    : reviewDefaults === null ? "unavailable" : "ready";
   const intelligenceMode = intelligence.isError ? undefined : intelligence.data?.source_mode;
   const intelligenceStatus = intelligence.isError ? "Source unavailable"
     : intelligence.isFetching ? intelligence.data ? "Refreshing intelligence" : "Checking source"
@@ -99,19 +104,14 @@ export function App() {
           <nav aria-label="Portfolio navigation">
             <NavLink to="/investment" end><Wallet size={18} /><span>Your portfolio</span></NavLink>
             {workspace.data === "investment" && <NavLink to="/planning"><Target size={18} /><span>Goals</span></NavLink>}
-            <NavLink to="/investment-guide"><CircleHelp size={18} /><span>Help</span></NavLink>
-          </nav>
-        </div>
-        <div className="nav-section advisory-nav-section"><span className="nav-section-label">OPTIONAL</span>
-          <nav aria-label="Optional tools navigation">
-            <NavLink to="/investment/reviews"><ListOrdered size={18} /><span>Review checks</span></NavLink>
-            <NavLink to="/intelligence"><Activity size={18} /><span>Market context</span></NavLink>
+            <NavLink to="/intelligence"><Activity size={18} /><span>Market Intelligence</span></NavLink>
           </nav>
         </div>
       </div>
-      {workspace.data === "investment" && <nav className="settings-nav" aria-label="Settings navigation">
-        <NavLink to="/settings"><SettingsIcon size={18} /><span>Settings</span></NavLink>
-      </nav>}
+      <nav className="settings-nav" aria-label="Settings and help navigation">
+        {workspace.data === "investment" && <NavLink to="/settings"><SettingsIcon size={18} /><span>Settings</span></NavLink>}
+        <NavLink to="/investment-guide"><CircleHelp size={18} /><span>Help</span></NavLink>
+      </nav>
     </aside>
     <div className="workspace">
       <header className="topbar"><div className="breadcrumb">Portfolio <span>/</span> <strong>{pageName || "Page not found"}</strong></div>
@@ -131,7 +131,7 @@ export function App() {
           }}><RefreshCw size={19} className={intelligence.isFetching ? "spin" : ""} /></button>}</div>
         {location.pathname === "/investment" ? <InvestmentView now={now}
           valueChangeSelection={valueChangeSelection} setValueChangeSelection={setValueChangeSelection}
-          reviewDefaults={reviewDefaults} />
+          reviewDefaults={reviewDefaults} reviewDefaultsStatus={reviewDefaultsStatus} />
           : location.pathname === "/investment/record" ? <InvestmentRecordingPage />
           : location.pathname === "/investment/update" ? <AccountUpdatePage now={now} />
           : location.pathname === "/investment/reviews" ? <MonitoringWorkflowPage />

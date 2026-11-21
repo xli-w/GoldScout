@@ -82,7 +82,7 @@ keeping the same workspace. This also prevents first-run setup from saving.
 
 ## Settings
 
-Open **Settings** at the bottom of the portfolio navigation to change compact
+Open **Settings** near the bottom of the portfolio navigation to change compact
 display and default review intervals, or enter optional provider connection
 values. Preferences are stored in `.goldscout-settings.json` beside the selected
 workspace; account-specific browser choices are preserved. Connection values

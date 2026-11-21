@@ -40,7 +40,11 @@ test("settings persist preferences and keep entered credentials write-only", asy
   });
 
   await page.goto("/settings");
-  await expect(page.getByRole("navigation", { name: "Settings navigation" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Settings and help navigation" })
+    .getByRole("link")).toHaveText(["Settings", "Help"]);
+  await expect(page.getByRole("navigation", { name: "Portfolio navigation" })
+    .getByRole("link")).toHaveText(["Your portfolio", "Goals", "Market Intelligence"]);
+  await expect(page.getByRole("link", { name: "Review checks", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Private connections" })).toBeVisible();
   await page.getByLabel("Compact display").check();
   await page.getByLabel("Default account review interval").selectOption("14");

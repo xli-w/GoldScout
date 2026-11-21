@@ -72,25 +72,34 @@ Partial or uncertain setup does not enable recording.
 Monitoring cache/workflow writes have separate gates; a page refresh never
 collects provider data or updates accounting.
 
-The portfolio view leads with recorded balances and holdings; optional checks,
-advisory context and detailed evidence remain available without being required
-for basic use. Recording previews show a human-readable summary with the exact
-event retained in expandable details. Monitoring observation entry uses
-separate holding and explicit mapping fields; comparison results are displayed
-separately from append-only review-inbox actions. Neither workflow status nor a
-reconciliation match establishes current custody or approves a trade.
-Each account has one status and next action, using a user-selected weekly-to-
-yearly cadence stored only in this browser; savings-term rechecks have their
-own independent cadence. The status shows shared portfolio
-valuation dates, account cash and holding evidence; it does not invent an
-account-specific value history or provider agreement. A complete value remains
-complete only for its recorded date, and an older complete value can be overdue.
-Current missing values and recorded cash differences take priority over
-choosing a cadence; a later matching cash check does not resolve an earlier
-difference. Historical performance limitations are presented separately from
-current attention, without hiding correction-related cash replay warnings.
-Account cards show their next action first; recorded cash, valuation dates and
-other account facts remain in each card's expandable details.
+The portfolio view puts attention and account review first, then value
+comparisons, with holdings, detailed records and optional tools below. Account
+review and comparison dates use readable UTC formatting. Recorded account
+cards carry their cash and holdings details, avoiding a second account-and-cash
+summary; the synthetic demo still shows that summary. Backup and recovery
+controls are collapsed and load only when opened, and the optional eToro view
+is lower on the page. Recording previews show a human-readable summary with
+the exact event retained in expandable details. Monitoring observation entry
+uses separate holding and explicit mapping fields; comparison results are
+displayed separately from append-only review-inbox actions. Neither workflow
+status nor a reconciliation match establishes current custody or approves a
+trade.
+Each account has one status and next action, using an account-specific
+weekly-to-yearly cadence saved in this browser or the configured workspace
+default; the source is stated on the account card. Savings-term rechecks have
+their own independent cadence. If workspace settings cannot be loaded, no
+replacement cadence is assumed: age-based freshness stays unknown until an
+interval is chosen, while account-specific choices remain available. The
+status shows shared portfolio valuation dates, account cash and holding
+evidence; it does not invent an account-specific value history or provider
+agreement. A complete value remains complete only for its recorded date, and
+an older complete value can be overdue. Current missing values and recorded
+cash differences take priority over choosing a cadence; a later matching cash
+check does not resolve an earlier difference. Historical performance
+limitations are presented separately from current attention, without hiding
+correction-related cash replay warnings. Account cards show their next action
+first; recorded cash, valuation dates and other account facts remain in each
+card's expandable details.
 **Guided account review** keeps a local checklist across active accounts. It
 resumes after a browser restart when the journal revision is unchanged; after
 any journal record changes, the old checklist is retained but marked stale and

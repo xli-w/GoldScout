@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import { evidenceAge, pounds, timestamp } from "./api";
 import { readReviewCycle, reviewStorageKey, sameReview } from "./guided-review";
+import { accountDisplay } from "./portfolio-display";
 import type { ReviewCycle } from "./guided-review";
 import type { InvestmentSnapshot } from "./InvestmentView";
 
@@ -113,22 +114,23 @@ function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
     const maturityDays = account.terms?.maturity_date
       ? Math.ceil((Date.parse(`${account.terms.maturity_date}T00:00:00Z`) - now) / 86400000)
       : null;
+    const name = accountDisplay(data, account.id);
     if (preference?.intervalDays === null || preference?.intervalDays === undefined)
-      unresolved.push(`${account.name} account review interval has not been chosen`);
-    if (hasMissingPrice) unresolved.push(`${account.name} has an unpriced holding`);
-    if (hasCashDifference) unresolved.push(`${account.name} has a recorded cash difference`);
-    if (correctionNeedsReview) unresolved.push(`${account.name} cash checks may have changed after correction replay`);
-    if (stale) unresolved.push(`${account.name} valuation or holding prices are past the chosen interval`);
-    if (cashCheckStale) unresolved.push(`${account.name} cash check is missing or past the chosen interval`);
+      unresolved.push(`${name} account review interval has not been chosen`);
+    if (hasMissingPrice) unresolved.push(`${name} has an unpriced holding`);
+    if (hasCashDifference) unresolved.push(`${name} has a recorded cash difference`);
+    if (correctionNeedsReview) unresolved.push(`${name} cash checks may have changed after correction replay`);
+    if (stale) unresolved.push(`${name} valuation or holding prices are past the chosen interval`);
+    if (cashCheckStale) unresolved.push(`${name} cash check is missing or past the chosen interval`);
     if (account.kind === "deposit" &&
         (preference?.termsIntervalDays === null || preference?.termsIntervalDays === undefined))
-      unresolved.push(`${account.name} savings terms review interval has not been chosen`);
+      unresolved.push(`${name} savings terms review interval has not been chosen`);
     else if (termsStale)
-      unresolved.push(`${account.name} savings terms are missing or past their separate chosen interval`);
+      unresolved.push(`${name} savings terms are missing or past their separate chosen interval`);
     if (maturityDays !== null && maturityDays <= 90)
-      unresolved.push(`${account.name} has an approaching recorded maturity date`);
+      unresolved.push(`${name} has an approaching recorded maturity date`);
     if (isReviewDue(preference, reviewNow))
-      unresolved.push(`${account.name} reminder is due`);
+      unresolved.push(`${name} reminder is due`);
   }
   for (const account of data.accounts.filter(item => item.status === "retired")) {
     const hasCashDifference = data.cash_observations.some(item =>
@@ -136,9 +138,9 @@ function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
     const correctionNeedsReview = data.recorded_corrections.length > 0 &&
       data.cash_observations.some(item => item.account_id === account.id);
     if (hasCashDifference)
-      unresolved.push(`${account.name} (retired) has a recorded cash difference`);
+      unresolved.push(`${accountDisplay(data, account.id)} (retired) has a recorded cash difference`);
     if (correctionNeedsReview)
-      unresolved.push(`${account.name} (retired) cash checks may have changed after correction replay`);
+      unresolved.push(`${accountDisplay(data, account.id)} (retired) cash checks may have changed after correction replay`);
   }
   return unresolved;
 }
@@ -179,10 +181,12 @@ export async function markAccountInReview(data: InvestmentSnapshot, accountId: s
   });
 }
 
-function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, refreshSnapshot, defaults }: {
+function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, refreshSnapshot,
+  defaults, defaultsStatus }: {
   data: InvestmentSnapshot; now: number; onReviewCashEvidence: () => void; onFinishReview: () => boolean;
   refreshSnapshot: () => Promise<InvestmentSnapshot>;
-  defaults: { reviewIntervalDays: number; termsIntervalDays: number };
+  defaults: { reviewIntervalDays: number; termsIntervalDays: number } | null;
+  defaultsStatus: "loading" | "unavailable" | "ready";
 }) {
   const [preferences, setPreferences] = useState<PreferenceState>({});
   const [cycle, setCycle] = useState<ReviewCycle | null>(null);
@@ -235,14 +239,14 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
     for (const account of data.accounts) {
       const saved = preferences[account.id];
       result[account.id] = {
-        intervalDays: saved?.intervalDays ?? defaults.reviewIntervalDays,
+        intervalDays: saved?.intervalDays ?? defaults?.reviewIntervalDays ?? null,
         termsIntervalDays: account.kind === "deposit"
-          ? saved?.termsIntervalDays ?? defaults.termsIntervalDays : null,
+          ? saved?.termsIntervalDays ?? defaults?.termsIntervalDays ?? null : null,
         reviewedAt: saved?.reviewedAt ?? null,
       };
     }
     return result;
-  }, [data.accounts, defaults.reviewIntervalDays, defaults.termsIntervalDays, preferences]);
+  }, [data.accounts, defaults, preferences]);
   const currentCycle = cycle !== null && cycle.revision === data.revision &&
     cycle.accountIds.length === activeIds.length &&
     cycle.accountIds.every((id, index) => id === activeIds[index]);
@@ -340,13 +344,16 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
     <h2>Account status and next action</h2>
     <p className="position-note">These are reminders based on your chosen review interval and recorded journal dates.
       They do not verify a bank or broker. A complete value for an older date is not a current balance.</p>
+    {defaultsStatus === "loading" && <p role="status">Loading workspace review defaults. Saved account-specific choices remain in effect.</p>}
+    {defaultsStatus === "unavailable" && <p role="alert">Workspace review defaults are unavailable; they have not been replaced with assumed settings.
+      {" "}Saved account-specific choices remain in effect. Choose an interval for each account or <NavLink to="/settings">retry Settings</NavLink>.</p>}
     <section className="account-review-cycle" aria-label="Guided portfolio review">
       <h3>Guided account review</h3>
       {activeIds.length === 0 ? <p>No active accounts are available to review.</p> : <>
         {currentCycle ? <>
           <p role="status">{checkedIds.length} of {activeIds.length} accounts checked in this review.
             {" "}Started {timestamp(cycle.startedAt)}.</p>
-          {nextAccount && <p>Next: {data.accounts.find(account => account.id === nextAccount)?.name}.</p>}
+          {nextAccount && <p>Next: {accountDisplay(data, nextAccount)}.</p>}
           {checkedIds.length === activeIds.length && <>
             <p><strong>Accounts checked.</strong> {unresolved.length === 0
               ? "This checklist found no unresolved items. Review the portfolio warnings and limitations separately; this is not provider verification."
@@ -379,6 +386,11 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
     </p>}
     {data.accounts.filter(account => account.status === "active").map(account => {
       const preference = effectivePreferences[account.id];
+      const savedPreference = preferences[account.id];
+      const hasAccountReviewInterval = savedPreference?.intervalDays !== null &&
+        savedPreference?.intervalDays !== undefined;
+      const hasAccountTermsInterval = savedPreference?.termsIntervalDays !== null &&
+        savedPreference?.termsIntervalDays !== undefined;
       const marks = data.holdings.filter(holding => holding.account_id === account.id);
       const missingPrice = marks.some(holding => holding.mark_at === null || holding.value_gbp === null);
       const latestCashCheck = account.cash_observation;
@@ -442,9 +454,10 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
 
       return <article className="account-maintenance-card" key={account.id}>
         <div className="account-maintenance-heading">
-          <div><h3>{account.name}</h3><span>{account.kind === "deposit" ? "Savings account" : "Investment account"}</span></div>
+          <div><h3>{accountDisplay(data, account.id)}</h3><span>{account.kind === "deposit" ? "Savings account" : "Investment account"}</span></div>
           <strong>{needsAction ? "Action needed" : reviewNeeded ? "Check due"
-            : preference?.intervalDays == null ? "Freshness unknown" : "Within chosen interval"}</strong>
+            : preference?.intervalDays == null ? "Freshness unknown"
+              : hasAccountReviewInterval ? "Within account interval" : "Within workspace default"}</strong>
         </div>
         <p className="account-next-action"><strong>Next action:</strong> {action}</p>
         {preference?.reviewedAt && preference.intervalDays !== null && <p className="position-note">
@@ -498,6 +511,11 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
                   : days === 180 ? "Every six months" : "Every year"}
             </option>)}
           </select>
+          <span className="account-setting-source">{hasAccountReviewInterval
+            ? "Saved for this account in this browser."
+            : preference?.intervalDays !== null && preference?.intervalDays !== undefined
+              ? "Using the workspace default. Changing this saves a separate choice for this account."
+              : "No interval is set. Choose one to start a local reminder."}</span>
         </label>
         {account.kind === "deposit" && <label>Expected savings-terms recheck interval (separate)
           <select aria-label={`Savings terms recheck interval for ${account.name}`}
@@ -514,6 +532,11 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
                   : days === 180 ? "Every six months" : "Every year"}
             </option>)}
           </select>
+          <span className="account-setting-source">{hasAccountTermsInterval
+            ? "Saved for this account in this browser."
+            : preference?.termsIntervalDays !== null && preference?.termsIntervalDays !== undefined
+              ? "Using the workspace default. Changing this saves a separate choice for this account."
+              : "No interval is set. Choose one to start a local reminder."}</span>
         </label>}
         <div className="recording-actions">
           <NavLink className="record-action"
@@ -538,7 +561,8 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
               onClick={() => void markReviewed(account.id)}>
               Mark reviewed in this session
             </button>}
-          {preference && !currentCycle && <button type="button" disabled={error !== ""}
+          {preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
+            !currentCycle && <button type="button" disabled={error !== ""}
             onClick={() => update(account.id, { reviewedAt: new Date().toISOString() })}>
             Mark account checked today
           </button>}

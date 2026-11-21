@@ -37,6 +37,8 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
   return <section className="history-group portfolio-monitoring" aria-label="Portfolio monitoring">
     <h2>Checks from saved information</h2>
     <p className="position-note">Optional checks use saved evidence only; they do not verify accounts or change records.</p>
+    <p><NavLink className="text-link" to="/investment/reviews">Review checks and compare account figures</NavLink>
+      {" "}to track findings or compare figures using a separate monitoring store.</p>
     {query.isError || mismatch ? <p role="alert">{mismatch && !query.isError
       ? "Investment revision changed. Refresh both views before interpreting findings."
       : "Saved checks are unavailable. Previous findings are not current."}
@@ -52,8 +54,7 @@ export function PortfolioMonitoring({ portfolioId, revision }: { portfolioId: st
         <p>{data.source_mode === "demo" ? "Synthetic monitoring demonstration" : "Recorded local evidence"}; checked {timestamp(data.generated_at)}.</p>
         <p>Provider connections are not verified. These checks use saved evidence only.</p>
         <h3>Findings</h3>
-        <p><NavLink className="text-link" to="/investment/reviews">Open the separate review inbox</NavLink>
-          {" "}to track your review. This does not resolve a finding.</p>
+        <p>Recording a review status does not resolve a finding.</p>
         {data.findings.length === 0
           ? <p>No findings in this report. These checks do not verify every account or provider.</p>
           : <ul>{data.findings.map(item => <li key={item.id}>
