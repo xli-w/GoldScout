@@ -49,12 +49,21 @@ complete only for its recorded date; an old complete value is overdue under the
 selected interval. Cash, units and price dates remain operator-entered evidence.
 Review intervals and review dates are reminders, not journal records or provider
 checks. A guided review walks across active accounts and resumes in the same
-browser while the journal revision is unchanged. Any record change makes old
-progress stale and requires a restart. Its completion summary keeps missing
+browser. A confirmed supported account record in the same browser advances the
+review and clears the affected account's check (both accounts for a transfer).
+Other journal changes, revision gaps, or an uncertain retry without its preview
+leave progress stale and require a restart. Checking a quiet account needs no
+new journal record. Finish the review to save an available complete value for
+the next comparison; an incomplete value is not saved. Its completion summary keeps missing
 values, cash differences and correction-related checks visible; completion is
 not an all-clear. A cash difference or unavailable full value is shown before
 the request to choose a review interval. Earlier differing cash checks remain
 attention items even if the latest check matches.
+Review progress is bound to portfolio ID and revision, not a journal history
+hash: after restoring or switching to a divergent journal with the same ID and
+revision, start a new review. Snapshot checks and browser storage are not atomic
+with external writers; a later refresh can reveal a stale review. Browser
+coordination does not prevent outside journal writes.
 Savings accounts can surface missing or overdue rate, access, notice and maturity
 terms using a separate browser-only recheck interval, and an approaching
 recorded maturity date. These are prompts to verify current provider
@@ -241,7 +250,7 @@ verify the records or know that all activity and fees have been captured.
 For a regular account review, choose **Update** beside that account. The guided
 page combines recorded cash, the last cash-check difference and holding price
 dates, then offers plain-language actions for transactions, cash checks and
-price updates. No monitoring configuration is needed. Each action still needs
+price updates, account charges and savings terms. No monitoring configuration is needed. Each action still needs
 its own preview and confirmation; saving returns to the account review, not
 an automatic all-clear. A missing or retired account/holding is never replaced
 with another selection. Provider snapshots are not imported by this workflow.

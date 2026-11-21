@@ -123,6 +123,145 @@ test("unavailable account and stale holding targets never fall back to another s
   await expect(page.getByRole("alert")).toContainText("No alternative was selected");
 });
 
+test("savings terms and fees link directly to the selected account without writes", async ({ page }) => {
+  const { session, account } = await fixture(page);
+  const savings = session.accounts.find(item => item.kind === "deposit");
+  expect(savings).toBeTruthy();
+  let posts = 0;
+  page.on("request", request => { if (request.method() === "POST") posts++; });
+  await page.goto(`/investment/update?account_id=${savings.id}`);
+  await page.getByRole("link", { name: "Record this account's savings terms" }).click();
+  await expect(page.getByLabel("What are you recording?")).toHaveValue("savings_terms");
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toHaveValue(savings.id);
+  await expect(page.getByRole("combobox", { name: "Account", exact: true }).locator(`option[value="${account.id}"]`)).toHaveCount(0);
+  await page.getByRole("link", { name: "Return to the account review" }).click();
+  await page.getByRole("link", { name: "An account or platform charge was paid" }).click();
+  await expect(page.getByLabel("What are you recording?")).toHaveValue("account_fee");
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toHaveValue(savings.id);
+  await page.goto(`/investment/update?account_id=${account.id}`);
+  await expect(page.getByRole("link", { name: "Record this account's savings terms" })).toHaveCount(0);
+  await page.getByRole("link", { name: "An account or platform charge was paid" }).click();
+  await expect(page.getByLabel("What are you recording?")).toHaveValue("account_fee");
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toHaveValue(account.id);
+  await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=savings_terms`);
+  await expect(page.getByRole("alert")).toContainText("No alternative was selected");
+  expect(posts).toBe(0);
+});
+
+test("savings terms preview and confirm preserve sourced fields and unknowns", async ({ page }) => {
+  const { report, session } = await fixture(page);
+  const savings = session.accounts.find(item => item.kind === "deposit");
+  report.accounts.find(item => item.id === savings.id).terms = {
+    annual_rate_pct: "3.5", rate_basis: "gross", effective_from: "2026-01-01",
+    observed_at: "2026-01-01T10:00:00Z", available_at: "2026-01-01T10:00:00Z",
+    source: "Synthetic previous notice", maturity_date: "2031-01-01", notice_days: 90,
+  };
+  let submitted;
+  let confirmations = 0;
+  await page.route("**/api/investment/v1/recording/preview", async route => {
+    submitted = route.request().postDataJSON().event;
+    await route.fulfill({ json: {
+      preview_id: "terms-preview", revision: report.revision, event: submitted,
+      before: report, after: { ...report, revision: report.revision + 1 },
+      expires_at: "2030-01-01T12:05:00Z",
+    } });
+  });
+  await page.route("**/api/investment/v1/recording/confirm", async route => {
+    confirmations++;
+    await route.fulfill({ json: { id: submitted.id, revision: report.revision + 1 } });
+  });
+  await page.goto(`/investment/update?account_id=${savings.id}`);
+  await page.getByRole("link", { name: "Record this account's savings terms" }).click();
+  await page.getByLabel("Annual rate (%) (optional)").fill("4.25");
+  await page.getByLabel("Rate basis").selectOption("AER");
+  await page.getByLabel("Terms effective from").fill("2030-02-01");
+  await page.getByLabel("Notice days (optional)").fill("30");
+  await page.getByLabel("Terms source", { exact: true }).fill("Synthetic rate notice");
+  await page.getByLabel("Terms observed at (local time)").fill("2030-01-01T11:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T11:30");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic announced terms");
+  await page.reload();
+  await expect(page.getByLabel("Annual rate (%) (optional)")).toHaveValue("4.25");
+  await expect(page.getByLabel("Terms effective from")).toHaveValue("2030-02-01");
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("region", { name: "Previous savings terms" })).toContainText("2031-01-01");
+  await expect(page.getByRole("region", { name: "Previous savings terms" })).toContainText("Blank optional fields become unknown");
+  await expect(page.getByRole("region", { name: "Record summary" })).toContainText(/Maturity date\s*Not recorded/);
+  expect(submitted).toMatchObject({
+    type: "savings_terms", account_id: savings.id, annual_rate_pct: "4.25", rate_basis: "AER",
+    effective_from: "2030-02-01", maturity_date: null, notice_days: 30,
+    source: "Synthetic rate notice", evidence: "Synthetic announced terms",
+  });
+  expect(confirmations).toBe(0);
+  await page.getByRole("button", { name: "Confirm and append record" }).click();
+  await expect(page).toHaveURL(new RegExp(`/investment/update\\?account_id=${savings.id}$`));
+  expect(confirmations).toBe(1);
+});
+
+test("savings terms reject invalid dates, source, rate and notice before preview", async ({ page }) => {
+  const { session } = await fixture(page);
+  const savings = session.accounts.find(item => item.kind === "deposit");
+  let previews = 0;
+  await page.route("**/api/investment/v1/recording/preview", route => { previews++; return route.abort(); });
+  await page.goto(`/investment/record?record=account-update&account_id=${savings.id}&kind=savings_terms`);
+  await page.getByLabel("Terms effective from").fill("2030-02-01");
+  await page.getByLabel("Maturity date (optional)").fill("2030-01-01");
+  await page.getByLabel("Terms source", { exact: true }).fill("Synthetic notice");
+  await page.getByLabel("Terms observed at (local time)").fill("2030-01-01T11:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T11:30");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic source");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("status")).toContainText("maturity date on or after");
+  await page.getByLabel("Maturity date (optional)").fill("");
+  await page.getByLabel("Terms source", { exact: true }).fill(" ");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("status")).toContainText("Enter a source");
+  await page.getByLabel("Terms source", { exact: true }).fill("Synthetic notice");
+  await page.getByLabel("Annual rate (%) (optional)").fill("101");
+  await page.getByLabel("Rate basis").selectOption("AER");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("status")).toContainText("valid annual rate");
+  await page.getByLabel("Annual rate (%) (optional)").fill("");
+  await page.getByLabel("Rate basis").selectOption("");
+  await page.getByLabel("Notice days (optional)").fill("3651");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("status")).toContainText("Notice days");
+  await page.getByLabel("Notice days (optional)").fill("");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T10:00");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("status")).toContainText("cannot be earlier");
+  expect(previews).toBe(0);
+});
+
+test("guided terms rejects a restored draft targeting a different account", async ({ page }) => {
+  const { report, session } = await fixture(page);
+  const savings = session.accounts.find(item => item.kind === "deposit");
+  const route = `?record=account-update&account_id=${savings.id}&kind=savings_terms`;
+  const key = `goldscout.recording-draft.v1.${encodeURIComponent(report.portfolio_id)}.${encodeURIComponent(route)}`;
+  let previews = 0;
+  await page.route("**/api/investment/v1/recording/preview", route => { previews++; return route.abort(); });
+  await page.goto(`/investment/record${route}`);
+  await page.getByLabel("Terms effective from").fill("2030-02-01");
+  await page.getByLabel("Terms source", { exact: true }).fill("Synthetic notice");
+  await page.getByLabel("Terms observed at (local time)").fill("2030-01-01T11:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T11:30");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic source");
+  await expect.poll(() => page.evaluate(savedKey => {
+    const raw = localStorage.getItem(savedKey);
+    return raw ? JSON.parse(raw).values.evidence : null;
+  }, key)).toBe("Synthetic source");
+  await page.evaluate(savedKey => {
+    const saved = JSON.parse(localStorage.getItem(savedKey));
+    saved.values.accountId = "different-account";
+    localStorage.setItem(savedKey, JSON.stringify(saved));
+  }, key);
+  await page.reload();
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await expect(page.getByRole("status")).toContainText("draft does not match the guided account");
+  expect(previews).toBe(0);
+});
+
 test("performance loss is explained and requires acknowledgement before a verified save", async ({ page }) => {
   const { report, account } = await fixture(page);
   let previewEvent;
@@ -180,6 +319,55 @@ test("malformed performance evidence cannot produce a confirmable preview", asyn
   await page.getByRole("button", { name: "Preview record" }).click();
   await expect(page.getByRole("status")).toContainText("performance evidence failed validation");
   await expect(page.getByRole("button", { name: "Confirm and append record" })).toHaveCount(0);
+});
+
+test("a failed refresh after a save keeps the committed outcome visible", async ({ page }) => {
+  const { account } = await fixture(page);
+  await page.goto(`/investment/update?account_id=${account.id}`);
+  await expect(page.getByRole("region", { name: "Account evidence to review" })).toBeVisible();
+  await page.evaluate(() => {
+    history.replaceState({ ...history.state, usr: { recordSaved: true,
+      reviewNotice: "Review progress could not be updated." } }, "");
+  });
+  await page.route("**/api/investment/v1/snapshot", async route => {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await route.fulfill({ status: 503, json: { error: "synthetic_unavailable" } });
+  });
+  await page.reload();
+  await expect(page.getByText("Your record was saved.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Account evidence to review" })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText("latest account evidence could not be refreshed");
+  await expect(page.getByRole("alert")).not.toContainText("No update has been started");
+  await expect(page.getByText(/Review progress could not be updated/)).toBeVisible();
+});
+
+test("a generic save shows its outcome after the recording page reloads", async ({ page }) => {
+  const { report, session, account } = await fixture(page);
+  let event;
+  await page.route("**/api/investment/v1/recording/preview", route => {
+    event = route.request().postDataJSON().event;
+    return route.fulfill({ json: { preview_id: "generic-preview", revision: report.revision,
+      event, before: report, after: { ...report, revision: report.revision + 1 },
+      expires_at: "2030-01-01T12:05:00Z" } });
+  });
+  await page.route("**/api/investment/v1/recording/confirm", route => {
+    report.revision++;
+    session.revision = report.revision;
+    return route.fulfill({ json: { id: event.id, revision: report.revision } });
+  });
+  await page.goto("/investment/record");
+  await page.getByLabel("What are you recording?").selectOption("interest");
+  await page.getByRole("combobox", { name: "Account", exact: true }).selectOption(account.id);
+  await page.getByLabel("GBP amount").fill("1");
+  await page.getByLabel("Why does this income belong to this role?").fill("Synthetic interest");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic interest");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await page.getByRole("button", { name: "Confirm and append record" }).click();
+  await expect(page).toHaveURL(/\/investment\/record$/);
+  await expect(page.getByText(`Previous record ${event.id} was saved.`, { exact: false })).toBeVisible();
+  await expect(page.getByLabel("What are you recording?")).toHaveValue("");
 });
 
 test("cash check preview explains the difference without claiming to update cash", async ({ page }) => {

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { NavLink } from "react-router-dom";
 import Decimal from "decimal.js";
 import { evidenceAge, pounds, timestamp } from "./api";
+import { readReviewCycle, reviewStorageKey, sameReview } from "./guided-review";
+import type { ReviewCycle } from "./guided-review";
 import type { InvestmentSnapshot } from "./InvestmentView";
 
 type AccountPreference = {
@@ -10,16 +12,8 @@ type AccountPreference = {
   reviewedAt: string | null;
 };
 type PreferenceState = Record<string, AccountPreference>;
-type ReviewCycle = { version: 1; portfolioId: string; revision: number; startedAt: string;
-  accountIds: string[]; checkedAccountIds: string[] };
-
 const STORAGE_PREFIX = "goldscout.account-maintenance.v1.";
-const REVIEW_STORAGE_PREFIX = "goldscout.guided-review.v1.";
 const INTERVALS = [7, 14, 30, 90, 180, 365];
-
-function reviewStorageKey(portfolioId: string) {
-  return `${REVIEW_STORAGE_PREFIX}${encodeURIComponent(portfolioId)}`;
-}
 
 function accountStoragePrefix(portfolioId: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(portfolioId)}.account.`;
@@ -75,30 +69,6 @@ function readPreferences(portfolioId: string): PreferenceState {
       throw new Error("Saved account review settings are invalid. They were not changed.");
   }
   return result;
-}
-
-function readReviewCycle(portfolioId: string): ReviewCycle | null {
-  const raw = localStorage.getItem(reviewStorageKey(portfolioId));
-  if (raw === null) return null;
-  if (raw.length > 32768) throw new Error("Saved guided review is too large. It was not changed.");
-  const value: unknown = JSON.parse(raw);
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error("Saved guided review is invalid. It was not changed.");
-  const item = value as Record<string, unknown>;
-  const uniqueIds = (ids: unknown): ids is string[] => Array.isArray(ids) &&
-    ids.length <= 100 && ids.every(id => typeof id === "string" && id.length > 0 && id.length <= 200) &&
-    new Set(ids).size === ids.length;
-  const accountIds = item.accountIds;
-  const checkedAccountIds = item.checkedAccountIds;
-  if (Object.keys(item).sort().join(",") !==
-      "accountIds,checkedAccountIds,portfolioId,revision,startedAt,version" ||
-      item.version !== 1 || item.portfolioId !== portfolioId ||
-      typeof item.revision !== "number" || !Number.isSafeInteger(item.revision) || item.revision < 0 ||
-      typeof item.startedAt !== "string" || !Number.isFinite(Date.parse(item.startedAt)) ||
-      !uniqueIds(accountIds) || !uniqueIds(checkedAccountIds) ||
-      checkedAccountIds.some(id => !accountIds.includes(id)))
-    throw new Error("Saved guided review is invalid. It was not changed.");
-  return item as ReviewCycle;
 }
 
 function isReviewDue(preference: AccountPreference | undefined, now: number) {
@@ -177,8 +147,38 @@ function savePreference(portfolioId: string, accountId: string, value: AccountPr
   localStorage.setItem(accountStorageKey(portfolioId, accountId), JSON.stringify(value));
 }
 
-function AccountMaintenance({ data, now, onReviewCashEvidence }: {
-  data: InvestmentSnapshot; now: number; onReviewCashEvidence: () => void;
+async function requireCurrentSnapshot(data: InvestmentSnapshot, refresh: () => Promise<InvestmentSnapshot>) {
+  const latest = await refresh();
+  if (latest.source_mode !== "recorded" || latest.portfolio_id !== data.portfolio_id ||
+      latest.revision !== data.revision)
+    throw new Error("The journal changed. Refresh the portfolio before continuing the review.");
+}
+
+export async function markAccountInReview(data: InvestmentSnapshot, accountId: string,
+  expectedCycle: ReviewCycle, refresh: () => Promise<InvestmentSnapshot>) {
+  if (!navigator.locks) throw new Error("This browser cannot coordinate review progress across tabs.");
+  return navigator.locks.request("goldscout-recording-confirmation", async () => {
+    const cycle = readReviewCycle(data.portfolio_id);
+    const activeIds = data.accounts.filter(account => account.status === "active").map(account => account.id);
+    if (!cycle || !sameReview(cycle, expectedCycle) || cycle.revision !== data.revision ||
+        cycle.accountIds.length !== activeIds.length ||
+        !cycle.accountIds.every((id, index) => id === activeIds[index]) ||
+        !cycle.accountIds.includes(accountId)) return false;
+    await requireCurrentSnapshot(data, refresh);
+    const preferences = readPreferences(data.portfolio_id);
+    const preference = preferences[accountId];
+    if (preference?.intervalDays != null)
+      savePreference(data.portfolio_id, accountId, { ...preference, reviewedAt: new Date().toISOString() });
+    const checkedAccountIds = cycle.checkedAccountIds.includes(accountId)
+      ? cycle.checkedAccountIds : [...cycle.checkedAccountIds, accountId];
+    localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify({ ...cycle, checkedAccountIds }));
+    return true;
+  });
+}
+
+function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, refreshSnapshot }: {
+  data: InvestmentSnapshot; now: number; onReviewCashEvidence: () => void; onFinishReview: () => boolean;
+  refreshSnapshot: () => Promise<InvestmentSnapshot>;
 }) {
   const [preferences, setPreferences] = useState<PreferenceState>({});
   const [cycle, setCycle] = useState<ReviewCycle | null>(null);
@@ -261,36 +261,61 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
     }
   }
 
-  function startReview() {
+  async function startReview() {
     try {
       const next: ReviewCycle = {
         version: 1, portfolioId: data.portfolio_id, revision: data.revision,
-        startedAt: new Date().toISOString(), accountIds: activeIds,
+        startedAt: new Date().toISOString(), reviewId: crypto.randomUUID(), accountIds: activeIds,
         checkedAccountIds: [],
       };
-      localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
+      if (!navigator.locks) throw new Error("This browser cannot coordinate review progress across tabs.");
+      await navigator.locks.request("goldscout-recording-confirmation", async () => {
+        if (JSON.stringify(readReviewCycle(data.portfolio_id)) !== JSON.stringify(cycle))
+          throw new Error("This review changed in another tab. Refresh before starting a new review.");
+        await requireCurrentSnapshot(data, refreshSnapshot);
+        localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
+      });
       setCycle(next);
       setError("");
-    } catch {
-      setError("The browser could not save this review session. No journal record was changed.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The browser could not save this review session.");
     }
   }
 
-  function markReviewed(accountId: string) {
+  async function markReviewed(accountId: string) {
     if (!cycle || !currentCycle || !cycle.accountIds.includes(accountId)) return;
     try {
-      const next: ReviewCycle = {
-        ...cycle,
-        checkedAccountIds: [...cycle.checkedAccountIds, accountId],
-      };
-      localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
-      setCycle(next);
-      const preference = preferences[accountId];
-      if (preference?.intervalDays == null ||
-          update(accountId, { reviewedAt: new Date().toISOString() }))
-        setError("");
-    } catch {
-      setError("The browser could not save review progress. No journal record was changed.");
+      if (!await markAccountInReview(data, accountId, cycle, refreshSnapshot)) {
+        setCycle(readReviewCycle(data.portfolio_id));
+        setError("The review changed. Refresh the portfolio before continuing.");
+        return;
+      }
+      setCycle(readReviewCycle(data.portfolio_id));
+      setPreferences(readPreferences(data.portfolio_id));
+      setError("");
+    } catch (reason) {
+      setError(`${reason instanceof Error ? reason.message : "The browser could not save review progress."} A reminder date may have been saved; check it before continuing. No journal record was changed.`);
+    }
+  }
+
+  async function finishReview() {
+    try {
+      if (!navigator.locks) throw new Error("This browser cannot coordinate review progress across tabs.");
+      await navigator.locks.request("goldscout-recording-confirmation", async () => {
+        const latest = readReviewCycle(data.portfolio_id);
+        if (!latest || !sameReview(latest, cycle) || latest.revision !== data.revision ||
+            latest.accountIds.length !== activeIds.length ||
+            !latest.accountIds.every((id, index) => id === activeIds[index]) ||
+            latest.checkedAccountIds.length !== activeIds.length)
+          throw new Error("The review changed. Refresh the portfolio before finishing.");
+        await requireCurrentSnapshot(data, refreshSnapshot);
+        if (data.complete && data.as_of && !onFinishReview()) return;
+        const next = { ...latest, finishedAt: new Date().toISOString() };
+        localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
+        setCycle(next);
+      });
+    } catch (reason) {
+      setError(`${reason instanceof Error ? reason.message : "The review could not be finished."} A comparison value may already have been saved.`);
     }
   }
 
@@ -306,19 +331,26 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
             {" "}Started {timestamp(cycle.startedAt)}.</p>
           {nextAccount && <p>Next: {data.accounts.find(account => account.id === nextAccount)?.name}.</p>}
           {checkedIds.length === activeIds.length && <>
-            <p><strong>Review complete.</strong> {unresolved.length === 0
+            <p><strong>Accounts checked.</strong> {unresolved.length === 0
               ? "This checklist found no unresolved items. Review the portfolio warnings and limitations separately; this is not provider verification."
               : `${unresolved.length} unresolved item${unresolved.length === 1 ? "" : "s"} remain. Review the account actions below; completion is not an all-clear.`}</p>
             {unresolved.length > 0 && <ul aria-label="Unresolved review items">
               {unresolved.map(item => <li key={item}>{item}</li>)}
             </ul>}
+            {!cycle.finishedAt ? <button type="button" onClick={() => void finishReview()}>
+              {data.complete && data.as_of ? "Finish review and save this value for next time" : "Finish review"}</button>
+              : <p role="status">Review complete. Finished {timestamp(cycle.finishedAt)}. A comparison value is saved separately when available.
+                {" "}Outstanding items remain visible below. This does not verify your accounts.</p>}
           </>}
         </> : cycle ? <p role="status">The journal changed after this review began. Restart the review to use current records; previous progress remains saved but is not counted.</p>
           : <p>Review each active account in turn. Progress is saved in this browser and is not an accounting record.</p>}
         {currentCycle && nextAccount
-          ? <NavLink className="record-action"
-            to={`/investment/update?account_id=${encodeURIComponent(nextAccount)}`}>Continue review</NavLink>
-          : <button type="button" onClick={startReview}>
+          ? <div className="recording-actions">
+            <NavLink className="record-action"
+              to={`/investment/update?account_id=${encodeURIComponent(nextAccount)}`}>Continue review</NavLink>
+            <button type="button" onClick={() => void startReview()}>Restart review</button>
+          </div>
+          : <button type="button" onClick={() => void startReview()}>
             {cycle ? "Start a new review" : "Start account review"}
           </button>}
       </>}
@@ -398,6 +430,9 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
             : preference?.intervalDays == null ? "Freshness unknown" : "Within chosen interval"}</strong>
         </div>
         <p className="account-next-action"><strong>Next action:</strong> {action}</p>
+        {preference?.reviewedAt && preference.intervalDays !== null && <p className="position-note">
+          Next reminder: {timestamp(new Date(Date.parse(preference.reviewedAt) + preference.intervalDays * 86400000).toISOString())}.
+        </p>}
         <details className="help-disclosure">
         <summary>Recorded account details</summary>
         <dl className="health-facts">
@@ -466,11 +501,24 @@ function AccountMaintenance({ data, now, onReviewCashEvidence }: {
         <div className="recording-actions">
           <NavLink className="record-action"
             to={`/investment/update?account_id=${encodeURIComponent(account.id)}`}>Update this account</NavLink>
+          {missingPrice && marks.filter(holding => holding.value_gbp === null).map(holding =>
+            <NavLink key={holding.product_id}
+              to={`/investment/record?record=account-update&account_id=${encodeURIComponent(account.id)}&kind=mark&product_id=${encodeURIComponent(holding.product_id)}`}>
+              Update price for {holding.name}
+            </NavLink>)}
+          {cashCheckStale && <NavLink
+            to={`/investment/record?record=account-update&account_id=${encodeURIComponent(account.id)}&kind=cash_observation`}>
+            Check this account's cash
+          </NavLink>}
+          {account.kind === "deposit" && (savingsTermsStale || maturityNeedsCheck) && <NavLink
+            to={`/investment/record?record=account-update&account_id=${encodeURIComponent(account.id)}&kind=savings_terms`}>
+            Record this account's savings terms
+          </NavLink>}
           {(cashDifference || earlierCashDifference || correctionCouldChangeChecks) &&
             <a href="#investment-accounts" onClick={onReviewCashEvidence}>Review cash evidence</a>}
           {currentCycle && cycle && cycle.accountIds.includes(account.id) &&
             !checkedIds.includes(account.id) && <button type="button" disabled={error !== ""}
-              onClick={() => markReviewed(account.id)}>
+              onClick={() => void markReviewed(account.id)}>
               Mark reviewed in this session
             </button>}
           {preference && !currentCycle && <button type="button" disabled={error !== ""}

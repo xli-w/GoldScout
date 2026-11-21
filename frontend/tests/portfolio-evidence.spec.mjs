@@ -238,9 +238,10 @@ test("local review actions use the action time rather than the last display refr
     await page.locator(".account-maintenance-card").filter({ hasText: other.name }).first()
       .getByRole("button", { name: "Mark reviewed in this session" }).click();
   }
-  await expect(guided).toContainText("Review complete.");
+  await expect(guided).toContainText("Accounts checked.");
   await expect(guided).not.toContainText(`${account.name} reminder is due`);
-  await page.getByRole("button", { name: "Save this value for the next comparison" }).click();
+  await guided.getByRole("button", { name: "Finish review and save this value for next time" }).click();
+  await expect(guided).toContainText("Review complete.");
 
   const saved = await page.evaluate(({ portfolioId, accountId }) => ({
     cycle: JSON.parse(localStorage.getItem(`goldscout.guided-review.v1.${encodeURIComponent(portfolioId)}`)),
@@ -276,6 +277,8 @@ test("guided review resumes, records completion, and restarts when journal revis
         .toContainText(`1 of ${active.length} accounts checked`);
     }
   }
+  await expect(guided).toContainText("Accounts checked.");
+  await guided.getByRole("button", { name: "Finish review and save this value for next time" }).click();
   await expect(guided).toContainText("Review complete.");
 
   report.revision++;
@@ -313,6 +316,8 @@ test("guided review completion retains cash differences on retired accounts", as
     const card = page.locator(".account-maintenance-card").filter({ hasText: account.name }).first();
     await card.getByRole("button", { name: "Mark reviewed in this session" }).click();
   }
+  await expect(guided).toContainText("Accounts checked.");
+  await guided.getByRole("button", { name: "Finish review and save this value for next time" }).click();
   await expect(guided).toContainText("Review complete.");
   await expect(guided.getByRole("list", { name: "Unresolved review items" }))
     .toContainText(`${retired.name} (retired) has a recorded cash difference`);

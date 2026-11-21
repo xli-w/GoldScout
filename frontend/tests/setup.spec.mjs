@@ -411,7 +411,7 @@ test("guided deposit setup requires review and creates only on explicit confirma
   await expect(confirm).toBeEnabled();
   await confirm.click();
   await expect(page.getByRole("heading", { name: "Setup completed" })).toBeVisible();
-  await expect(page.getByText("Open your portfolio, then choose Add a record for future updates.")).toBeVisible();
+  await expect(page.getByText("Open your portfolio to choose review intervals, review your accounts and optionally add a goal.")).toBeVisible();
   await expect(page.getByText(/Restart it with/)).toHaveCount(0);
   await expect(page.getByText(/Your draft is not saved until you confirm/)).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Have these ready" })).toHaveCount(0);

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import Decimal from "decimal.js";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
@@ -9,6 +9,9 @@ import { PortfolioAwareness } from "./PortfolioAwareness";
 import { PortfolioMonitoring } from "./PortfolioMonitoring";
 import { EToroPortfolioPanel } from "./EToroPortfolio";
 import AccountMaintenance from "./AccountMaintenance";
+import { advanceReviewAfterSave } from "./guided-review";
+import { duplicateAccountLinks, linkedGoalValue, recordedAccountValues } from "./goal-values";
+import { planningSession } from "./planning-api";
 import RecoveryPanel from "./RecoveryPanel";
 import { confirmRecording, pendingRecording, PENDING_RECORDING_KEY, recordingClocks, recordingVersion,
   RecordingPreviewChangedError, RecordingPreviewExpiredError, RecordingRequestError, RecordingSavedStorageError, standardRecord,
@@ -389,7 +392,7 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
     unavailable = selected ? "The selected earlier valuation is no longer available. Choose another date."
       : checkpointTimestamp
         ? checkpointTimestamp === end.timestamp
-          ? `No newer complete recorded value is available yet. Return after updating your records${shownCandidates.length > 0 ? ", or choose an earlier value below" : ""}.`
+          ? `No newer complete recorded value is available yet. This does not mean your accounts were unchanged. Return after updating your records${shownCandidates.length > 0 ? ", or choose an earlier value below" : ""}.`
           : "The saved review valuation is no longer available. Review the journal history before choosing another date."
         : "At least two complete recorded valuations are needed. A later source cannot fill an earlier gap.";
   }
@@ -752,6 +755,7 @@ type RecordingDraftValues = {
   newProductMinimum: string; newAccountId: string; newAccountName: string; newAccountBinding: string;
   newAccountKind: string; newAccountCash: string; scopeBalances: Record<string, string>;
   scopeHoldings: ScopeHoldingInput[]; ratio: string;
+  termsRate?: string; termsBasis?: string; termsEffective?: string; termsMaturity?: string; termsNotice?: string;
 };
 type RecordingDraft = { version: 1; portfolio_id: string; revision: number;
   route: string; values: RecordingDraftValues };
@@ -778,6 +782,8 @@ function isRecordingDraft(value: unknown, portfolioId: string, revision: number,
     "newAccountCash", "ratio",
   ];
   const isText = (item: unknown) => typeof item === "string" && item.length <= 2000;
+  const termsFields = ["termsRate", "termsBasis", "termsEffective", "termsMaturity", "termsNotice"];
+  const termsCount = termsFields.filter(key => key in fields).length;
   const isStringMap = (item: unknown) => typeof item === "object" && item !== null &&
     !Array.isArray(item) && Object.keys(item).length <= 100 &&
     Object.values(item).every(value => typeof value === "string" && value.length <= 200);
@@ -791,7 +797,8 @@ function isRecordingDraft(value: unknown, portfolioId: string, revision: number,
       isText(row.quantity) && isText(row.price_gbp) && typeof row.existing === "boolean");
   return draft.version === 1 && draft.portfolio_id === portfolioId &&
     draft.revision === revision && draft.route === route &&
-    Object.keys(fields).length === strings.length + 4 &&
+    (termsCount === 0 || termsCount === termsFields.length && termsFields.every(key => isText(fields[key]))) &&
+    Object.keys(fields).length === strings.length + 4 + termsCount &&
     strings.every(key => isText(fields[key])) &&
     isStringMap(fields.balances) && isOpeningRows(fields.openingHoldings) &&
     isStringMap(fields.scopeBalances) && isScopeRows(fields.scopeHoldings);
@@ -850,7 +857,7 @@ function RecordingImpact({ preview }: { preview: RecordingPreview }) {
 const recordNames: Record<string, string> = {
   contribution: "Money added", withdrawal: "Money withdrawn", transfer: "Transfer between my accounts",
   interest: "Interest received", dividend: "Dividend received", account_fee: "Account or platform charge",
-  cash_observation: "Check a cash balance",
+  cash_observation: "Check a cash balance", savings_terms: "Record savings terms",
   buy: "Investment bought", sell: "Investment sold", mark: "Update an investment price",
   split: "Share or unit split", role_assignment: "Assign an optional role",
   profile_change: "Change an account or investment", scope_addition: "Add an existing account",
@@ -860,6 +867,7 @@ const recordGroups = [
   { id: "money", name: "Money, income and charges", kinds: ["contribution", "withdrawal", "transfer", "interest", "dividend", "account_fee"] },
   { id: "investment", name: "Investments", kinds: ["buy", "sell", "mark", "split"] },
   { id: "balance", name: "Check a cash balance", kinds: ["cash_observation"] },
+  { id: "savings", name: "Savings", kinds: ["savings_terms"] },
   { id: "other", name: "Something else", kinds: ["role_assignment", "profile_change", "scope_addition", "correction"] },
 ];
 
@@ -871,12 +879,15 @@ const RECORD_REVIEW_FIELDS = [
   ["balance_gbp", "Observed balance"], ["quantity", "Quantity"],
   ["price_gbp", "Price per unit"], ["fee_gbp", "Recorded fee"], ["ratio", "Split ratio"],
   ["currency", "Currency"], ["name", "Name"], ["source", "Source"],
+  ["annual_rate_pct", "Annual rate (%)"], ["rate_basis", "Rate basis"],
+  ["effective_from", "Terms effective from"], ["maturity_date", "Maturity date"], ["notice_days", "Notice days"],
   ["timestamp", "Applies / recorded at"], ["available_at", "Source available from"],
   ["evidence", "Source description / correction reason"],
 ] as const;
 
 function recordReviewValue(key: string, value: unknown, event: Record<string, unknown>,
   session: RecordingSession): string {
+  if (value === null && ["annual_rate_pct", "rate_basis", "maturity_date", "notice_days"].includes(key)) return "Not recorded";
   if (key === "product_id" && value === null && event.type === "role_assignment") return "Cash";
   if (typeof value !== "string" && typeof value !== "number") return "Unavailable";
   const text = String(value);
@@ -908,6 +919,8 @@ function recordReviewValue(key: string, value: unknown, event: Record<string, un
 function RecordReview({ preview, session }: { preview: RecordingPreview; session: RecordingSession }) {
   const event = preview.event;
   const kind = typeof event.type === "string" ? event.type : "record";
+  const priorTerms = kind === "savings_terms"
+    ? preview.before.accounts.find(account => account.id === event.account_id)?.terms : null;
   const fields = RECORD_REVIEW_FIELDS.filter(([key]) => event[key] !== undefined);
   const balances = typeof event.balances_gbp === "object" && event.balances_gbp !== null
     ? event.balances_gbp as Record<string, unknown> : null;
@@ -929,7 +942,19 @@ function RecordReview({ preview, session }: { preview: RecordingPreview; session
     <h4>{recordNames[kind] ?? label(kind)} — check before saving</h4>
     <p>The system checked the record's format and accounting, not whether your source is correct.
       Preview valid until {reviewTimestamp(preview.expires_at)}.</p>
-    <dl>{fields.map(([key, title]) => <div key={key}><dt>{title}</dt>
+    {kind === "savings_terms" && <section aria-label="Previous savings terms">
+      <h5>Previous recorded terms</h5>
+      {priorTerms ? <dl>
+        <div><dt>Annual rate</dt><dd>{priorTerms.annual_rate_pct ?? "Not recorded"}{priorTerms.rate_basis ? ` (${priorTerms.rate_basis})` : ""}</dd></div>
+        <div><dt>Effective from</dt><dd>{priorTerms.effective_from}</dd></div>
+        <div><dt>Maturity date</dt><dd>{priorTerms.maturity_date ?? "Not recorded"}</dd></div>
+        <div><dt>Notice days</dt><dd>{priorTerms.notice_days ?? "Not recorded"}</dd></div>
+        <div><dt>Observed / available</dt><dd>{reviewTimestamp(priorTerms.observed_at)} / {reviewTimestamp(priorTerms.available_at)}</dd></div>
+        <div><dt>Source</dt><dd>{priorTerms.source}</dd></div>
+      </dl> : <p>No previous terms recorded.</p>}
+      <p>The new record replaces all displayed terms. Blank optional fields become unknown, even if previously recorded.</p>
+    </section>}
+    <dl>{fields.map(([key, title]) => <div key={key}><dt>{kind === "savings_terms" && key === "timestamp" ? "Terms observed at" : title}</dt>
       <dd>{recordReviewValue(key, event[key], event, session)}</dd></div>)}</dl>
     {defaultRole(event) && <p>Optional role: Unassigned — no role chosen.</p>}
     {replacement && <section aria-label="Correction replacement details">
@@ -997,6 +1022,7 @@ async function recordingRequest<T>(path: string, csrf?: string, payload?: unknow
 
 function InvestmentRecording() {
   const { search } = useLocation();
+  const navigate = useNavigate();
   const [session, setSession] = useState<RecordingSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [kind, setKind] = useState("opening");
@@ -1014,6 +1040,11 @@ function InvestmentRecording() {
   const [quantity, setQuantity] = useState("");
   const [fee, setFee] = useState("");
   const [source, setSource] = useState("");
+  const [termsRate, setTermsRate] = useState("");
+  const [termsBasis, setTermsBasis] = useState("");
+  const [termsEffective, setTermsEffective] = useState("");
+  const [termsMaturity, setTermsMaturity] = useState("");
+  const [termsNotice, setTermsNotice] = useState("");
   const [evidence, setEvidence] = useState("");
   const [roleEvidence, setRoleEvidence] = useState("");
   const [effectiveAt, setEffectiveAt] = useState("");
@@ -1074,6 +1105,7 @@ function InvestmentRecording() {
     setQuantity("");
     setFee("");
     setSource("");
+    setTermsRate(""); setTermsBasis(""); setTermsEffective(""); setTermsMaturity(""); setTermsNotice("");
     setEvidence("");
     setRoleEvidence("");
     setEffectiveAt("");
@@ -1125,7 +1157,7 @@ function InvestmentRecording() {
           const requestedKind = params.get("kind") ?? "";
           const allowed = cashAccount?.kind === "broker"
             ? ["contribution", "withdrawal", "transfer", "interest", "dividend", "account_fee", "buy", "sell", "cash_observation", "mark"]
-            : ["contribution", "withdrawal", "transfer", "interest", "account_fee", "cash_observation"];
+            : ["contribution", "withdrawal", "transfer", "interest", "account_fee", "cash_observation", "savings_terms"];
           const matches = result.opened && cashAccount && allowed.includes(requestedKind) &&
             (requestedKind !== "mark" || (product && stillHeld));
           setPreview(null);
@@ -1207,6 +1239,9 @@ function InvestmentRecording() {
                 setProductId(values.productId);
                 setAmount(values.amount); setPrice(values.price); setQuantity(values.quantity);
                 setFee(values.fee); setSource(values.source); setEvidence(values.evidence);
+                setTermsRate(values.termsRate ?? ""); setTermsBasis(values.termsBasis ?? "");
+                setTermsEffective(values.termsEffective ?? ""); setTermsMaturity(values.termsMaturity ?? "");
+                setTermsNotice(values.termsNotice ?? "");
                 setRoleEvidence(values.roleEvidence); setEffectiveAt(values.effectiveAt);
                 setAvailableAt(values.availableAt); setBalances(values.balances);
                 setOpeningHoldings(values.openingHoldings);
@@ -1256,7 +1291,7 @@ function InvestmentRecording() {
         profileTarget, profileEntityId, profileName, newProductId, newProductSleeve,
         newProductIncrement, newProductMinimum, newAccountId, newAccountName,
         newAccountBinding, newAccountKind, newAccountCash, scopeBalances,
-        scopeHoldings, ratio,
+        scopeHoldings, ratio, termsRate, termsBasis, termsEffective, termsMaturity, termsNotice,
       };
       const raw = JSON.stringify({
         version: 1, portfolio_id: session.portfolio_id, revision: session.revision,
@@ -1276,7 +1311,7 @@ function InvestmentRecording() {
     balances, openingHoldings, correctionEventId, profileAction, profileTarget,
     profileEntityId, profileName, newProductId, newProductSleeve, newProductIncrement,
     newProductMinimum, newAccountId, newAccountName, newAccountBinding, newAccountKind,
-    newAccountCash, scopeBalances, scopeHoldings, ratio]);
+    newAccountCash, scopeBalances, scopeHoldings, ratio, termsRate, termsBasis, termsEffective, termsMaturity, termsNotice]);
   useEffect(() => {
     const changed = (event: StorageEvent) => {
       if (event.key !== PENDING_RECORDING_KEY && event.key !== null) return;
@@ -1312,6 +1347,9 @@ function InvestmentRecording() {
       const { timestamp, available_at: available } = recordingClocks(effectiveAt, availableAt,
         kind === "profile_change" || kind === "scope_addition");
       const common = { id, timestamp, available_at: available, evidence };
+      if (["savings_terms", "account_fee"].includes(kind) && updateTargetStatus === "matched" &&
+          accountId !== new URLSearchParams(search).get("account_id"))
+        throw new Error("This draft does not match the guided account. Discard it and start again from the account review.");
       let value: Record<string, unknown>;
       if (kind === "opening") {
         const holdings = openingHoldings.filter(item =>
@@ -1370,6 +1408,27 @@ function InvestmentRecording() {
           balances_gbp: { ...scopeBalances, [newAccountId]: newAccountCash }, holdings };
       } else if (kind === "cash_observation") {
         value = { ...common, type: kind, account_id: accountId, balance_gbp: amount, source };
+      } else if (kind === "savings_terms") {
+        const validDate = (date: string) => {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date.startsWith("0000")) return false;
+          const parsed = new Date(`${date}T00:00:00Z`);
+          return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+        };
+        if (!session.accounts.some(account => account.id === accountId && account.kind === "deposit"))
+          throw new Error("Choose an included savings account for these terms.");
+        if (!source.trim() || !evidence.trim()) throw new Error("Enter a source and source description for these terms.");
+        if (!validDate(termsEffective) || termsMaturity && (!validDate(termsMaturity) || termsMaturity < termsEffective))
+          throw new Error("Enter a valid effective date and, if supplied, a maturity date on or after it.");
+        if (termsRate && (!/^(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,8})?$/.test(termsRate) ||
+            new Decimal(termsRate).greaterThan(100) || !["AER", "gross"].includes(termsBasis)) ||
+            !termsRate && termsBasis)
+          throw new Error("Enter a valid annual rate up to 100 and its basis, or leave both unknown.");
+        if (termsNotice && (!/^(?:0|[1-9][0-9]{0,3})$/.test(termsNotice) || Number(termsNotice) > 3650))
+          throw new Error("Notice days must be a whole number from 0 to 3650, or blank if unknown.");
+        value = { ...common, type: kind, account_id: accountId, source,
+          annual_rate_pct: termsRate || null, rate_basis: termsBasis || null,
+          effective_from: termsEffective, maturity_date: termsMaturity || null,
+          notice_days: termsNotice === "" ? null : Number(termsNotice) };
       } else if (kind === "role_assignment") {
         if (role === "unassigned") throw new Error("Choose core (long-term) or dynamic (experimental) when assigning a role. Unassigned means no role has been chosen.");
         value = { ...common, type: kind, account_id: accountId, role,
@@ -1429,13 +1488,22 @@ function InvestmentRecording() {
     setMessage(null);
     resolvedConfirmation.current = false;
     setPending(attempt);
+    let reviewNotice = "";
     try {
-      await navigator.locks.request("goldscout-recording-confirmation", () => {
+      await navigator.locks.request("goldscout-recording-confirmation", async () => {
         if (!pending && recordingVersion(window.localStorage) !== previewVersion)
           throw new RecordingPreviewChangedError();
-        return confirmRecording(window.localStorage, attempt, previewId =>
+        await confirmRecording(window.localStorage, attempt, previewId =>
           recordingRequest("/api/investment/v1/recording/confirm", session.csrf ?? undefined,
             { preview_id: previewId }));
+        if (preview && preview.preview_id === attempt.previewId &&
+            preview.revision + 1 === attempt.expectedRevision) {
+          try {
+            advanceReviewAfterSave(preview.before.portfolio_id, attempt.expectedRevision, preview.event);
+          } catch {
+            reviewNotice = "The record was saved, but review progress could not be updated. Check your review before continuing.";
+          }
+        }
       });
       resolvedConfirmation.current = true;
       setPending(null);
@@ -1451,8 +1519,13 @@ function InvestmentRecording() {
       setMessage(`Record committed. Refreshing the recorded portfolio.${savedDraftNotice}`);
       const updateAccount = new URLSearchParams(search).get("account_id");
       if (updateTargetStatus === "matched" && updateAccount)
-        window.location.assign(`/investment/update?account_id=${encodeURIComponent(updateAccount)}`);
-      else window.location.reload();
+        navigate(`/investment/update?account_id=${encodeURIComponent(updateAccount)}`,
+          { state: { recordSaved: true, reviewNotice: [savedDraftNotice, reviewNotice].filter(Boolean).join(" ") } });
+      else {
+        navigate(`${window.location.pathname}${search}`, { replace: true, state: { recordSaved: true, recordSavedId: attempt.eventId,
+          reviewNotice: [savedDraftNotice, reviewNotice].filter(Boolean).join(" ") } });
+        window.location.reload();
+      }
     } catch (error) {
       if (error instanceof RecordingPreviewExpiredError || error instanceof RecordingPreviewChangedError) {
         try { setPending(pendingRecording(window.localStorage)); }
@@ -1514,7 +1587,7 @@ function InvestmentRecording() {
   const recordType = kind === "correction" ? correction?.type : kind;
   const availableKinds = opened
     ? ["contribution", "withdrawal", "transfer", "interest", "dividend", "account_fee", "buy", "sell", "split",
-      "mark", "cash_observation", "role_assignment", "profile_change", "scope_addition",
+      "mark", "cash_observation", "savings_terms", "role_assignment", "profile_change", "scope_addition",
       ...(session.correctable_events.length ? ["correction"] : [])]
     : ["opening"];
   const selectedProduct = session.products.find(product => product.id === productId);
@@ -1584,6 +1657,10 @@ function InvestmentRecording() {
       {opened && <label>What are you recording?<select required value={kind}
         onChange={event => {
           setKind(event.target.value); setCorrectionEventId("");
+          if (event.target.value === "savings_terms") {
+            if (!session.accounts.some(account => account.id === accountId && account.kind === "deposit")) setAccountId("");
+            setTermsRate(""); setTermsBasis(""); setTermsEffective(""); setTermsMaturity(""); setTermsNotice(""); setSource("");
+          }
           setCashTargetStatus(null);
           setFee(""); setEffectiveAt(""); setAvailableAt(""); setEvidence(""); setRole("unassigned"); setRoleEvidence("");
         }}>
@@ -1784,12 +1861,17 @@ function InvestmentRecording() {
         <p className="form-note">Add an existing account, not new money. Enter cash for every account and all holdings at one time, using sources available then. A valid starting value is required; do not guess dates or balances.</p>
       </>}
       {kind !== "opening" && kind !== "correction" && <label>Account<select required value={accountId}
+        disabled={["savings_terms", "account_fee"].includes(kind) && updateTargetStatus === "matched"}
         onChange={event => {
           setAccountId(event.target.value); setRoleEvidence("");
+          if (kind === "savings_terms") {
+            setTermsRate(""); setTermsBasis(""); setTermsEffective(""); setTermsMaturity(""); setTermsNotice("");
+            setSource(""); setEvidence(""); setEffectiveAt(""); setAvailableAt("");
+          }
           if (event.target.value) setCashTargetStatus(null);
         }}>
         <option value="">Choose account</option>
-        {session.accounts.map(account => <option key={account.id} value={account.id}>{account.name} ({label(account.kind)}
+        {session.accounts.filter(account => kind !== "savings_terms" || account.kind === "deposit").map(account => <option key={account.id} value={account.id}>{account.name} ({label(account.kind)}
           {session.accounts.filter(item => item.name === account.name && item.kind === account.kind).length > 1 && ` · ${account.id}`})</option>)}
       </select></label>}
       {(kind === "transfer" || kind === "correction" && correction?.type === "transfer") &&
@@ -1818,6 +1900,22 @@ function InvestmentRecording() {
         </label>}
       {kind === "cash_observation" && <label>Statement/source description<input required maxLength={200}
         value={source} onChange={event => setSource(event.target.value)} /></label>}
+      {kind === "savings_terms" && <>
+        <p className="form-note">Record only terms supported by your source. This replaces all displayed terms; blank optional fields become unknown, even if previously recorded. These facts do not accrue interest or establish eligibility.</p>
+        <p className="form-note">Check and record earlier transactions across all tracked accounts first. Once appended, these terms can prevent earlier events in any account from being recorded.</p>
+        <label>Annual rate (%) (optional)<input inputMode="decimal" value={termsRate}
+          onChange={event => setTermsRate(event.target.value)} /></label>
+        <label>Rate basis<select value={termsBasis} onChange={event => setTermsBasis(event.target.value)}>
+          <option value="">Not recorded</option><option value="AER">AER</option><option value="gross">Gross</option>
+        </select></label>
+        <label>Terms effective from<input required type="date" value={termsEffective}
+          onChange={event => setTermsEffective(event.target.value)} /></label>
+        <label>Maturity date (optional)<input type="date" value={termsMaturity}
+          onChange={event => setTermsMaturity(event.target.value)} /></label>
+        <label>Notice days (optional)<input inputMode="numeric" value={termsNotice}
+          onChange={event => setTermsNotice(event.target.value)} /></label>
+        <label>Terms source<input required maxLength={200} value={source} onChange={event => setSource(event.target.value)} /></label>
+      </>}
       {(["interest", "dividend"].includes(kind) || kind === "correction" &&
         ["interest", "dividend"].includes(recordType ?? "")) && <label>Why does this income belong to this role?
         <textarea required maxLength={200} value={roleEvidence}
@@ -1848,7 +1946,7 @@ function InvestmentRecording() {
           <small className="field-help" id="record-split-help">New units for each old unit.
             For example, 2 means two new units for each old unit. Use the actual split notice, not this example.</small></label>}
       {(kind !== "profile_change" && kind !== "scope_addition") && <label>
-        {kind === "correction" ? "Correction recorded at (local time)" : "Applies at (local time)"}
+        {kind === "correction" ? "Correction recorded at (local time)" : kind === "savings_terms" ? "Terms observed at (local time)" : "Applies at (local time)"}
         <input required type="datetime-local" value={effectiveAt}
           aria-describedby="record-date-help" onChange={event => setEffectiveAt(event.target.value)} />
       </label>}
@@ -1870,6 +1968,7 @@ function InvestmentRecording() {
       <p className="form-note" id="record-date-help">Times use {Intl.DateTimeFormat().resolvedOptions().timeZone}; the preview also shows UTC.
         {kind === "correction"
           ? " The original transaction date stays. Enter when the correction applies and when its evidence became available; availability cannot be earlier. Describe older supporting sources below."
+          : kind === "savings_terms" ? " Terms observed at is when you observed the terms; the separate effective date may be in the future. Source available from cannot precede observation."
           : ' "Applies at" is when it happened or the value applied. "Source available from" is when the information first existed—not when entered—and may be later.'}
         {" "}Use dates supported by your source.</p>
       <label>Source description / correction reason<textarea required maxLength={200}
@@ -1911,14 +2010,43 @@ function readReviewCheckpoint(portfolioId: string): ReviewCheckpoint | null {
   };
 }
 
+function PortfolioGoals({ data }: { data: InvestmentSnapshot }) {
+  const query = useQuery({ queryKey: ["planning-summary"], queryFn: planningSession, refetchOnMount: "always" });
+  const goals = query.data?.goals ?? [];
+  const values = recordedAccountValues(data);
+  const duplicates = duplicateAccountLinks(goals);
+  return <section className="history-group" aria-label="Your goals">
+    <h2>Your goals</h2>
+    {query.isPending ? <p role="status">Loading your goals.</p>
+      : query.isError ? <p role="status">Your goals could not be loaded. <NavLink to="/planning">Open goals to retry</NavLink>.</p>
+      : !query.data?.enabled ? <p>Goals are not enabled for this launch.</p>
+      : goals.length === 0 ? <p>No goals saved yet. <NavLink to="/planning">Add an optional goal</NavLink>.</p>
+      : <>
+        <ul>{goals.map(goal => {
+          const linked = goal.linked_account_ids.length > 0;
+          const amount = linked ? linkedGoalValue(goal, data, values, duplicates)?.toString() ?? null
+            : goal.current_amount_gbp;
+          return <li key={goal.id}><strong>{goal.name}</strong>
+            {" · "}{goal.target_amount_gbp === null ? "Target not set" : `Target ${pounds(goal.target_amount_gbp, true)}`}
+            {goal.target_date && ` by ${goal.target_date}`}
+            {" · "}{amount === null ? (linked ? "Linked amount unavailable" : "Amount not set")
+              : `${linked ? "Latest linked account records" : "User-entered amount"}: ${pounds(amount, true)}`}
+          </li>;
+        })}</ul>
+        <p className="position-note">Linked amounts use latest account records, which may have different dates and may not match the portfolio valuation date. They do not reserve money.</p>
+        <NavLink to="/planning">Review goals and contribution illustrations</NavLink>
+      </>}
+  </section>;
+}
+
 export function InvestmentView({ now, valueChangeSelection, setValueChangeSelection }: {
   now: number; valueChangeSelection: ValueChangeSelection | null;
   setValueChangeSelection: (selection: ValueChangeSelection | null) => void;
 }) {
   const query = useQuery({ queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal), refetchInterval: 60000 });
   const accountsRef = useRef<HTMLDetailsElement>(null);
-  const data = query.isError ? undefined : query.data;
   const location = useLocation();
+  const data = query.isError ? undefined : query.data;
   const hasData = Boolean(data);
   const [checkpoint, setCheckpoint] = useState<ReviewCheckpoint | null>(null);
   const [checkpointError, setCheckpointError] = useState("");
@@ -1948,7 +2076,7 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
   }, [data?.portfolio_id, data?.source_mode]);
 
   function markReviewed() {
-    if (!data || data.source_mode !== "recorded" || !data.complete || !data.as_of) return;
+    if (!data || data.source_mode !== "recorded" || !data.complete || !data.as_of || checkpointError) return false;
     const saved: ReviewCheckpoint = {
       portfolioId: data.portfolio_id, valuationTimestamp: data.as_of,
       savedAt: new Date().toISOString(), journalRevision: data.revision,
@@ -1959,8 +2087,10 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
       setCheckpoint(saved);
       setCheckpointError("");
       setValueChangeSelection(null);
+      return true;
     } catch {
       setCheckpointError("The browser could not save this review checkpoint. No journal record was changed.");
+      return false;
     }
   }
   useEffect(() => {
@@ -2028,9 +2158,12 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
             {(!data.complete || !data.as_of) && <p role="status">A comparison point is unavailable until a complete recorded value exists.</p>}
           </section>
           {data.source_mode === "recorded" && <AccountMaintenance data={data} now={now}
+            onFinishReview={markReviewed}
+            refreshSnapshot={() => loadInvestment(new AbortController().signal)}
             onReviewCashEvidence={() => {
               if (accountsRef.current) accountsRef.current.open = true;
             }} />}
+          {data.source_mode === "recorded" && <PortfolioGoals data={data} />}
           <AccountAndHoldingsSummary data={data} now={now} />
           <RecentActivity data={data} />
           {data.source_mode === "recorded" && <RecoveryPanel />}
@@ -2254,7 +2387,9 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
 }
 
 export function InvestmentRecordingPage() {
+  const { state } = useLocation();
   return <article className="investment-view">
+    {state?.recordSaved && <p role="status">Previous record {state.recordSavedId} was saved. {state.reviewNotice}</p>}
     <div className="record-toolbar">
       <NavLink className="text-link" to="/investment">Back to investment overview</NavLink>
     </div>

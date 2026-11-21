@@ -59,15 +59,17 @@ See [the connection guide](docs/investment.md#optional-etoro-connection).
 
 On **Your portfolio**, check the recorded value and date, **What needs
 attention**, and the comparison between recorded values. Choose **Review
-accounts** to start a guided review across active accounts. Progress resumes in
-this browser; a journal change makes the old progress stale and requires a new
-review. Update each account using dated sources: record transactions, compare
-cash, and check holdings and prices. Each record has its own preview and
-confirmation. A cash check does not change the recorded balance.
+accounts** to start a guided review across active accounts. Update each account
+using dated sources: record transactions, compare cash, and check holdings,
+prices and savings terms. Each record has its own preview and confirmation. A
+cash check does not change the recorded balance. If nothing changed, mark the
+account checked without adding a record. Confirmed account updates in this
+browser retain other accounts' checks; unsupported or outside journal changes
+make the review stale.
 
 Choose an account review interval and, for savings accounts, a separate terms
-recheck interval. After checking an account, mark its reminder date. Separately,
-save a complete portfolio value for a future comparison. Drafts, review
+recheck interval. Finish the review to save an available complete portfolio
+value for the next comparison; outstanding items remain visible. Drafts, review
 progress, and reminders are local browser data, are not included in the journal
 backup, and can be lost if the browser is cleared.
 They are not evidence that accounts are current. An unexplained remainder is

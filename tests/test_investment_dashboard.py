@@ -825,6 +825,49 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(report["valuation_history"][-1]["gap_reason"],
                          "Historical correction invalidated performance evidence; no new baseline was established.")
 
+    def test_savings_terms_recording_preview_confirmation_and_chronology(self):
+        self.now = OPENING_NOW + timedelta(days=2)
+        spec = profile()
+        spec["accounts"][0]["terms"] = savings_terms()
+        initialize(self.path, spec, OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        before = snapshot(self.path, self.now)
+        value = savings_terms_event(OPENING_NOW + timedelta(days=1))
+        value.update({"effective_from": "2027-01-01", "maturity_date": None,
+                      "notice_days": None})
+        with self.client(investment_database=self.path,
+                         investment_recording_enabled=True) as client:
+            session = client.get("/api/investment/v1/recording/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            preview = client.post("/api/investment/v1/recording/preview", headers=headers,
+                                  json={"request_id": "terms-preview", "event": value})
+            self.assertEqual(preview.status_code, 200, preview.text)
+            body = preview.json()
+            self.assertEqual(body["event"], value)
+            self.assertEqual(snapshot(self.path, self.now), before)
+            self.assertEqual(body["before"]["accounts"][0]["terms"]["notice_days"], 90)
+            terms = body["after"]["accounts"][0]["terms"]
+            self.assertIsNone(terms["notice_days"])
+            self.assertIsNone(terms["maturity_date"])
+            self.assertEqual(terms["effective_from"], "2027-01-01")
+            for key in ("equity_gbp", "as_of", "twr_pct"):
+                self.assertEqual(body["after"][key], body["before"][key])
+            self.assertEqual(body["after"]["accounts"][0]["cash_gbp"], "1000")
+            confirmation = client.post("/api/investment/v1/recording/confirm", headers=headers,
+                                       json={"preview_id": body["preview_id"]})
+            self.assertEqual(confirmation.status_code, 200, confirmation.text)
+            self.assertEqual(confirmation.json(), {"id": value["id"], "revision": 2})
+            retry = client.post("/api/investment/v1/recording/confirm", headers=headers,
+                                json={"preview_id": body["preview_id"]})
+            self.assertEqual(retry.json(), confirmation.json())
+            self.assertEqual(snapshot(self.path, self.now)["accounts"][0]["terms"], terms)
+            earlier = event("earlier-broker-fee", "account_fee",
+                            OPENING_NOW + timedelta(hours=12), "broker", amount_gbp="1")
+            rejected = client.post("/api/investment/v1/recording/preview", headers=headers,
+                                   json={"request_id": "earlier-fee", "event": earlier})
+            self.assertNotEqual(rejected.status_code, 200)
+            self.assertEqual(snapshot(self.path, self.now)["revision"], 2)
+
     def test_v2_savings_terms_are_read_only_and_do_not_change_portfolio_value(self):
         self.now = OPENING_NOW
         spec = profile()

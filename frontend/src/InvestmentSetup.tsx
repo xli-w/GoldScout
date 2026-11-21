@@ -505,7 +505,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
         <p>Journal committed: {receipt.committed ? "yes" : "no"}.</p>
       </details>
       {receipt.status === "completed" ? <>
-        <p>Open your portfolio, then choose Add a record for future updates.</p>
+        <p>Open your portfolio to choose review intervals, review your accounts and optionally add a goal.</p>
         <button type="button" onClick={onComplete}>Open portfolio</button>
       </>       : <p>Setup did not finish completely. Keep the whole setup folder unchanged and reload this page for recovery guidance.
         Do not recreate, delete, overwrite or manually repair any files.</p>}
