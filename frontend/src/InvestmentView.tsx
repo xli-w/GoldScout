@@ -2039,9 +2039,11 @@ function PortfolioGoals({ data }: { data: InvestmentSnapshot }) {
   </section>;
 }
 
-export function InvestmentView({ now, valueChangeSelection, setValueChangeSelection }: {
+export function InvestmentView({ now, valueChangeSelection, setValueChangeSelection,
+  reviewDefaults }: {
   now: number; valueChangeSelection: ValueChangeSelection | null;
   setValueChangeSelection: (selection: ValueChangeSelection | null) => void;
+  reviewDefaults: { reviewIntervalDays: number; termsIntervalDays: number };
 }) {
   const query = useQuery({ queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal), refetchInterval: 60000 });
   const accountsRef = useRef<HTMLDetailsElement>(null);
@@ -2158,6 +2160,7 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
             {(!data.complete || !data.as_of) && <p role="status">A comparison point is unavailable until a complete recorded value exists.</p>}
           </section>
           {data.source_mode === "recorded" && <AccountMaintenance data={data} now={now}
+            defaults={reviewDefaults}
             onFinishReview={markReviewed}
             refreshSnapshot={() => loadInvestment(new AbortController().signal)}
             onReviewCashEvidence={() => {

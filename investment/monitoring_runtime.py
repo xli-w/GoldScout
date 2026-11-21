@@ -15,7 +15,10 @@ def validate_approval(value, profile, account_id, now):
     fields(value, ("profile_hash", "account_id", "approved_at", "expires_at",
                    "read_scope_verified", "trade_capable_key_risk_accepted",
                    "eligibility_verified", "retention_rights_verified",
-                   "account_binding_verified", "supervised_read_approved", "evidence"))
+                   "account_binding_verified", "supervised_read_approved",
+                   "credential_revision", "evidence"))
+    if type(value["credential_revision"]) is not int or value["credential_revision"] < 0:
+        raise InvestmentError("Collection approval must identify the current eToro credential revision")
     if value["profile_hash"] != digest(canonical(profile)) or value["account_id"] != account_id:
         raise InvestmentError("Collection approval does not match the monitoring profile/account")
     approved, expires = explicit_clock(value["approved_at"]), explicit_clock(value["expires_at"])
@@ -41,6 +44,16 @@ def collect_once(database, profile, cache_path, account_id, approval, *, allow_n
     if allow_network is not True:
         raise InvestmentError("Collection is off; explicit --allow-network and approval are required")
     validate_approval(approval, profile, account_id, started)
+    from proxy_config import ProxyConfigurationError, connection_revision
+
+    try:
+        current_credential_revision = connection_revision(
+            "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
+    except ProxyConfigurationError:
+        raise InvestmentError("eToro credential configuration is unavailable") from None
+    if approval["credential_revision"] != current_credential_revision:
+        raise InvestmentError(
+            "Collection approval is for different eToro credentials; create a fresh approval")
     mapping = next((a for a in profile["accounts"] if a["account_id"] == account_id), None)
     if mapping is None or mapping["provider"] != "etoro":
         raise InvestmentError("Select an explicitly mapped eToro account")
@@ -81,7 +94,13 @@ def collect_once(database, profile, cache_path, account_id, approval, *, allow_n
         try:
             checked = completion()
             validate_approval(approval, profile, account_id, checked)
+            if connection_revision(
+                    "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY"
+            ) != current_credential_revision:
+                raise InvestmentError("eToro credentials changed during collection")
         except InvestmentError:
+            raise EToroError("approval_interrupted") from None
+        except ProxyConfigurationError:
             raise EToroError("approval_interrupted") from None
 
     try:

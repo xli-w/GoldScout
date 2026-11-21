@@ -80,6 +80,23 @@ Manual recording is enabled for normal local launches. For viewing without
 journal writes, add `--investment-read-only` to your usual startup command,
 keeping the same workspace. This also prevents first-run setup from saving.
 
+## Settings
+
+Open **Settings** at the bottom of the portfolio navigation to change compact
+display and default review intervals, or enter optional provider connection
+values. Preferences are stored in `.goldscout-settings.json` beside the selected
+workspace; account-specific browser choices are preserved. Connection values
+are write-only in the page and stored as plaintext in the ignored project-root
+`.goldscout-connections.json` file. Keep the checkout and computer private.
+Saved project values take precedence over `.env` and process environment
+settings; clearing an override falls back to those existing sources.
+
+Changing either eToro key invalidates saved eToro read consent and the CLI
+monitoring approval revision; reconnect or create a fresh approval before
+another read. Close older GoldScout processes before changing connections.
+Requests already dispatched cannot be recalled. Settings do not collect data,
+send private portfolio evidence to hosted AI, or enable trades.
+
 ## Back up and recover
 
 Use **Back up and practise recovery** on the portfolio page to request a verified

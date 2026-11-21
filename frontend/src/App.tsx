@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Activity, CircleHelp, ListOrdered, LockKeyhole, RefreshCw, Target, Wallet } from "lucide-react";
+import { Activity, CircleHelp, ListOrdered, LockKeyhole, RefreshCw, Settings as SettingsIcon, Target, Wallet } from "lucide-react";
 import { IntelligenceView, useIntelligence } from "./IntelligenceView";
 import { InvestmentGuide, InvestmentRecordingPage, InvestmentView } from "./InvestmentView";
 import type { ValueChangeSelection } from "./InvestmentView";
@@ -11,6 +11,7 @@ import { EToroPortfolioPanel } from "./EToroPortfolio";
 import { PlanningProfilePage } from "./PlanningProfile";
 import { AccountUpdatePage } from "./AccountUpdate";
 import { timestamp } from "./api";
+import { fetchSettingsSession, SETTINGS_QUERY_KEY, SettingsPage } from "./SettingsPage";
 
 export function App() {
   const client = useQueryClient();
@@ -30,6 +31,11 @@ export function App() {
       }
       return settings.workspace;
     },
+  });
+  const settingsSession = useQuery({
+    queryKey: SETTINGS_QUERY_KEY,
+    queryFn: fetchSettingsSession,
+    enabled: workspace.isSuccess && workspace.data === "investment",
   });
   const intelligencePage = location.pathname === "/intelligence";
   const intelligence = useIntelligence(intelligencePage && workspace.isSuccess && workspace.data !== "setup");
@@ -71,13 +77,18 @@ export function App() {
     "/investment-guide": "Help",
     "/planning": "Goals",
     "/intelligence": "Market context",
+    "/settings": "Settings",
   };
   const pageName = pages[location.pathname];
+  const reviewDefaults = {
+    reviewIntervalDays: settingsSession.data?.preferences?.review_interval_days ?? 30,
+    termsIntervalDays: settingsSession.data?.preferences?.savings_terms_interval_days ?? 90,
+  };
   const intelligenceMode = intelligence.isError ? undefined : intelligence.data?.source_mode;
   const intelligenceStatus = intelligence.isError ? "Source unavailable"
     : intelligence.isFetching ? intelligence.data ? "Refreshing intelligence" : "Checking source"
     : intelligence.data ? `Snapshot ${timestamp(intelligence.data.generated_at)}` : "Source unknown";
-  return <div className="shell">
+  return <div className={`shell${settingsSession.data?.preferences?.compact_mode ? " compact-mode" : ""}`}>
     <aside className="sidebar">
       <NavLink to="/investment" className="brand" aria-label="GoldScout Portfolio Manager">
         <span className="brand-mark"><Activity size={24} /></span>
@@ -98,6 +109,9 @@ export function App() {
           </nav>
         </div>
       </div>
+      {workspace.data === "investment" && <nav className="settings-nav" aria-label="Settings navigation">
+        <NavLink to="/settings"><SettingsIcon size={18} /><span>Settings</span></NavLink>
+      </nav>}
     </aside>
     <div className="workspace">
       <header className="topbar"><div className="breadcrumb">Portfolio <span>/</span> <strong>{pageName || "Page not found"}</strong></div>
@@ -116,12 +130,17 @@ export function App() {
             void client.invalidateQueries({ queryKey: ["analysis-session"] });
           }}><RefreshCw size={19} className={intelligence.isFetching ? "spin" : ""} /></button>}</div>
         {location.pathname === "/investment" ? <InvestmentView now={now}
-          valueChangeSelection={valueChangeSelection} setValueChangeSelection={setValueChangeSelection} />
+          valueChangeSelection={valueChangeSelection} setValueChangeSelection={setValueChangeSelection}
+          reviewDefaults={reviewDefaults} />
           : location.pathname === "/investment/record" ? <InvestmentRecordingPage />
           : location.pathname === "/investment/update" ? <AccountUpdatePage now={now} />
           : location.pathname === "/investment/reviews" ? <MonitoringWorkflowPage />
           : location.pathname === "/investment-guide" ? <InvestmentGuide />
           : location.pathname === "/planning" ? <PlanningProfilePage />
+          : location.pathname === "/settings" ? <SettingsPage
+            session={settingsSession.data}
+            loadError={settingsSession.isError}
+            onSaved={() => void client.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY })} />
           : intelligencePage ? <IntelligenceView data={intelligence} />
           : <div className="error-state" role="alert"><p>This page is not part of GoldScout.</p><NavLink to="/investment">Open investment records</NavLink></div>}
         <footer><span>GoldScout <span className="footer-separator">/</span> <NavLink to="/investment-guide">Help</NavLink></span>

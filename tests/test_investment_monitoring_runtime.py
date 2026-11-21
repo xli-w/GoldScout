@@ -34,13 +34,17 @@ class MonitoringRuntimeTests(unittest.TestCase):
         self.profile = monitoring_profile(profile())
         self.path.write_text(json.dumps(self.profile), encoding="utf-8")
         initialize_cache(self.cache, self.profile, 86400)
+        from proxy_config import connection_revision
         self.approval = {
             "profile_hash": digest(canonical(self.profile)), "account_id": "broker",
             "approved_at": iso(NOW), "expires_at": iso(NOW + timedelta(hours=1)),
             "read_scope_verified": True, "trade_capable_key_risk_accepted": False,
             "eligibility_verified": True,
             "retention_rights_verified": True, "account_binding_verified": True,
-            "supervised_read_approved": True, "evidence": "synthetic approval only",
+            "supervised_read_approved": True,
+            "credential_revision": connection_revision(
+                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY"),
+            "evidence": "synthetic approval only",
         }
 
     def collect(self, **kwargs):
@@ -88,6 +92,33 @@ class MonitoringRuntimeTests(unittest.TestCase):
         collector.assert_not_called()
         credentials.assert_not_called()
 
+    def test_collection_approval_must_match_current_eToro_credentials(self):
+        collector, credentials = Mock(), Mock()
+        self.approval["credential_revision"] += 1
+        with self.assertRaisesRegex(InvestmentError, "different eToro credentials"):
+            self.collect(allow_network=True, collector=collector, credential_accessor=credentials)
+        collector.assert_not_called()
+        credentials.assert_not_called()
+
+    def test_credential_rotation_during_collection_stops_before_provider_dispatch(self):
+        from proxy_config import connection_revision
+
+        revision = connection_revision(
+            "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
+        transport = Mock()
+        credentials = Mock(return_value={
+            "x-api-key": "synthetic-api-key", "x-user-key": "synthetic-user-key",
+        })
+        self.approval["credential_revision"] = revision
+        with patch("proxy_config.connection_revision",
+                   side_effect=(revision, revision, revision + 1)):
+            with self.assertRaisesRegex(InvestmentError, "approval"):
+                self.collect(allow_network=True, transport=transport,
+                             credential_accessor=credentials)
+        transport.assert_not_called()
+        self.assertEqual(read_cache(self.cache, self.profile, NOW)["attempts"][-1]["error_code"],
+                         "collection_interrupted")
+
     def test_trade_capable_key_requires_explicit_risk_acceptance_and_remains_get_only(self):
         payload = (b'{"clientPortfolio":{"credit":42,"positions":[],"mirrors":[],'
                    b'"orders":[],"ordersForOpen":[]}}')
@@ -118,14 +149,22 @@ class MonitoringRuntimeTests(unittest.TestCase):
         transport = Mock(return_value=payload)
         values = {"GOLDSCOUT_ETORO_API_KEY": "file-api",
                   "GOLDSCOUT_ETORO_USER_KEY": "file-user"}
+        connection_path = Path(self.temporary.name) / "connections.json"
         with patch.dict("os.environ", {"GOLDSCOUT_ETORO_API_KEY": "environment-api",
                                       "GOLDSCOUT_ETORO_USER_KEY": "environment-user"}), \
+             patch("proxy_config.CONNECTIONS_PATH", connection_path), \
              patch("proxy_config._dotenv_loading_disabled", return_value=False), \
              patch("proxy_config._read_proxy_dotenv", return_value=values) as read:
             with self.assertRaises(InvestmentError):
                 self.collect(transport=transport)
             read.assert_not_called()
-            result = self.collect(allow_network=True, transport=transport)
+            from proxy_config import connection_revision
+            revision = connection_revision(
+                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
+            self.approval["credential_revision"] = revision
+            read.reset_mock()
+            with patch("proxy_config.connection_revision", return_value=revision):
+                result = self.collect(allow_network=True, transport=transport)
         self.assertEqual(result["status"], "partial_observation")
         headers = transport.call_args.args[1]
         self.assertEqual((headers["x-api-key"], headers["x-user-key"]), ("file-api", "file-user"))
@@ -133,14 +172,21 @@ class MonitoringRuntimeTests(unittest.TestCase):
 
     def test_blank_file_credentials_do_not_fall_back_or_contact_provider(self):
         transport = Mock()
+        connection_path = Path(self.temporary.name) / "connections.json"
         with patch.dict("os.environ", {"GOLDSCOUT_ETORO_API_KEY": "environment-api",
                                       "GOLDSCOUT_ETORO_USER_KEY": "environment-user"}), \
+             patch("proxy_config.CONNECTIONS_PATH", connection_path), \
              patch("proxy_config._dotenv_loading_disabled", return_value=False), \
              patch("proxy_config._read_proxy_dotenv",
                    return_value={"GOLDSCOUT_ETORO_API_KEY": "",
                                  "GOLDSCOUT_ETORO_USER_KEY": "file-user"}):
-            with self.assertRaisesRegex(InvestmentError, "provider_unavailable"):
-                self.collect(allow_network=True, transport=transport)
+            from proxy_config import connection_revision
+            revision = connection_revision(
+                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
+            self.approval["credential_revision"] = revision
+            with patch("proxy_config.connection_revision", return_value=revision):
+                with self.assertRaisesRegex(InvestmentError, "provider_unavailable"):
+                    self.collect(allow_network=True, transport=transport)
         transport.assert_not_called()
 
     def test_approval_expiring_during_credential_load_never_dispatches(self):
@@ -148,16 +194,23 @@ class MonitoringRuntimeTests(unittest.TestCase):
         current = [NOW]
         values = {"GOLDSCOUT_ETORO_API_KEY": "file-api",
                   "GOLDSCOUT_ETORO_USER_KEY": "file-user"}
+        connection_path = Path(self.temporary.name) / "connections.json"
 
         def delayed_credentials(names):
             current[0] = NOW + timedelta(hours=1)
             return values
 
-        with patch("proxy_config._dotenv_loading_disabled", return_value=False), \
+        with patch("proxy_config.CONNECTIONS_PATH", connection_path), \
+             patch("proxy_config._dotenv_loading_disabled", return_value=False), \
              patch("proxy_config._read_proxy_dotenv", side_effect=delayed_credentials):
-            with self.assertRaisesRegex(InvestmentError, "expired"):
-                self.collect(allow_network=True, transport=transport,
-                             completion_clock=lambda: current[0])
+            from proxy_config import connection_revision
+            revision = connection_revision(
+                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
+            self.approval["credential_revision"] = revision
+            with patch("proxy_config.connection_revision", return_value=revision):
+                with self.assertRaisesRegex(InvestmentError, "expired"):
+                    self.collect(allow_network=True, transport=transport,
+                                 completion_clock=lambda: current[0])
         transport.assert_not_called()
         attempts = read_cache(self.cache, self.profile, current[0])["attempts"]
         self.assertEqual(attempts[-1]["error_code"], "collection_interrupted")

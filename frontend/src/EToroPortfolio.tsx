@@ -42,7 +42,7 @@ export type EToroSnapshot = {
 };
 type Connection = {
   environment: "real" | "demo"; account_id: number; expires_at: string | null;
-  revoked_at: string | null; revision: number;
+  revoked_at: string | null; revision: number; reauthorization_required?: boolean;
 };
 type Session = {
   enabled: boolean; csrf?: string | null; state: string; last_status: string;
@@ -172,7 +172,8 @@ function isConnection(value: unknown): value is Connection {
   return object(value) && (value.environment === "real" || value.environment === "demo") &&
     Number.isSafeInteger(value.account_id) && Number.isSafeInteger(value.revision) &&
     (value.expires_at === null || typeof value.expires_at === "string") &&
-    (value.revoked_at === null || typeof value.revoked_at === "string");
+    (value.revoked_at === null || typeof value.revoked_at === "string") &&
+    (value.reauthorization_required === undefined || typeof value.reauthorization_required === "boolean");
 }
 
 function isSession(value: unknown): value is Session {
@@ -199,7 +200,9 @@ function matchingConnections(left: Connection | null | undefined, right: Connect
   if (left === undefined || right === undefined) return left === right;
   if (left === null || right === null) return left === right;
   return left.environment === right.environment && left.account_id === right.account_id &&
-    left.revision === right.revision && left.expires_at === right.expires_at && left.revoked_at === right.revoked_at;
+    left.revision === right.revision && left.expires_at === right.expires_at &&
+    left.revoked_at === right.revoked_at &&
+    left.reauthorization_required === right.reauthorization_required;
 }
 
 async function readStatus(): Promise<StatusResult> {
@@ -219,7 +222,7 @@ async function readStatus(): Promise<StatusResult> {
         session.value.last_status !== portfolio.value.last_status ||
         session.value.snapshot_available !== Boolean(portfolio.value.snapshot))
       errors.push("eToro status reads disagree. Retry status.");
-    else if (["connected", "startup_refresh_enabled", "expired", "revoked"].includes(session.value.state) &&
+    else if (["connected", "startup_refresh_enabled", "expired", "revoked", "reauthorization_required"].includes(session.value.state) &&
         (!session.value.connection || !portfolio.value.connection))
       errors.push("eToro connection details are incomplete. Retry status.");
     else if (session.value.state === "not_connected" &&
@@ -666,6 +669,9 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
     {!preview && !statusError && session?.state === "connected" && <p role="status">Connection saved.
       {!portfolio ? " The latest read status is unavailable."
         : portfolio.snapshot ? " The latest read is available below." : " No read is available in this dashboard session."}</p>}
+    {!preview && !statusError && session?.state === "reauthorization_required" &&
+      <p role="status">eToro credentials have changed. Reconnect and confirm the account before another read.
+        Any displayed portfolio snapshot is from an earlier read.</p>}
     {!preview && portfolio && !portfolio.snapshot &&
       ["connected", "expired"].includes(session?.state ?? "") &&
       !["not_collected", "success"].includes(portfolio.last_status) &&

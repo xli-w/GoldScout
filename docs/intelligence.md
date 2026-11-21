@@ -137,24 +137,29 @@ requires separate operator-approved validation, not offline mocks.
 ### Connection configuration
 
 The operator can privately configure the proxy, DNS override and hosted-AI and
-eToro credentials in the project-root `.env` file or process environment. Do
-not overwrite an existing private file or put real settings in chat, source
-control or command arguments. The private file is Git-ignored but is plaintext:
-restrict access to the file and machine.
+eToro credentials in the Settings page, the project-root `.env` file or process
+environment. Settings values are stored as plaintext in the ignored
+project-root `.goldscout-connections.json`; keep the checkout and computer
+private. Do not put real settings in chat, source control or command arguments.
 
-For these GoldScout connection settings, an entry in `.env` takes precedence
-over the process environment, including an explicitly empty value. An absent
-entry falls back to the environment; an existing but unreadable file fails
-rather than falling back. On Windows, names match case-insensitively, as in the
-environment; elsewhere, names are case-sensitive. Other environment variables
-are not overridden. Set `PYTHON_DOTENV_DISABLED=1` in the process environment to disable
-private-file loading entirely; this safety switch cannot be overridden by the
-file. Blank credential entries make the corresponding provider unavailable.
+For these GoldScout connection settings, a saved Settings value takes
+precedence over `.env`, which takes precedence over the process environment.
+Clearing a Settings override falls back to those existing sources. In `.env`,
+an explicitly empty value takes precedence over the process environment; an
+absent entry falls back to the environment. An existing but unreadable private
+file fails rather than falling back. On Windows, names match case-insensitively,
+as in the environment; elsewhere, names are case-sensitive. Other environment
+variables are not overridden. Set `PYTHON_DOTENV_DISABLED=1` in the process
+environment to disable both private-file sources entirely; this safety switch
+cannot be overridden by either file. Blank credential entries make the
+corresponding provider unavailable.
 **A blank `TRADER_PROXY_URL` explicitly disables the proxy, even if the
 environment contains a proxy, and may allow a direct request.** The example
 therefore leaves its entries commented out. Values are literal; variable
-interpolation is not performed. Restart the service after changing connection
-settings.
+interpolation is not performed. Close older GoldScout processes before changing connection settings. Changed
+eToro keys invalidate saved connection consent and CLI monitoring approvals;
+reauthorize before another read. A request already dispatched cannot be
+recalled.
 
 #### Proxy configuration
 

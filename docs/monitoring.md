@@ -292,6 +292,7 @@ profile hash and selected local account alias:
   "retention_rights_verified": true,
   "account_binding_verified": true,
   "supervised_read_approved": true,
+  "credential_revision": 0,
   "evidence": "Operator-verified eligibility, binding and retention; accepts trade-capable key risk for one supervised GET"
 }
 ```
@@ -300,17 +301,20 @@ Set exactly one of `read_scope_verified` or
 `trade_capable_key_risk_accepted` to `true`. If scope is unknown or broader than
 read-only, do not claim it was verified: set `read_scope_verified` to `false`
 and explicitly accept the broader-key risk instead. Approval files must include
-the new `trade_capable_key_risk_accepted` field; older files fail closed.
+the `trade_capable_key_risk_accepted` and current `credential_revision` fields;
+older or mismatched approvals fail closed.
 Approval has a maximum one-day lifetime and is an operator attestation, not an
 authenticated approval service or proof of permissions. The operator supplies
-`GOLDSCOUT_ETORO_API_KEY` and `GOLDSCOUT_ETORO_USER_KEY` privately through their
-project connection settings or environment, never command-line arguments,
-browser fields or committed files. See
+`GOLDSCOUT_ETORO_API_KEY` and `GOLDSCOUT_ETORO_USER_KEY` through the local
+Settings page, `.env`, or process environment, never command-line arguments or
+committed files. The Settings fields are write-only. See
 [connection configuration](intelligence.md#connection-configuration) for
 precedence and plaintext storage risks. Only the explicitly invoked collector
-uses them after its approval gates.
-Approval is checked against the current clock before dispatch, and again
-after DNS and TLS setup for the built-in adapter. An already dispatched
+uses them after its approval gates. `credential_revision` is the current
+revision shown on Settings; it binds the approval to the effective eToro keys
+and changes when either key changes.
+Approval is checked against the current clock and credential revision before
+dispatch, and again after DNS and TLS setup for the built-in adapter. An already dispatched
 request cannot be retracted; an expired approval prevents publishing its
 result. If cancellation cannot be confirmed, the collector reports that the
 request may still be in flight. If no trustworthy completion time is

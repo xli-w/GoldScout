@@ -52,7 +52,7 @@ class PortfolioAPITests(unittest.TestCase):
     def test_only_portfolio_demo_is_available_and_trading_routes_are_retired(self):
         with self.client() as client:
             self.assertEqual(client.get("/api/v1/settings").json(),
-                             {"mode": "demo", "workspace": "demo"})
+                             {"mode": "demo", "workspace": "demo", "settings_enabled": False})
             report = client.get("/api/investment/v1/snapshot")
             self.assertEqual(report.status_code, 200, report.text)
             self.assertEqual(report.json()["schema_version"], 2)

@@ -46,6 +46,13 @@ class FakeResponse:
 
 class IntelligenceCalendarTransportTests(unittest.TestCase):
     def setUp(self):
+        self.settings_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.settings_directory.cleanup)
+        self.connection_path_patch = patch.object(
+            proxy_config, "CONNECTIONS_PATH",
+            Path(self.settings_directory.name) / ".goldscout-connections.json")
+        self.connection_path_patch.start()
+        self.addCleanup(self.connection_path_patch.stop)
         self.connection = Mock(sock=None)
         self.response = FakeResponse()
         self.connection.getresponse.return_value = self.response

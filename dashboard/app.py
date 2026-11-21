@@ -28,7 +28,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                monitoring_profile=None, monitoring_cache=None, monitoring_reviews=None,
                monitoring_workflow_enabled=False, setup_workspace=None, setup_enabled=False,
                etoro_connection_path=None, etoro_transport_factory=None,
-               etoro_credential_accessor=None, planning_profile=None):
+               etoro_credential_accessor=None, planning_profile=None,
+               settings_path=None, connections_path=None):
     if setup_enabled and setup_workspace is None:
         raise ValueError("Setup requires a selected workspace")
     if setup_workspace is not None and (
@@ -72,6 +73,35 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         if etoro_connection_path is not None and Path(etoro_connection_path).absolute() != default_etoro_path:
             raise ValueError("The eToro connection file must remain separate under the selected workspace")
         etoro_connection_path = default_etoro_path
+    expected_settings_path = None
+    if setup_workspace is not None or investment_database is not None:
+        settings_directory = (
+            Path(setup_workspace).absolute() if setup_workspace is not None
+            else Path(investment_database).absolute().parent)
+        expected_settings_path = settings_directory / ".goldscout-settings.json"
+    if settings_path is None:
+        settings_path = expected_settings_path
+    elif (expected_settings_path is None or
+          Path(settings_path).absolute() != expected_settings_path):
+        raise ValueError("Settings must remain in the selected workspace")
+    local_settings = None
+    if settings_path is not None and investment_database is not None and not intelligence_demo:
+        from dashboard.settings import LocalSettings
+        local_settings = LocalSettings(settings_path)
+    from proxy_config import (
+        CONNECTION_NAMES, CONNECTIONS_PATH, connection_revision, connection_settings_enabled,
+        configured_connection_values,
+    )
+    selected_connections_path = Path(connections_path or CONNECTIONS_PATH).absolute()
+    if etoro_credential_accessor is None and etoro_connection_path is not None:
+        etoro_credential_accessor = lambda: {
+            "x-api-key": configured_connection_values(
+                "GOLDSCOUT_ETORO_API_KEY", connections_path=selected_connections_path
+            )["GOLDSCOUT_ETORO_API_KEY"],
+            "x-user-key": configured_connection_values(
+                "GOLDSCOUT_ETORO_USER_KEY", connections_path=selected_connections_path
+            )["GOLDSCOUT_ETORO_USER_KEY"],
+        }
     if etoro_connection_path is not None:
         etoro_connection_path = Path(etoro_connection_path).absolute()
         if (investment_database is not None
@@ -87,9 +117,16 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         from dashboard.monitoring_workflow import MonitoringWorkflowSessions
         etoro_connection = EToroConnection(
             etoro_connection_path, clock, transport_factory=etoro_transport_factory,
-            credential_accessor=etoro_credential_accessor)
+            credential_accessor=etoro_credential_accessor,
+            credential_revision_accessor=lambda: connection_revision(
+                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY",
+                path=selected_connections_path))
         etoro_sessions = MonitoringWorkflowSessions()
     backup_sessions = None
+    settings_sessions = None
+    if local_settings is not None:
+        from dashboard.monitoring_workflow import MonitoringWorkflowSessions
+        settings_sessions = MonitoringWorkflowSessions()
     if investment_database is not None:
         from dashboard.monitoring_workflow import MonitoringWorkflowSessions
         backup_sessions = MonitoringWorkflowSessions()
@@ -156,6 +193,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         "/api/investment/v1/etoro/refresh",
         "/api/investment/v1/backup/download",
         "/api/investment/v1/backup/rehearsal",
+        "/api/v1/settings/preferences",
+        "/api/v1/settings/connections",
     }
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
@@ -188,6 +227,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                      request.url.path.startswith("/api/investment/v1/setup/")) or
                     (planning and request.url.path.startswith("/api/investment/v1/planning/")) or
                     (backup_sessions and request.url.path.startswith("/api/investment/v1/backup/")) or
+                    (settings_sessions and request.url.path in (
+                        "/api/v1/settings/preferences", "/api/v1/settings/connections")) or
                     (etoro_sessions and request.url.path.startswith("/api/investment/v1/etoro/")))):
             response = error("invalid_request", 405)
         elif request.method == "POST" and (origin != f"{request.url.scheme}://{host}" or request.headers.get("sec-fetch-site") not in (None,"same-origin")):
@@ -218,7 +259,94 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                 return {"mode": "recorded", "workspace": "setup",
                         "setup_state": status["state"]}
         return {"mode": "recorded" if investment_database is not None else "demo",
-                "workspace": "investment" if investment_database is not None else "demo"}
+                "workspace": "investment" if investment_database is not None else "demo",
+                "settings_enabled": local_settings is not None}
+
+    @app.get("/api/v1/settings/session")
+    def settings_session(request: Request):
+        if local_settings is None:
+            return {"enabled": False, "csrf": None}
+        from proxy_config import connection_revision, read_connection_settings
+        from dashboard.settings import SettingsError
+        token, record = settings_sessions.session(
+            request.cookies.get("goldscout_settings_session"), clock(), create=True)
+        try:
+            preferences = local_settings.read()
+            connections = read_connection_settings(selected_connections_path)
+            etoro_revision = connection_revision(
+                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY",
+                path=selected_connections_path)
+        except (SettingsError, ValueError):
+            return JSONResponse(status_code=503, content={"error": "settings_unavailable"})
+        response = JSONResponse({
+            "enabled": True, "csrf": record["csrf"],
+            "revision": preferences["revision"],
+            "preferences": {key: preferences[key] for key in (
+                "compact_mode", "review_interval_days", "savings_terms_interval_days")},
+            "connection_revision": connections["revision"],
+            "etoro_credential_revision": str(etoro_revision),
+            "connection_settings_enabled": connection_settings_enabled(selected_connections_path),
+            "connection_overrides": {name: name in connections["values"]
+                                     for name in CONNECTION_NAMES},
+        })
+        response.set_cookie(
+            "goldscout_settings_session", token, httponly=True,
+            samesite="strict", secure=request.url.scheme == "https",
+            path="/api/v1/settings", max_age=900)
+        return response
+
+    @app.post("/api/v1/settings/preferences")
+    async def save_settings_preferences(request: Request):
+        from dashboard.settings import SettingsError
+        if (settings_sessions is None or not settings_sessions.authorize(
+                request.cookies.get("goldscout_settings_session"),
+                request.headers.get("x-csrf-token"), clock())):
+            return error("settings_unauthorized", 403)
+        try:
+            payload = await bounded_json(request)
+            if type(payload) is not dict or set(payload) != {"expected_revision", "preferences"}:
+                return error("invalid_request", 400)
+            result = await run_in_threadpool(
+                local_settings.save_preferences, payload["expected_revision"], payload["preferences"])
+            return {
+                "revision": result["revision"],
+                "preferences": {key: result[key] for key in (
+                    "compact_mode", "review_interval_days", "savings_terms_interval_days")},
+            }
+        except SettingsError as exc:
+            return error(exc.code, exc.status)
+
+    @app.post("/api/v1/settings/connections")
+    async def save_settings_connections(request: Request):
+        from proxy_config import (
+            ProxyConfigurationError, connection_settings_enabled,
+            read_connection_settings, update_connection_settings,
+        )
+        if (settings_sessions is None or not settings_sessions.authorize(
+                request.cookies.get("goldscout_settings_session"),
+                request.headers.get("x-csrf-token"), clock())):
+            return error("settings_unauthorized", 403)
+        try:
+            if not connection_settings_enabled(selected_connections_path):
+                return error("connection_settings_disabled", 403)
+            payload = await bounded_json(request)
+            if (type(payload) is not dict or set(payload) != {
+                    "expected_revision", "updates", "clear_names"}):
+                return error("invalid_request", 400)
+            result = await run_in_threadpool(
+                update_connection_settings, payload["updates"], payload["clear_names"],
+                expected_revision=payload["expected_revision"], path=selected_connections_path)
+            return {
+                "connection_revision": result["revision"],
+                "connection_overrides": {name: name in result["values"]
+                                         for name in CONNECTION_NAMES},
+                "reauthorization_required": bool(
+                    set(result["changed_names"]) & {
+                        "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY"}),
+            }
+        except ProxyConfigurationError as exc:
+            status = 409 if "changed" in str(exc) else 400
+            return error("connection_settings_rejected", status)
 
     @app.get("/api/investment/v1/planning/session")
     def planning_session(request: Request):

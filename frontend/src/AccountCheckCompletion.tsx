@@ -26,7 +26,8 @@ export function AccountCheckCompletion({ data, accountId }: { data: InvestmentSn
     setBusy(true);
     try {
       if (cycle && await markAccountInReview(data, accountId, cycle,
-        () => loadInvestment(new AbortController().signal))) navigate("/investment#account-review");
+        () => loadInvestment(new AbortController().signal)))
+        navigate("/investment#account-review");
       else setError("The review or journal changed. Return to your portfolio and refresh before continuing.");
     } catch (reason) {
       setError(`${reason instanceof Error ? reason.message : "Review progress could not be saved."} A reminder date may have been saved; check it before continuing. No journal record was changed.`);

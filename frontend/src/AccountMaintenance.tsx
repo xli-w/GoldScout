@@ -166,9 +166,12 @@ export async function markAccountInReview(data: InvestmentSnapshot, accountId: s
         !cycle.accountIds.includes(accountId)) return false;
     await requireCurrentSnapshot(data, refresh);
     const preferences = readPreferences(data.portfolio_id);
-    const preference = preferences[accountId];
-    if (preference?.intervalDays != null)
-      savePreference(data.portfolio_id, accountId, { ...preference, reviewedAt: new Date().toISOString() });
+    const preference = preferences[accountId] ?? {
+      intervalDays: null, termsIntervalDays: null, reviewedAt: null,
+    };
+    savePreference(data.portfolio_id, accountId, {
+      ...preference, reviewedAt: new Date().toISOString(),
+    });
     const checkedAccountIds = cycle.checkedAccountIds.includes(accountId)
       ? cycle.checkedAccountIds : [...cycle.checkedAccountIds, accountId];
     localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify({ ...cycle, checkedAccountIds }));
@@ -176,9 +179,10 @@ export async function markAccountInReview(data: InvestmentSnapshot, accountId: s
   });
 }
 
-function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, refreshSnapshot }: {
+function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, refreshSnapshot, defaults }: {
   data: InvestmentSnapshot; now: number; onReviewCashEvidence: () => void; onFinishReview: () => boolean;
   refreshSnapshot: () => Promise<InvestmentSnapshot>;
+  defaults: { reviewIntervalDays: number; termsIntervalDays: number };
 }) {
   const [preferences, setPreferences] = useState<PreferenceState>({});
   const [cycle, setCycle] = useState<ReviewCycle | null>(null);
@@ -226,13 +230,26 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
 
   const activeIds = data.accounts.filter(account => account.status === "active")
     .map(account => account.id);
+  const effectivePreferences = useMemo(() => {
+    const result: PreferenceState = {};
+    for (const account of data.accounts) {
+      const saved = preferences[account.id];
+      result[account.id] = {
+        intervalDays: saved?.intervalDays ?? defaults.reviewIntervalDays,
+        termsIntervalDays: account.kind === "deposit"
+          ? saved?.termsIntervalDays ?? defaults.termsIntervalDays : null,
+        reviewedAt: saved?.reviewedAt ?? null,
+      };
+    }
+    return result;
+  }, [data.accounts, defaults.reviewIntervalDays, defaults.termsIntervalDays, preferences]);
   const currentCycle = cycle !== null && cycle.revision === data.revision &&
     cycle.accountIds.length === activeIds.length &&
     cycle.accountIds.every((id, index) => id === activeIds[index]);
   const checkedIds = currentCycle ? cycle.checkedAccountIds : [];
   const nextAccount = activeIds.find(id => !checkedIds.includes(id));
   const reviewNow = Date.now();
-  const unresolved = unresolvedReviewItems(data, activeIds, preferences, now, reviewNow);
+  const unresolved = unresolvedReviewItems(data, activeIds, effectivePreferences, now, reviewNow);
   const unmatchedPreferences = useMemo(() => Object.keys(preferences)
     .filter(id => !data.accounts.some(account => account.id === id)), [data.accounts, preferences]);
 
@@ -361,7 +378,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
       no longer in this journal; those settings were left untouched.
     </p>}
     {data.accounts.filter(account => account.status === "active").map(account => {
-      const preference = preferences[account.id];
+      const preference = effectivePreferences[account.id];
       const marks = data.holdings.filter(holding => holding.account_id === account.id);
       const missingPrice = marks.some(holding => holding.mark_at === null || holding.value_gbp === null);
       const latestCashCheck = account.cash_observation;

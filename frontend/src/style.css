@@ -223,6 +223,7 @@ nav { display: grid; gap: 5px; }
 nav a { display: flex; align-items: center; gap: 11px; padding: 12px 13px; font-size: 14px; color: #65757a; border-radius: 5px; }
 nav a.active { color: #236a59; background: #eaf3ef; font-weight: 500; }
 nav a:hover { background: #f1f5f3; }
+.settings-nav { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); }
 .sidebar-bottom { margin-top: auto; padding: 20px 10px 0; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
 .local-label { margin-left: auto; font-size: 9px; }
 .workspace { min-width: 0; }
@@ -238,6 +239,16 @@ nav a:hover { background: #f1f5f3; }
 main { max-width: 1520px; padding: 34px 35px 20px; margin: auto; }
 .page-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
 .page-description { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-page { max-width: 860px; }
+.settings-form { display: grid; gap: 14px; }
+.settings-form > label, .settings-secret > label:first-child { display: grid; gap: 6px; max-width: 520px; font-size: 12px; }
+.settings-form input:not([type="checkbox"]), .settings-form select { min-height: 40px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-raised); color: var(--ink); }
+.settings-form button { min-height: 40px; width: fit-content; padding: 8px 13px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-raised); }
+.settings-toggle { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.5; }
+.settings-secret { display: grid; gap: 8px; padding-block: 12px; border-top: 1px solid var(--line); }
+.settings-secret > span { color: var(--muted); font-size: 11px; }
+.compact-mode main { padding-top: 24px; }
+.compact-mode .history-group { margin-top: 18px; }
 .eyebrow { font-size: 10px; color: var(--muted); margin: 0 0 7px; }
 h1 { font-size: 28px; font-weight: 500; margin: 0; line-height: 1.25; }
 h2 { font-size: 17px; font-weight: 500; margin: 0; }
@@ -465,6 +476,8 @@ tbody tr:hover { background: #182b21; }
   .sidebar .nav-section nav a { display: flex; flex-direction: row; align-items: center; gap: 6px; min-height: 44px; padding: 8px; border: 0; border-radius: 6px; font-size: 12px; line-height: 1.2; white-space: nowrap; }
   .sidebar .nav-section nav a svg { display: block; flex-shrink: 0; }
   .sidebar .nav-section nav a.active { background: #142d21; color: var(--green); }
+  .sidebar .settings-nav { display: flex; margin: 0; padding: 0; border: 0; overflow-x: auto; }
+  .sidebar .settings-nav a { min-height: 44px; padding: 8px; border: 0; border-radius: 6px; font-size: 12px; }
   .metrics { gap: 8px; }
   .investment-view .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metrics > div, .metrics > div:first-child, .metrics > div:nth-child(3) { padding: 14px 10px; border: 1px solid var(--line); }

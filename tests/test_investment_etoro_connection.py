@@ -185,6 +185,50 @@ class EToroConnectionTests(unittest.TestCase):
         self.assertNotIn("synthetic-public", json.dumps(stored))
         self.assertEqual(len(transport.paths), 2)
 
+    def test_key_rotation_requires_fresh_consent_before_any_further_read(self):
+        revision = [4]
+        transport = FixtureTransport([
+            encoded(aggregate()), balance(), encoded(aggregate()), balance(),
+        ])
+        manager = EToroConnection(
+            self.path, lambda: NOW, transport_factory=lambda: transport,
+            credential_accessor=lambda: KEYS,
+            credential_revision_accessor=lambda: revision[0])
+        self.managers.append(manager)
+        preview = self.connect(manager)
+        manager.confirm("synthetic-session", preview["preview_id"], True, True, 30, NOW)
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["schema_version"], 2)
+        self.assertEqual(saved["credential_revision"], 4)
+
+        calls_before_rotation = len(transport.paths)
+        revision[0] += 1
+        self.assertEqual(manager.status(NOW)["state"], "reauthorization_required")
+        manager.start_once()
+        self.assertEqual(len(transport.paths), calls_before_rotation)
+
+        renewed = self.connect(manager, request_id="after-rotation")
+        status = manager.confirm(
+            "synthetic-session", renewed["preview_id"], True, True, 30, NOW)
+        self.assertEqual(status["state"], "startup_refresh_enabled")
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["credential_revision"], 5)
+
+    def test_legacy_permission_requires_reauthorization_with_revision_binding(self):
+        original = self.manager(FixtureTransport())
+        preview = self.connect(original)
+        original.confirm("synthetic-session", preview["preview_id"], True, True, 30, NOW)
+        self.assertEqual(
+            json.loads(self.path.read_text(encoding="utf-8"))["schema_version"], 1)
+
+        transport = FixtureTransport()
+        upgraded = EToroConnection(
+            self.path, lambda: NOW, transport_factory=lambda: transport,
+            credential_accessor=lambda: KEYS, credential_revision_accessor=lambda: 1)
+        self.managers.append(upgraded)
+        self.assertEqual(upgraded.status(NOW)["state"], "reauthorization_required")
+        upgraded.start_once()
+        self.assertEqual(transport.paths, [])
+
     def test_broader_key_acceptance_allows_one_read_but_not_startup_permission(self):
         manager = self.manager(FixtureTransport())
         preview = self.connect(manager, self.consent(read_scope=False))

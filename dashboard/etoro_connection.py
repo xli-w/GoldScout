@@ -23,18 +23,23 @@ class ManualRefreshRejected(InvestmentError):
 
 
 def _permission(value, now):
-    fields = {
+    legacy_fields = {
         "schema_version", "revision", "environment", "account_id", "approved_at",
         "expires_at", "retention_rights_verified", "read_scope_verified",
         "trade_capable_key_risk_accepted", "eligibility_verified",
         "account_binding_verified", "revoked_at",
     }
-    if type(value) is not dict or set(value) != fields:
+    if type(value) is not dict or value.get("schema_version") not in (1, 2):
         raise InvestmentError("eToro connection permission is invalid; keep its files unchanged")
-    if (type(value["schema_version"]) is not int or value["schema_version"] != 1
+    expected_fields = legacy_fields | ({"credential_revision"} if value["schema_version"] == 2 else set())
+    if set(value) != expected_fields:
+        raise InvestmentError("eToro connection permission is invalid; keep its files unchanged")
+    if (type(value["schema_version"]) is not int
             or type(value["revision"]) is not int or value["revision"] < 1
             or value["environment"] not in ("real", "demo")
-            or type(value["account_id"]) is not int or value["account_id"] < 1):
+            or type(value["account_id"]) is not int or value["account_id"] < 1
+            or value["schema_version"] == 2 and
+            (type(value["credential_revision"]) is not int or value["credential_revision"] < 0)):
         raise InvestmentError("eToro connection permission is invalid; keep its files unchanged")
     approved = explicit_clock(value["approved_at"])
     expiry = explicit_clock(value["expires_at"]) if value["expires_at"] is not None else None
@@ -58,11 +63,12 @@ class EToroConnection:
     """Keep portfolio data in memory; persist only explicit refresh permission."""
 
     def __init__(self, permission_path, clock_fn, *, transport_factory=None,
-                 credential_accessor=None):
+                 credential_accessor=None, credential_revision_accessor=None):
         self.permission_path = Path(permission_path).absolute()
         self.clock_fn = clock_fn
         self.transport_factory = transport_factory
         self.credential_accessor = credential_accessor
+        self.credential_revision_accessor = credential_revision_accessor
         self.lock = threading.RLock()
         self.collection_lock = threading.Lock()
         self.pending = {}
@@ -119,17 +125,33 @@ class EToroConnection:
         except (OSError, ValueError, UnicodeError, RecursionError):
             raise InvestmentError("eToro connection permission is unreadable; keep its files unchanged") from None
 
-    @staticmethod
-    def _active(permission, now):
+    def _current_credential_revision(self):
+        if self.credential_revision_accessor is None:
+            return None
+        try:
+            value = self.credential_revision_accessor()
+        except (OSError, RuntimeError, ValueError):
+            raise InvestmentError("eToro credential configuration is unavailable") from None
+        if type(value) is not int or value < 0:
+            raise InvestmentError("eToro credential configuration is unavailable")
+        return value
+
+    def _credentials_current(self, permission):
+        current = self._current_credential_revision()
+        return current is None or permission[0].get("credential_revision") == current
+
+    def _active(self, permission, now):
         value, _, expiry, revoked = permission
         return (expiry is not None and now < expiry and revoked is None
-                and value["read_scope_verified"] is True)
+                and value["read_scope_verified"] is True
+                and self._credentials_current(permission))
 
     def status(self, now):
         now = clock(now)
         with self.lock:
             try:
                 permission = self._read_permission(now)
+                credentials_current = permission is None or self._credentials_current(permission)
             except InvestmentError as exc:
                 return {"state": "unavailable", "message": str(exc),
                         "snapshot": deepcopy(self.snapshot), "last_status": self.last_status}
@@ -138,7 +160,8 @@ class EToroConnection:
                 public = None
             else:
                 value, _, expiry, revoked = permission
-                state = ("revoked" if revoked is not None else
+                state = ("reauthorization_required" if not credentials_current else
+                         "revoked" if revoked is not None else
                          "expired" if expiry is not None and expiry <= now else
                          "startup_refresh_enabled" if self._active(permission, now) else
                          "connected")
@@ -148,6 +171,7 @@ class EToroConnection:
                     "expires_at": iso(expiry) if expiry is not None else None,
                     "revoked_at": iso(revoked) if revoked is not None else None,
                     "revision": value["revision"],
+                    "reauthorization_required": not credentials_current,
                 }
             return {"state": state, "connection": public,
                     "snapshot": deepcopy(self.snapshot), "last_status": self.last_status,
@@ -197,12 +221,15 @@ class EToroConnection:
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             raise InvestmentError("eToro request identifier is invalid")
         now = clock(now)
+        credential_revision = self._current_credential_revision()
         if generation is None:
             generation = self.begin_generation()
 
         def verify():
             with self.lock:
                 if generation != self._revocation_generation:
+                    raise etoro.EToroError("approval_interrupted")
+                if self._current_credential_revision() != credential_revision:
                     raise etoro.EToroError("approval_interrupted")
 
         with self.collection_lock:
@@ -232,6 +259,7 @@ class EToroConnection:
                 pending = {
                     "token": token, "request": deepcopy(value), "response": response,
                     "snapshot": snapshot, "expires": now + PREVIEW_TTL, "timer": timer,
+                    "credential_revision": credential_revision,
                 }
                 self.pending[request_id] = pending
                 try:
@@ -261,11 +289,15 @@ class EToroConnection:
                 raise InvestmentError("Do not provide an expiry when startup refresh is disabled")
 
             old = self._read_permission(now)
+            credential_revision = match.get("credential_revision")
+            if (self.credential_revision_accessor is not None
+                    and self._current_credential_revision() != credential_revision):
+                raise InvestmentError("eToro credentials changed; reconnect to authorize the current credentials")
             revision = old[0]["revision"] + 1 if old is not None else 1
             expiry = now + timedelta(days=refresh_days) if startup_refresh else None
             consent = match["request"]
             value = {
-                "schema_version": 1, "revision": revision,
+                "schema_version": 2 if credential_revision is not None else 1, "revision": revision,
                 "environment": consent["environment"],
                 "account_id": match["snapshot"]["account_id"],
                 "approved_at": iso(now), "expires_at": iso(expiry) if expiry else None,
@@ -275,6 +307,8 @@ class EToroConnection:
                 "eligibility_verified": consent["eligibility_verified"],
                 "account_binding_verified": True, "revoked_at": None,
             }
+            if credential_revision is not None:
+                value["credential_revision"] = credential_revision
             self._write_permission(value)
             self._stop.clear()
             self.snapshot = deepcopy(match["snapshot"])
@@ -300,6 +334,8 @@ class EToroConnection:
             permission = self._read_permission(now)
             if permission is None:
                 return self.status(now)
+            if not self._credentials_current(permission):
+                return self.status(now)
             value = deepcopy(permission[0])
             if value["revoked_at"] is None:
                 value["revision"] += 1
@@ -315,6 +351,9 @@ class EToroConnection:
         now = clock(now)
         with self.lock:
             permission = self._read_permission(now)
+            if permission is not None and not self._credentials_current(permission):
+                raise ManualRefreshRejected(
+                    "eToro credentials changed; reconnect before requesting another read")
             if manual_confirmed is True:
                 if history_confirmed is not True:
                     raise ManualRefreshRejected(
@@ -349,6 +388,7 @@ class EToroConnection:
                 raise etoro.EToroError("approval_interrupted") from None
             if (current is None or current[3] is not None
                     or (not manual and not self._active(current, checked))
+                    or not self._credentials_current(current)
                     or (manual and generation != self._revocation_generation)
                     or current[0]["revision"] != expected["revision"]
                     or current[0]["account_id"] != expected["account_id"]
@@ -395,7 +435,8 @@ class EToroConnection:
             except InvestmentError:
                 self.last_status = "permission_unavailable"
                 return
-            if permission is None or not self._active(permission, self.clock_fn()):
+            if (permission is None or not self._credentials_current(permission)
+                    or not self._active(permission, self.clock_fn())):
                 return
             expected = deepcopy(permission[0])
             self._stop.clear()
