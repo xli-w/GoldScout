@@ -372,8 +372,8 @@ function waitingForStartup(session: Session | null, portfolio: PortfolioState | 
     (session.last_status === "not_collected" || portfolio.last_status === "not_collected"));
 }
 
-export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalNow }: {
-  revokeOnly?: boolean; journal?: InvestmentSnapshot; now?: number;
+export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalNow, viewActive = true }: {
+  revokeOnly?: boolean; journal?: InvestmentSnapshot; now?: number; viewActive?: boolean;
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioState | null>(null);
@@ -695,7 +695,8 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
         The displayed source snapshot is not refreshed.</p>}
       <SnapshotView snapshot={portfolio.snapshot} now={now} />
       <ClosedTradeHistoryView history={portfolio.snapshot.closed_trade_history} />
-      {bridgeReady && snapshot && journal && <EToroJournalBridge key={bridgeKey} snapshot={snapshot} journal={journal} />}
+      {bridgeReady && viewActive && snapshot && journal &&
+        <EToroJournalBridge key={bridgeKey} snapshot={snapshot} journal={journal} />}
       {!bridgeReady && journal?.source_mode === "recorded" && <p className="position-note">
         Side-by-side review is unavailable until a valid, bound real-account read and journal are available.
         No records have been changed.</p>}

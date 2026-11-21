@@ -12,6 +12,7 @@ import { PlanningProfilePage } from "./PlanningProfile";
 import { AccountUpdatePage } from "./AccountUpdate";
 import { timestamp } from "./api";
 import { fetchSettingsSession, SETTINGS_QUERY_KEY, SettingsPage } from "./SettingsPage";
+import { portfolioView } from "./portfolio-navigation";
 
 export function App() {
   const client = useQueryClient();
@@ -79,7 +80,9 @@ export function App() {
     "/intelligence": "Market Intelligence",
     "/settings": "Settings",
   };
-  const pageName = pages[location.pathname];
+  const currentPortfolioView = location.pathname === "/investment" ? portfolioView(location.search) : null;
+  const pageName = currentPortfolioView === "history" ? "History and insights"
+    : currentPortfolioView === "tools" ? "Portfolio tools" : pages[location.pathname];
   const reviewDefaults = !settingsSession.isError && settingsSession.data?.enabled &&
     settingsSession.data.preferences
     ? {
@@ -133,7 +136,8 @@ export function App() {
           valueChangeSelection={valueChangeSelection} setValueChangeSelection={setValueChangeSelection}
           reviewDefaults={reviewDefaults} reviewDefaultsStatus={reviewDefaultsStatus} />
           : location.pathname === "/investment/record" ? <InvestmentRecordingPage />
-          : location.pathname === "/investment/update" ? <AccountUpdatePage now={now} />
+          : location.pathname === "/investment/update" ? <AccountUpdatePage now={now}
+            reviewDefaults={reviewDefaults} reviewDefaultsStatus={reviewDefaultsStatus} />
           : location.pathname === "/investment/reviews" ? <MonitoringWorkflowPage />
           : location.pathname === "/investment-guide" ? <InvestmentGuide />
           : location.pathname === "/planning" ? <PlanningProfilePage />

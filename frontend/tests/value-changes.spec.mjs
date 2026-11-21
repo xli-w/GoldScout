@@ -61,7 +61,7 @@ async function comparisonReport(page) {
 }
 
 test("explains the real synthetic replay without a mocked snapshot", async ({ page }) => {
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   await expect(page.getByText("SYNTHETIC DEMO", { exact: true })).toBeVisible();
   const changes = page.getByRole("region", { name: "Changes between recorded values" });
   await expect(changes).toContainText("changed by £370.00");
@@ -75,7 +75,7 @@ test("explains the real synthetic replay without a mocked snapshot", async ({ pa
 });
 
 test("demo refresh keeps the selected relative comparison despite moving synthetic dates", async ({ page }) => {
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   const changes = page.getByRole("region", { name: "Changes between recorded values" });
   const select = changes.getByLabel("Earlier recorded valuation");
   const firstOption = await select.locator("option").first().getAttribute("value");
@@ -91,7 +91,7 @@ test("recorded comparison keeps the selected date after a new revision", async (
   const report = await comparisonReport(page);
   report.source_mode = "recorded";
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   const changes = page.getByRole("region", { name: "Changes between recorded values" });
   const select = changes.getByLabel("Earlier recorded valuation");
   await select.selectOption(first);
@@ -121,7 +121,7 @@ test("saved review checkpoint anchors the next evidence-linked change comparison
   report.source_mode = "recorded";
   await page.clock.setFixedTime(new Date("2026-01-05T12:00:00Z"));
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
 
   const review = page.getByRole("region", { name: "Review continuity" });
   await expect(review).toContainText("No comparison point is saved in this browser yet");
@@ -129,11 +129,14 @@ test("saved review checkpoint anchors the next evidence-linked change comparison
   await expect(review).toContainText("journal revision");
   await expect(page.getByRole("region", { name: "What changed since your saved value?" }))
     .toContainText("No newer complete recorded value is available yet");
+  await expect(page.getByRole("region", { name: "What changed since your saved value?" }))
+    .toContainText("date, not a frozen value");
   await expect(page.getByLabel("Earlier recorded valuation")).toHaveValue("");
   await page.getByLabel("Earlier recorded valuation").selectOption(first);
   await expect(page.getByRole("region", { name: "Changes between recorded values" }))
     .toContainText("Selecting an earlier value does not save it");
   await review.getByRole("button", { name: "Save this value for the next comparison" }).click();
+  await expect(page.getByRole("region", { name: "What changed since your saved value?" })).toBeVisible();
 
   const next = "2026-01-05T12:00:00.000001Z";
   report.revision++;
@@ -160,10 +163,10 @@ test("saved comparison points update in other tabs without changing the journal"
   let writes = 0;
   context.on("request", request => { if (!["GET", "HEAD"].includes(request.method())) writes++; });
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   const secondTab = await context.newPage();
   await secondTab.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: later }));
-  await secondTab.goto("/investment");
+  await secondTab.goto("/investment?view=history");
 
   await page.getByRole("button", { name: "Save this value for the next comparison" }).click();
   const otherReview = secondTab.getByRole("region", { name: "Review continuity" });
@@ -174,7 +177,7 @@ test("saved comparison points update in other tabs without changing the journal"
   const key = `goldscout.review-checkpoint.v1.${report.portfolio_id}`;
   await secondTab.evaluate(key => localStorage.setItem(key, "invalid checkpoint"), key);
   const review = page.getByRole("region", { name: "Review continuity" });
-  await expect(review.getByRole("alert")).toContainText("could not be read");
+  await expect(page.getByRole("alert").filter({ hasText: "could not be read" })).toBeVisible();
   await expect(review).not.toContainText("No comparison point is saved");
   await expect(page.getByRole("region", { name: "Changes between recorded values" })).toHaveCount(0);
   expect(await secondTab.evaluate(key => localStorage.getItem(key), key)).toBe("invalid checkpoint");
@@ -185,6 +188,182 @@ test("saved comparison points update in other tabs without changing the journal"
   await secondTab.close();
 });
 
+test("a stale save does not replace an unseen comparison point", async ({ page }) => {
+  const report = await comparisonReport(page);
+  report.source_mode = "recorded";
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment?view=history");
+  const review = page.getByRole("region", { name: "Review continuity" });
+  await expect(review).toContainText("No comparison point is saved");
+  const key = `goldscout.review-checkpoint.v1.${report.portfolio_id}`;
+  const newer = {
+    portfolioId: report.portfolio_id, valuationTimestamp: report.as_of,
+    savedAt: "2030-01-01T00:00:00Z", journalRevision: report.revision,
+  };
+  await page.evaluate(({ storageKey, value }) =>
+    localStorage.setItem(storageKey, JSON.stringify(value)), { storageKey: key, value: newer });
+  await review.getByRole("button", { name: "Save this value for the next comparison" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "changed since this page loaded" })).toBeVisible();
+  expect(await page.evaluate(storageKey => JSON.parse(localStorage.getItem(storageKey)), key)).toEqual(newer);
+  await page.getByRole("button", { name: "Retry comparison point" }).click();
+  await expect(review).toContainText(`journal revision ${report.revision}`);
+});
+
+test("a comparison save refuses a journal revision changed outside the page", async ({ page }) => {
+  const report = await comparisonReport(page);
+  report.source_mode = "recorded";
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment?view=history");
+  const review = page.getByRole("region", { name: "Review continuity" });
+  await expect(review).toContainText("No comparison point is saved");
+  report.revision++;
+  await review.getByRole("button", { name: "Save this value for the next comparison" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "The journal changed" })).toBeVisible();
+  expect(await page.evaluate(portfolioId =>
+    localStorage.getItem(`goldscout.review-checkpoint.v1.${portfolioId}`), report.portfolio_id)).toBeNull();
+});
+
+test("repeated clicks do not turn one comparison save into a false conflict", async ({ page }) => {
+  const report = await comparisonReport(page);
+  report.source_mode = "recorded";
+  let blockRead = false;
+  let signalReadStarted;
+  let releaseRead;
+  const readStarted = new Promise(resolve => { signalReadStarted = resolve; });
+  const readReleased = new Promise(resolve => { releaseRead = resolve; });
+  await page.route("**/api/investment/v1/snapshot", async route => {
+    if (blockRead) {
+      blockRead = false;
+      signalReadStarted();
+      await readReleased;
+    }
+    return route.fulfill({ json: report });
+  });
+  await page.goto("/investment?view=history");
+  const review = page.getByRole("region", { name: "Review continuity" });
+  await expect(review).toContainText("No comparison point is saved");
+  blockRead = true;
+  await review.getByRole("button", { name: "Save this value for the next comparison" }).dblclick();
+  await readStarted;
+  releaseRead();
+  await expect(review).toContainText(`journal revision ${report.revision}`);
+  await expect(page.getByRole("alert").filter({ hasText: "changed since this page loaded" })).toHaveCount(0);
+});
+
+test("a pending comparison save updates the page after leaving and returning", async ({ page }) => {
+  const report = await comparisonReport(page);
+  report.source_mode = "recorded";
+  let blockRead = false;
+  let signalReadStarted;
+  let releaseRead;
+  const readStarted = new Promise(resolve => { signalReadStarted = resolve; });
+  const readReleased = new Promise(resolve => { releaseRead = resolve; });
+  await page.route("**/api/investment/v1/snapshot", async route => {
+    if (blockRead) {
+      blockRead = false;
+      signalReadStarted();
+      await readReleased;
+    }
+    return route.fulfill({ json: report });
+  });
+  await page.goto("/investment?view=history");
+  await expect(page.getByRole("region", { name: "Review continuity" })).toContainText("No comparison point is saved");
+  blockRead = true;
+  await page.getByRole("button", { name: "Save this value for the next comparison" }).click();
+  await readStarted;
+  await page.getByRole("link", { name: "Help", exact: true }).first().click();
+  await page.getByRole("link", { name: "Your portfolio", exact: true }).click();
+  await page.getByRole("link", { name: "History and insights" }).click();
+  const review = page.getByRole("region", { name: "Review continuity" });
+  const save = review.getByRole("button", { name: "Save this value for the next comparison" });
+  await expect(save).toBeDisabled();
+  await expect(review).toContainText("Saving this comparison point.");
+  releaseRead();
+  await expect(review).toContainText(`journal revision ${report.revision}`);
+  await expect(save).toBeEnabled();
+  await expect(page.getByRole("alert").filter({ hasText: "changed since this page loaded" })).toHaveCount(0);
+});
+
+test("a comparison save that fails while away reports its outcome on return", async ({ page }) => {
+  const report = await comparisonReport(page);
+  report.source_mode = "recorded";
+  let blockRead = false;
+  let signalReadStarted;
+  let releaseRead;
+  const readStarted = new Promise(resolve => { signalReadStarted = resolve; });
+  const readReleased = new Promise(resolve => { releaseRead = resolve; });
+  await page.route("**/api/investment/v1/snapshot", async route => {
+    if (blockRead) {
+      blockRead = false;
+      signalReadStarted();
+      await readReleased;
+      return route.fulfill({ status: 503, json: { error: "synthetic_snapshot_failure" } });
+    }
+    return route.fulfill({ json: report });
+  });
+  await page.goto("/investment?view=history");
+  await expect(page.getByRole("region", { name: "Review continuity" })).toContainText("No comparison point is saved");
+  blockRead = true;
+  await page.getByRole("button", { name: "Save this value for the next comparison" }).click();
+  await readStarted;
+  await page.getByRole("link", { name: "Help", exact: true }).first().click();
+  const failedResponse = page.waitForResponse(response =>
+    response.url().endsWith("/api/investment/v1/snapshot") && response.status() === 503);
+  releaseRead();
+  await failedResponse;
+  await page.getByRole("link", { name: "Your portfolio", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Investment records are unavailable" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry comparison point" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Investment records are unavailable" })).toHaveCount(0);
+});
+
+test("a cross-tab comparison update does not dismiss an unacknowledged save failure", async ({ page, context }) => {
+  const report = await comparisonReport(page);
+  report.source_mode = "recorded";
+  let failNextRead = false;
+  await page.route("**/api/investment/v1/snapshot", route => {
+    if (failNextRead) {
+      failNextRead = false;
+      return route.fulfill({ status: 503, json: { error: "synthetic_snapshot_failure" } });
+    }
+    return route.fulfill({ json: report });
+  });
+  await page.goto("/investment?view=history");
+  const other = await context.newPage();
+  await other.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await other.goto("/investment?view=history");
+  const review = page.getByRole("region", { name: "Review continuity" });
+  const save = review.getByRole("button", { name: "Save this value for the next comparison" });
+  await expect(review).toContainText("No comparison point is saved");
+  failNextRead = true;
+  await save.click();
+  const failure = page.getByRole("alert").filter({ hasText: "Investment records are unavailable" });
+  await expect(failure).toBeVisible();
+  const key = `goldscout.review-checkpoint.v1.${report.portfolio_id}`;
+  await other.evaluate(storageKey => localStorage.setItem(storageKey, "invalid checkpoint"), key);
+  const readFailure = page.getByRole("alert").filter({ hasText: "could not be read" });
+  await expect(readFailure).toBeVisible();
+  await expect(failure).toBeVisible();
+  await page.getByRole("button", { name: "Retry comparison point" }).click();
+  await expect(failure).toBeVisible();
+  await expect(save).toBeDisabled();
+  const replacement = {
+    portfolioId: report.portfolio_id, valuationTimestamp: report.as_of,
+    savedAt: "2030-01-01T00:00:00Z", journalRevision: report.revision,
+  };
+  await other.evaluate(({ portfolioId, value }) =>
+    localStorage.setItem(`goldscout.review-checkpoint.v1.${portfolioId}`, JSON.stringify(value)),
+  { portfolioId: report.portfolio_id, value: replacement });
+  await expect(review).toContainText(`journal revision ${report.revision}`);
+  await expect(readFailure).toHaveCount(0);
+  await expect(failure).toBeVisible();
+  await expect(save).toBeDisabled();
+  await page.getByRole("button", { name: "Retry comparison point" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(save).toBeEnabled();
+  await other.close();
+});
+
 test("a failed refresh does not silently change the selected recorded date", async ({ page }) => {
   const report = await comparisonReport(page);
   report.source_mode = "recorded";
@@ -192,7 +371,7 @@ test("a failed refresh does not silently change the selected recorded date", asy
   await page.route("**/api/investment/v1/snapshot", route => unavailable
     ? route.fulfill({ status: 503, json: { detail: "Synthetic read failure" } })
     : route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   let changes = page.getByRole("region", { name: "Changes between recorded values" });
   await changes.getByLabel("Earlier recorded valuation").selectOption(first);
   unavailable = true;
@@ -215,7 +394,7 @@ test("a workspace refresh failure does not silently change the selected date", a
     ? route.fulfill({ status: 503, json: { detail: "Synthetic workspace failure" } })
     : route.fulfill({ json: settings }));
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   await page.getByLabel("Earlier recorded valuation").selectOption(first);
   unavailable = true;
   await Promise.all([
@@ -244,7 +423,7 @@ test("a selected older date remains available when newer history exceeds the dis
   report.recorded_fee_events = [];
   report.recorded_scope_additions = [];
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   const changes = page.getByRole("region", { name: "Changes between recorded values" });
   const select = changes.getByLabel("Earlier recorded valuation");
   await select.selectOption(dates[0]);
@@ -264,7 +443,7 @@ test("compares chosen recorded values with exact sourced activity and an unexpla
   let writes = 0;
   page.on("request", request => { if (!["GET", "HEAD"].includes(request.method())) writes++; });
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   const changes = page.getByRole("region", { name: "Changes between recorded values" });
   await expect(changes).toContainText("Selecting an earlier value does not save it");
   await expect(changes).toContainText("changed by £79.007");
@@ -301,7 +480,7 @@ test("withdrawal-only movement can leave a zero remainder without inventing a lo
   report.recorded_fee_events = [];
   report.recorded_scope_additions = [];
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   const changes = page.getByRole("region", { name: "Changes between recorded values" });
   await expect(changes).toContainText("changed by -£50.001");
   await expect(changes).toContainText("Money withdrawn to outside£50.001");
@@ -336,7 +515,7 @@ for (const reason of ["incomplete latest", "correction", "late activity", "incon
         [report.valuation_history[1], report.valuation_history[0]];
     }
     await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-    await page.goto("/investment");
+    await page.goto("/investment?view=history");
     const changes = page.getByRole("region", { name: "Changes between recorded values" });
     await expect(changes.getByRole("status")).toBeVisible();
     await expect(changes).not.toContainText("Unexplained remainder");
@@ -350,7 +529,7 @@ test("one complete valuation does not invent a previous value", async ({ page })
   const report = await comparisonReport(page);
   report.valuation_history = [report.valuation_history.at(-1)];
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
-  await page.goto("/investment");
+  await page.goto("/investment?view=history");
   const changes = page.getByRole("region", { name: "Changes between recorded values" });
   await expect(changes).toContainText("At least two complete recorded valuations are needed");
   await expect(changes).not.toContainText("Unexplained remainder");

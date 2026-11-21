@@ -1,3 +1,5 @@
+import type { InvestmentSnapshot } from "./InvestmentView";
+
 export type ReviewCycle = { version: 1; portfolioId: string; revision: number; startedAt: string;
   accountIds: string[]; checkedAccountIds: string[]; finishedAt?: string; reviewId?: string };
 
@@ -37,6 +39,23 @@ export function readReviewCycle(portfolioId: string): ReviewCycle | null {
 export function sameReview(a: ReviewCycle | null, b: ReviewCycle | null) {
   return Boolean(a && b && (a.reviewId && b.reviewId
     ? a.reviewId === b.reviewId : !a.reviewId && !b.reviewId && a.startedAt === b.startedAt));
+}
+
+export function reviewCanCheckAccount(cycle: ReviewCycle | null, revision: number, accountId: string) {
+  return Boolean(cycle && !cycle.finishedAt && cycle.revision === revision &&
+    cycle.accountIds.includes(accountId) && !cycle.checkedAccountIds.includes(accountId));
+}
+
+export function savingsTermsNeedReview(terms: InvestmentSnapshot["accounts"][number]["terms"],
+  intervalDays: number | null | undefined, now: number) {
+  if (!terms || intervalDays == null || !Number.isFinite(intervalDays) || intervalDays <= 0 ||
+      terms.annual_rate_pct === null || terms.rate_basis === null) return true;
+  const observedAge = now - Date.parse(terms.observed_at);
+  const availableAge = now - Date.parse(terms.available_at);
+  const effective = Date.parse(`${terms.effective_from}T00:00:00Z`);
+  return !Number.isFinite(observedAge) || observedAge < 0 || observedAge > intervalDays * 86400000 ||
+    !Number.isFinite(availableAge) || availableAge < 0 ||
+    !Number.isFinite(effective) || effective > now;
 }
 
 export function advanceReviewAfterSave(portfolioId: string, revision: number,

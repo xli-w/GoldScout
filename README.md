@@ -58,8 +58,8 @@ See [the connection guide](docs/investment.md#optional-etoro-connection).
 ## Review
 
 On **Your portfolio**, check the recorded value and date, **What needs
-attention**, and the comparison between recorded values. Choose **Review
-accounts** to start a guided review across active accounts. Update each account
+attention**, and each account's next action. Choose **Start account review**
+to work through active accounts, or **Open account** for one account. Update each account
 using dated sources: record transactions, compare cash, and check holdings,
 prices and savings terms. Each record has its own preview and confirmation. A
 cash check does not change the recorded balance. If nothing changed, mark the
@@ -68,8 +68,11 @@ browser retain other accounts' checks; unsupported or outside journal changes
 make the review stale.
 
 Choose an account review interval and, for savings accounts, a separate terms
-recheck interval. Finish the review to save an available complete portfolio
-value for the next comparison; outstanding items remain visible. Drafts, review
+recheck interval on the account page. Finish the review to save an available
+complete portfolio value for the next comparison; outstanding items remain
+visible. **History and insights** contains comparisons, holdings and records;
+**Tools** contains optional checks, recovery and the separate eToro view.
+Drafts, review
 progress, and reminders are local browser data, are not included in the journal
 backup, and can be lost if the browser is cleared.
 They are not evidence that accounts are current. An unexplained remainder is
@@ -99,7 +102,7 @@ send private portfolio evidence to hosted AI, or enable trades.
 
 ## Back up and recover
 
-Use **Back up and practise recovery** on the portfolio page to request a verified
+Open **Tools**, then **Backup and recovery tools**, to request a verified
 journal backup and rehearse checking a copy. The ZIP is unencrypted; store it
 protected and off this computer. The backup does not include goals, browser
 reminders, setup receipts or source documents. Save those separately. A

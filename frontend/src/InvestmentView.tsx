@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import Decimal from "decimal.js";
 import { RefreshCw, ShieldAlert } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import validate from "./investment-validator-v2.js";
 import { evidenceAge, label, pounds, reviewTimestamp, timestamp } from "./api";
 import { PortfolioAwareness } from "./PortfolioAwareness";
@@ -10,6 +10,7 @@ import { PortfolioMonitoring } from "./PortfolioMonitoring";
 import { EToroPortfolioPanel } from "./EToroPortfolio";
 import AccountMaintenance from "./AccountMaintenance";
 import { accountDisplay } from "./portfolio-display";
+import { portfolioFragmentView, portfolioView, portfolioViewLocation } from "./portfolio-navigation";
 export { accountDisplay } from "./portfolio-display";
 import { advanceReviewAfterSave } from "./guided-review";
 import { duplicateAccountLinks, linkedGoalValue, recordedAccountValues } from "./goal-values";
@@ -149,9 +150,7 @@ function CashEvidenceOverview({ data, now }: { data: OpeningSnapshot; now: numbe
   </section>;
 }
 
-function InvestmentNextSteps({ data, onReviewCashEvidence }: {
-  data: OpeningSnapshot; onReviewCashEvidence: () => void;
-}) {
+function InvestmentNextSteps({ data }: { data: OpeningSnapshot }) {
   const unmarked = data.holdings.filter(holding => holding.mark_at === null);
   const hasDifferences = data.cash_observations.some(observation =>
     !new Decimal(observation.difference_gbp).isZero());
@@ -195,7 +194,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
                   {holding.name} ({accountDisplay(data, holding.account_id)}): {priceAction(holding)}
                 </li>)}</ul>
               </details>}
-              {" "}<a href="#investment-holdings">Review holdings</a>.
+              {" "}<NavLink to="/investment?view=history#investment-holdings">Review holdings</NavLink>.
               <p>Use a source that supports the price and both dates. Later information cannot fill an earlier valuation.</p></>
           : "No complete total is available for this date. Missing is not zero; check the dates and source. Later information cannot fill an earlier gap."}
       </li>}
@@ -203,7 +202,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
         {hasDifferences && <>Recorded cash observations differ from the journal; they do not change balances or show the current one. </>}
         {correctionReplayWarnings.length > 0 && <>A correction may have changed earlier reported cash differences.
           Compare prior reports with the original observations and correction evidence. </>}
-        {" "}<a href="#investment-accounts" onClick={onReviewCashEvidence}>Review cash evidence</a>.
+        {" "}<NavLink to="/investment?view=history#investment-accounts">Review cash evidence</NavLink>.
         {(cashWarnings.length > 0 || correctionReplayWarnings.length > 0) && <details className="help-disclosure">
           <summary>Cash evidence details</summary>
           <ul>{[...cashWarnings, ...correctionReplayWarnings].map(warning => <li key={warning}>{warning}</li>)}</ul>
@@ -216,7 +215,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
     <h2>About past performance</h2>
     {data.recorded_corrections.length > 0
       ? <><p>A correction made past performance unavailable; no new starting point was created.
-        {" "}<a href="#investment-corrections" onClick={() => openDisclosure("investment-records")}>Review correction history</a>.</p>
+        {" "}<NavLink to="/investment?view=history#investment-corrections">Review correction history</NavLink>.</p>
         {correctionWarnings.length > 0 && <details className="help-disclosure">
           <summary>Correction details</summary>
           <ul>{correctionWarnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
@@ -225,7 +224,7 @@ function InvestmentNextSteps({ data, onReviewCashEvidence }: {
       ? <p>Performance has no complete starting value. Later information cannot recreate missing past returns.
         {" "}<NavLink to="/investment-guide#performance-gaps">Learn more</NavLink>.</p>
       : <p>Some performance figures are unavailable; complete totals do not restore past history.
-        {" "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>View performance history</a>.</p>}
+        {" "}<NavLink to="/investment?view=history#investment-performance">View performance history</NavLink>.</p>}
     <p>You can continue to record and review your portfolio without those historical figures.</p>
   </section>}
   </>;
@@ -441,6 +440,8 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
     <h2>{usingCheckpoint ? "What changed since your saved value?" : "What changed between recorded values?"}</h2>
     <p className="position-note">Compare dated journal valuations, not live account balances.
       The comparison uses recorded evidence only and cannot establish that all transactions or prices are present.</p>
+    {usingCheckpoint && <p className="position-note">The saved point is a date, not a frozen value.
+      Later evidence effective at that time can change the current replay; compare any retained earlier report.</p>}
     {!usingCheckpoint && <p className="position-note">Selecting an earlier value does not save it as your comparison point.</p>}
     {shownCandidates.length > 0 && !data.recorded_corrections.length && <label className="value-change-select">
       Earlier recorded valuation
@@ -479,14 +480,14 @@ function RecordedValueChanges({ data, selection, onSelect, checkpointTimestamp }
             {item.description} · effective {item.timestamp}; available {item.available_at}. {item.evidence}
           </li>)}</ul>}
         {records.length > 100 && <p>Only the first 100 records are listed here.</p>}
-        <a href="#investment-records" onClick={() => openDisclosure("investment-records")}>View record history</a>
-        {" · "}<a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>View valuation history</a>
+        <NavLink to="/investment?view=history#investment-records">View record history</NavLink>
+        {" · "}<NavLink to="/investment?view=history#investment-performance">View valuation history</NavLink>
       </details>
     </>}
   </section>;
 }
 
-function RecentActivity({ data }: { data: OpeningSnapshot }) {
+function RecentActivity({ data, compact = false }: { data: OpeningSnapshot; compact?: boolean }) {
   const { activity, truncated } = useMemo(() => {
     const sorted = [
     ...data.recorded_flow_events.map(event => ({
@@ -527,16 +528,18 @@ function RecentActivity({ data }: { data: OpeningSnapshot }) {
   }, [data]);
   return <section className="history-group" aria-label="Recent recorded activity">
     <h2>Recent recorded activity</h2>
-    <p className="position-note">Latest dated money movements, income, purchases or sales, and corrections recorded in the journal. Same-time entries are not shown in journal order. This is not a complete explanation of changes in value; prices and other records are not listed here.</p>
-    {truncated && <p>More entries share the last displayed time; only the first 100 are shown here. See record history.</p>}
+    <p className="position-note">{compact
+      ? "Up to three recorded money movements, income, purchases or sales, and corrections. Same-time entries may be omitted and are not in journal order; prices and other records are not listed."
+      : "Latest dated money movements, income, purchases or sales, and corrections recorded in the journal. Same-time entries are not shown in journal order. This is not a complete explanation of changes in value; prices and other records are not listed here."}</p>
+    {truncated && !compact && <p>More entries share the last displayed time; only the first 100 are shown here. See record history.</p>}
     {activity.length === 0 ? <p>No such activity has been recorded since setup.</p>
-      : <ul>{activity.map(item => <li key={item.id}>
+      : <ul>{(compact ? activity.slice(0, 3) : activity).map(item => <li key={item.id}>
         {item.description} · {timestamp(item.timestamp)}
-        <details className="help-disclosure"><summary>Source details</summary>
+        {!compact && <details className="help-disclosure"><summary>Source details</summary>
           <p>{item.clockLabel} {item.timestamp}; available at {item.available}. {item.evidence}</p>
-        </details>
+        </details>}
       </li>)}</ul>}
-    <a href="#investment-records" onClick={() => openDisclosure("investment-records")}>View record history</a>
+    <NavLink to="/investment?view=history#investment-records">View record history</NavLink>
   </section>;
 }
 
@@ -992,11 +995,6 @@ function RecordReview({ preview, session }: { preview: RecordingPreview; session
       <pre>{JSON.stringify(event, null, 2)}</pre>
     </details>
   </section>;
-}
-
-function openDisclosure(id: string) {
-  const section = document.getElementById(id);
-  if (section instanceof HTMLDetailsElement) section.open = true;
 }
 
 async function recordingRequest<T>(path: string, csrf?: string, payload?: unknown): Promise<T> {
@@ -1987,6 +1985,27 @@ type ReviewCheckpoint = {
   journalRevision: number;
 };
 
+type ManualCheckpointSave =
+  | { portfolioId: string; status: "saving" | "saved" }
+  | { portfolioId: string; status: "failed"; error: string };
+
+let manualCheckpointSave: ManualCheckpointSave | null = null;
+const manualCheckpointSubscribers = new Set<() => void>();
+
+function subscribeManualCheckpoint(listener: () => void) {
+  manualCheckpointSubscribers.add(listener);
+  return () => { manualCheckpointSubscribers.delete(listener); };
+}
+
+function updateManualCheckpoint(state: ManualCheckpointSave | null) {
+  manualCheckpointSave = state;
+  for (const listener of manualCheckpointSubscribers) listener();
+}
+
+function currentManualCheckpoint() {
+  return manualCheckpointSave;
+}
+
 function readReviewCheckpoint(portfolioId: string): ReviewCheckpoint | null {
   const raw = localStorage.getItem(`goldscout.review-checkpoint.v1.${portfolioId}`);
   if (raw === null) return null;
@@ -2008,17 +2027,22 @@ function readReviewCheckpoint(portfolioId: string): ReviewCheckpoint | null {
   };
 }
 
+function sameReviewCheckpoint(left: ReviewCheckpoint | null, right: ReviewCheckpoint | null) {
+  if (!left || !right) return left === right;
+  return left.portfolioId === right.portfolioId && left.valuationTimestamp === right.valuationTimestamp &&
+    left.savedAt === right.savedAt && left.journalRevision === right.journalRevision;
+}
+
 function PortfolioGoals({ data }: { data: InvestmentSnapshot }) {
   const query = useQuery({ queryKey: ["planning-summary"], queryFn: planningSession, refetchOnMount: "always" });
   const goals = query.data?.goals ?? [];
   const values = recordedAccountValues(data);
   const duplicates = duplicateAccountLinks(goals);
+  if (!query.isPending && !query.isError && (!query.data?.enabled || goals.length === 0)) return null;
   return <section className="history-group" aria-label="Your goals">
     <h2>Your goals</h2>
     {query.isPending ? <p role="status">Loading your goals.</p>
       : query.isError ? <p role="status">Your goals could not be loaded. <NavLink to="/planning">Open goals to retry</NavLink>.</p>
-      : !query.data?.enabled ? <p>Goals are not enabled for this launch.</p>
-      : goals.length === 0 ? <p>No goals saved yet. <NavLink to="/planning">Add an optional goal</NavLink>.</p>
       : <>
         <ul>{goals.map(goal => {
           const linked = goal.linked_account_ids.length > 0;
@@ -2037,6 +2061,17 @@ function PortfolioGoals({ data }: { data: InvestmentSnapshot }) {
   </section>;
 }
 
+function PortfolioRecoveryTools({ available }: { available: boolean }) {
+  const [mounted, setMounted] = useState(false);
+  return <details className="investment-detail recovery-tools" hidden={!available}
+    id="investment-backup" onToggle={event => {
+      if (event.currentTarget.open) setMounted(true);
+    }}>
+    <summary>Backup and recovery tools</summary>
+    {mounted && <RecoveryPanel />}
+  </details>;
+}
+
 export function InvestmentView({ now, valueChangeSelection, setValueChangeSelection,
   reviewDefaults, reviewDefaultsStatus }: {
   now: number; valueChangeSelection: ValueChangeSelection | null;
@@ -2045,13 +2080,23 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
   reviewDefaultsStatus: "loading" | "unavailable" | "ready";
 }) {
   const query = useQuery({ queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal), refetchInterval: 60000 });
-  const accountsRef = useRef<HTMLDetailsElement>(null);
   const location = useLocation();
-  const [backupOpen, setBackupOpen] = useState(false);
+  const navigate = useNavigate();
+  const activeView = portfolioView(location.search);
+  const [toolsVisited, setToolsVisited] = useState(activeView === "tools");
   const data = query.isError ? undefined : query.data;
+  const recoveryPortfolioId = query.data?.source_mode === "recorded" ? query.data.portfolio_id : null;
   const hasData = Boolean(data);
+  const manualSave = useSyncExternalStore(subscribeManualCheckpoint, currentManualCheckpoint, () => null);
+  const checkpointSaving = manualSave?.status === "saving";
+  const manualSaveError = data?.source_mode === "recorded" && manualSave?.status === "failed" &&
+    manualSave.portfolioId === data.portfolio_id ? manualSave.error : "";
   const [checkpoint, setCheckpoint] = useState<ReviewCheckpoint | null>(null);
   const [checkpointError, setCheckpointError] = useState("");
+  const comparisonError = checkpointError || manualSaveError;
+  useEffect(() => {
+    if (activeView === "tools") setToolsVisited(true);
+  }, [activeView]);
   useEffect(() => {
     if (!data || data.source_mode !== "recorded") {
       setCheckpoint(null);
@@ -2077,8 +2122,34 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
     return () => window.removeEventListener("storage", onStorage);
   }, [data?.portfolio_id, data?.source_mode]);
 
-  function markReviewed() {
-    if (!data || data.source_mode !== "recorded" || !data.complete || !data.as_of || checkpointError) return false;
+  useEffect(() => {
+    if (!data || data.source_mode !== "recorded" || manualSave?.portfolioId !== data.portfolio_id) return;
+    if (manualSave.status === "saved") {
+      try {
+        setCheckpoint(readReviewCheckpoint(data.portfolio_id));
+        setCheckpointError("");
+      } catch {
+        setCheckpoint(null);
+        setCheckpointError("The saved comparison point could not be read. It was not changed; check this browser's saved data before continuing.");
+      }
+    }
+  }, [data?.portfolio_id, data?.source_mode, manualSave]);
+
+  function persistReviewCheckpoint(): ReviewCheckpoint | string {
+    if (checkpointError) return checkpointError;
+    if (!data || data.source_mode !== "recorded" || !data.complete || !data.as_of)
+      return "A complete recorded portfolio is required to save this comparison point. No journal record was changed.";
+    const outcome = manualCheckpointSave;
+    if (outcome?.status === "failed" && outcome.portfolioId === data.portfolio_id) return outcome.error;
+    let current: ReviewCheckpoint | null;
+    try {
+      current = readReviewCheckpoint(data.portfolio_id);
+    } catch {
+      return "The saved comparison point could not be read. It was not changed; check this browser's saved data before continuing.";
+    }
+    if (!sameReviewCheckpoint(current, checkpoint)) {
+      return "The saved comparison point changed since this page loaded. Retry it before saving. No journal record was changed.";
+    }
     const saved: ReviewCheckpoint = {
       portfolioId: data.portfolio_id, valuationTimestamp: data.as_of,
       savedAt: new Date().toISOString(), journalRevision: data.revision,
@@ -2086,19 +2157,76 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
     try {
       localStorage.setItem(`goldscout.review-checkpoint.v1.${data.portfolio_id}`,
         JSON.stringify(saved));
-      setCheckpoint(saved);
-      setCheckpointError("");
-      setValueChangeSelection(null);
-      return true;
+      return saved;
     } catch {
-      setCheckpointError("The browser could not save this review checkpoint. No journal record was changed.");
+      return "The browser could not save this review checkpoint. No journal record was changed.";
+    }
+  }
+  function applyCheckpointResult(result: ReviewCheckpoint | string) {
+    if (typeof result === "string") {
+      setCheckpointError(result);
       return false;
+    }
+    setCheckpoint(result);
+    setCheckpointError("");
+    setValueChangeSelection(null);
+    return true;
+  }
+  function markReviewed() {
+    return applyCheckpointResult(persistReviewCheckpoint());
+  }
+  async function saveCheckpointManually() {
+    if (!data || data.source_mode !== "recorded" ||
+        !data.complete || !data.as_of || comparisonError) return;
+    if (manualCheckpointSave?.status === "saving" ||
+        (manualCheckpointSave?.status === "failed" && manualCheckpointSave.portfolioId === data.portfolio_id)) return;
+    const portfolioId = data.portfolio_id;
+    updateManualCheckpoint({ portfolioId, status: "saving" });
+    try {
+      if (!navigator.locks) throw new Error("This browser cannot coordinate comparison points across tabs.");
+      const result = await navigator.locks.request("goldscout-recording-confirmation", async () => {
+        const latest = await loadInvestment(new AbortController().signal);
+        if (latest.source_mode !== "recorded" || latest.portfolio_id !== portfolioId ||
+            latest.revision !== data.revision)
+          throw new Error("The journal changed. Refresh the portfolio before saving this comparison point.");
+        return persistReviewCheckpoint();
+      });
+      if (typeof result !== "string") applyCheckpointResult(result);
+      updateManualCheckpoint(typeof result === "string"
+        ? { portfolioId, status: "failed", error: result }
+        : { portfolioId, status: "saved" });
+    } catch (reason) {
+      const error = `${reason instanceof Error ? reason.message : "The comparison point could not be saved."} No journal record was changed.`;
+      updateManualCheckpoint({ portfolioId, status: "failed", error });
+    }
+  }
+  function retryCheckpoint() {
+    if (!data || data.source_mode !== "recorded") return;
+    try {
+      setCheckpoint(readReviewCheckpoint(data.portfolio_id));
+      setCheckpointError("");
+      if (manualCheckpointSave?.status === "failed" && manualCheckpointSave.portfolioId === data.portfolio_id)
+        updateManualCheckpoint(null);
+    } catch {
+      setCheckpointError("The saved comparison point could not be read. It was not changed; check this browser's saved data before continuing.");
     }
   }
   useEffect(() => {
-    if (location.hash === "#investment-etoro")
-      document.getElementById("investment-etoro")?.scrollIntoView();
-  }, [location.hash, hasData]);
+    if (!location.hash) return;
+    const targetView = portfolioFragmentView(location.hash);
+    if (targetView && targetView !== activeView) {
+      navigate(portfolioViewLocation(targetView, location.hash), { replace: true });
+      return;
+    }
+    const target = document.getElementById(location.hash.slice(1));
+    if (!target) return;
+    if (target instanceof HTMLDetailsElement) target.open = true;
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
+    target.scrollIntoView();
+  }, [activeView, hasData, data?.portfolio_id, data?.revision, data?.source_mode,
+    location.hash, location.key, navigate]);
   const metricValues = data ? [
     pounds(data.equity_gbp),
     pounds(data.net_contributions_gbp),
@@ -2106,12 +2234,16 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
   ] : [];
   return <article className="investment-view">
     <div className="record-toolbar">
-      {data?.source_mode === "recorded" && <a className="record-action" href="#account-review">Review accounts</a>}
       {data?.source_mode === "recorded" && <NavLink className="record-action" to="/investment/record">Add a record</NavLink>}
       <button className="icon-button refresh" aria-label="Refresh investment" disabled={query.isFetching} onClick={() => void query.refetch()}>
         <RefreshCw size={19} className={query.isFetching ? "spin" : ""} />
       </button>
     </div>
+    <nav className="portfolio-view-nav" aria-label="Portfolio views">
+      <Link to="/investment" aria-current={activeView === "overview" ? "page" : undefined}>Overview</Link>
+      <Link to="/investment?view=history" aria-current={activeView === "history" ? "page" : undefined}>History and insights</Link>
+      <Link to="/investment?view=tools" aria-current={activeView === "tools" ? "page" : undefined}>Tools</Link>
+    </nav>
     {query.isPending ? <p role="status">Loading investment records</p>
       : !data ? <div className="error-state" role="alert"><ShieldAlert size={30} /><h2>Investment data unavailable</h2>
         <p>{query.error instanceof Error ? query.error.message : "The investment source could not be reached."}</p></div>
@@ -2124,32 +2256,54 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
             <p className="position-note">Valuation recorded {timestamp(data.as_of)}
               {data.as_of !== null && <> (age: {evidenceAge(data.as_of, now)})</>}.
               {" "}{data.complete ? "Complete for that date; not live." : "Incomplete; full total unavailable."}</p>
-            {data.source_mode === "recorded" && <p className="position-note">
-              Account reminders use saved account choices or workspace defaults. A complete valuation can still be old.
-            </p>}
+          </section>
+          {comparisonError && <div>
+            {checkpointError && <p role="alert">{checkpointError}</p>}
+            {manualSaveError && manualSaveError !== checkpointError && <p role="alert">{manualSaveError}</p>}
+            <button type="button" onClick={retryCheckpoint}>Retry comparison point</button>
+          </div>}
+          <div hidden={activeView !== "overview"}>
+            <section className="metrics portfolio-overview-metric" aria-label="Investment totals">
+              <div><span>Portfolio value</span><strong className={metricValues[0].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[0]}</strong><small>GBP · recorded value</small></div>
+            </section>
+            <InvestmentNextSteps data={data} />
+            {data.source_mode === "recorded" ? <AccountMaintenance data={data} now={now} mode="overview"
+              defaults={reviewDefaults} defaultsStatus={reviewDefaultsStatus}
+              onFinishReview={markReviewed}
+              refreshSnapshot={() => loadInvestment(new AbortController().signal)} />
+              : <section id="account-review" className="history-group" aria-label="Example accounts">
+                <h2>Accounts</h2>
+                <p className="position-note">These are synthetic examples, not your accounts.</p>
+                {data.accounts.filter(account => account.status === "active").map(account =>
+                  <article className="account-maintenance-card account-overview-row" key={account.id}>
+                    <div className="account-maintenance-heading"><h3>{accountDisplay(data, account.id)}</h3>
+                      <span>{account.kind === "deposit" ? "Savings account" : "Investment account"}</span></div>
+                    <NavLink className="text-link" to="/investment?view=history#investment-account-summary">
+                      View recorded evidence
+                    </NavLink>
+                  </article>)}
+                {!data.accounts.some(account => account.status === "active") && <p>No active example accounts.</p>}
+              </section>}
+            {data.source_mode === "recorded" && <PortfolioGoals data={data} />}
+            <RecentActivity data={data} compact />
+          </div>
+        </>}
+    {data && <div hidden={activeView !== "history"}>
+          <section className="history-group">
+            <h2>Recorded money and gain</h2>
+            <section className="metrics" aria-label="Recorded contribution and gain">
+              <div><span>Net money added</span><strong className={metricValues[1].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[1]}</strong><small>Deposits less withdrawals</small></div>
+              <div><span>Gain since tracking began</span><strong className={metricValues[2].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[2]}</strong><small>Net of recorded fees</small></div>
+            </section>
+            <p className="position-note">Net money added is not investment gain. Missing history is unavailable, not zero.</p>
             <details className="help-disclosure"><summary>About these figures and dates</summary>
-              <p>Net money added is deposits less withdrawals; transfers between tracked accounts do not count.</p>
-              <p>Gain starts at the first complete, supported valuation. Earlier gain is unknown.</p>
+              <p>Net money added is deposits less withdrawals; transfers between tracked accounts do not count. It is not investment gain.</p>
+              <p>Gain since tracking began subtracts recorded net flows and newly included account value from the value change. It reflects only activity and charges entered in the journal.</p>
+              <p>Percentage return is separate and needs complete evidence at relevant dates. Missing history is unavailable, not zero.</p>
             </details>
           </section>
-          <section className="metrics" aria-label="Investment totals">
-            <div><span>Portfolio value</span><strong className={metricValues[0].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[0]}</strong><small>GBP · recorded value</small></div>
-            <div><span>Net money added</span><strong className={metricValues[1].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[1]}</strong><small>Deposits less withdrawals</small></div>
-            <div><span>Gain since tracking began</span><strong className={metricValues[2].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[2]}</strong><small>Net of recorded fees</small></div>
-          </section>
-          <p className="position-note">Net money added is deposits less withdrawals, not investment gain. Gain since tracking began subtracts recorded net flows and newly included account value from the value change; it reflects only activity and charges entered in the journal. Percentage return is separate and needs complete evidence at relevant dates. Missing history makes it unavailable, not zero.</p>
-          <InvestmentNextSteps data={data} onReviewCashEvidence={() => {
-            if (accountsRef.current) accountsRef.current.open = true;
-          }} />
-          {data.source_mode === "recorded" && <AccountMaintenance data={data} now={now}
-            defaults={reviewDefaults} defaultsStatus={reviewDefaultsStatus}
-            onFinishReview={markReviewed}
-            refreshSnapshot={() => loadInvestment(new AbortController().signal)}
-            onReviewCashEvidence={() => {
-              if (accountsRef.current) accountsRef.current.open = true;
-            }} />}
-          {checkpointError
-            ? <p role="status">The value comparison is unavailable because the saved comparison point could not be read.</p>
+          {comparisonError
+            ? <p role="status">The value comparison is unavailable while the saved comparison point needs attention.</p>
             : <RecordedValueChanges data={data} selection={valueChangeSelection}
               onSelect={setValueChangeSelection}
               checkpointTimestamp={checkpoint?.portfolioId === data.portfolio_id
@@ -2158,20 +2312,24 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
             <h2>Save a value for next time</h2>
             <p className="position-note">This saves the complete portfolio value's date and journal revision in this browser only.
               It replaces the previous comparison point; it does not mark accounts checked or verify their balances.</p>
-            {checkpointError && <p role="alert">{checkpointError}</p>}
             {checkpoint && <p>Saved {timestamp(checkpoint.savedAt)} at journal revision {checkpoint.journalRevision}.
               {" "}The saved comparison point is the complete recorded value dated {timestamp(checkpoint.valuationTimestamp)}.
               {checkpoint.journalRevision !== data.revision && " Journal records have changed since that checkpoint."}</p>}
-            {!checkpoint && !checkpointError && <p>No comparison point is saved in this browser yet.</p>}
-            <button type="button" disabled={data.source_mode !== "recorded" || !data.complete || !data.as_of || Boolean(checkpointError)}
-              onClick={markReviewed}>Save this value for the next comparison</button>
+            {!checkpoint && !comparisonError && <p>No comparison point is saved in this browser yet.</p>}
+            <button type="button" disabled={data.source_mode !== "recorded" || !data.complete || !data.as_of ||
+              Boolean(comparisonError) || checkpointSaving}
+              onClick={() => void saveCheckpointManually()}>Save this value for the next comparison</button>
+            {checkpointSaving && <p role="status">Saving this comparison point.</p>}
             {(!data.complete || !data.as_of) && <p role="status">A comparison point is unavailable until a complete recorded value exists.</p>}
           </section>
-          {data.source_mode === "recorded" && <PortfolioGoals data={data} />}
-          <AccountAndHoldingsSummary data={data} now={now} />
-          <RecentActivity data={data} />
-        </>}
-    {data && <>
+          <details className="investment-detail">
+            <summary>Accounts and recorded holdings</summary>
+            <AccountAndHoldingsSummary data={data} now={now} />
+          </details>
+          <details className="investment-detail">
+            <summary>Recent recorded activity</summary>
+            <RecentActivity data={data} />
+          </details>
           <section className="history-group">
             <h2>Performance summary</h2>
             <dl className="health-facts">
@@ -2187,14 +2345,6 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
             <summary>Detailed growth history</summary>
             <InvestmentGrowthHistory history={data.valuation_history} />
           </details>
-          <nav className="investment-sections" aria-label="Investment sections">
-            <div><span>Portfolio</span><a href="#investment-account-summary">
-              {data.source_mode === "recorded" ? "Investments you hold" : "Accounts and investments"}
-            </a>
-              <a href="#investment-performance" onClick={() => openDisclosure("investment-performance")}>Performance history</a></div>
-            <div><span>Records and checks</span><a href="#investment-records" onClick={() => openDisclosure("investment-records")}>Record history</a>
-              <a href="#investment-monitoring" onClick={() => openDisclosure("investment-monitoring")}>Optional checks</a></div>
-          </nav>
           <details className="investment-detail" id="investment-roles">
             <summary>Optional fund labels</summary>
           <section className="history-group" aria-label="Management role accounting">
@@ -2232,14 +2382,6 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
               </div>
             </details>}
           </section>
-          </details>
-          <details className="investment-detail" id="investment-monitoring">
-            <summary>Optional checks</summary>
-            <PortfolioMonitoring portfolioId={data.portfolio_id} revision={data.revision} />
-          </details>
-          <details className="investment-detail" id="investment-awareness">
-            <summary>Optional public context</summary>
-            <PortfolioAwareness portfolioId={data.portfolio_id} revision={data.revision} />
           </details>
           <details className="investment-detail" id="investment-records">
             <summary>Journal records</summary>
@@ -2350,7 +2492,7 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
                 </ul>}
             </section>}
           </details>
-          <details ref={accountsRef} className="investment-detail" id="investment-accounts">
+          <details className="investment-detail" id="investment-accounts">
             <summary>Cash observations and savings details</summary>
           <p className="position-note">Savings are separate from investment-account buying power. This journal does not verify deposit protection or account eligibility.</p>
           <CashEvidenceOverview data={data} now={now} />
@@ -2386,13 +2528,23 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
               })}</dl>
             </section>}
           </details>
-        </>}
-    {data?.source_mode === "recorded" && <details className="investment-detail recovery-tools"
-      onToggle={event => setBackupOpen(event.currentTarget.open)}>
-      <summary>Backup and recovery tools</summary>
-      {backupOpen && <RecoveryPanel />}
-    </details>}
-    <EToroPortfolioPanel journal={data} now={now} />
+        </div>}
+    {(toolsVisited || activeView === "tools") && <div hidden={activeView !== "tools"}>
+      <p className="position-note">Optional tools are separate from your portfolio records. Opening this page does not collect provider data or start a backup.</p>
+      {data && <>
+        <details className="investment-detail" id="investment-monitoring">
+          <summary>Optional checks</summary>
+          <PortfolioMonitoring portfolioId={data.portfolio_id} revision={data.revision} />
+        </details>
+        <details className="investment-detail" id="investment-awareness">
+          <summary>Optional public context</summary>
+          <PortfolioAwareness portfolioId={data.portfolio_id} revision={data.revision} />
+        </details>
+      </>}
+      {recoveryPortfolioId && <PortfolioRecoveryTools key={recoveryPortfolioId}
+        available={data?.source_mode === "recorded"} />}
+      <EToroPortfolioPanel journal={data} now={now} viewActive={activeView === "tools"} />
+    </div>}
   </article>;
 }
 
@@ -2450,7 +2602,7 @@ export function InvestmentGuide() {
       <p>Market Intelligence is public information, not investment advice. Never send private account evidence to hosted AI.</p>
     </details>
     <details className="help-disclosure" id="backup-recovery"><summary>Backup and recovery</summary>
-      <p>Backups are not automatic. On the portfolio page, use <strong>Back up and practise recovery</strong> to download a verified snapshot and its receipt. Check the displayed journal location and your browser's download destination first.</p>
+      <p>Backups are not automatic. On the portfolio page, open <strong>Tools</strong>, then <strong>Backup and recovery tools</strong> to download a verified snapshot and its receipt. Check the displayed journal location and your browser's download destination first.</p>
       <p>The downloaded ZIP is not encrypted. Store it somewhere protected and separate from this computer. The dashboard can rehearse a selected GoldScout backup by checking its receipt and copying it to a new temporary location; it then removes that temporary copy.</p>
       <p>A restore rehearsal does not install a backup or overwrite the active journal. It does not prove that the selected backup is the newest, that account evidence is correct, or that power-loss durability is guaranteed. Keep original source documents and setup receipts separately.</p>
       <details className="help-disclosure"><summary>Steps for a source checkout</summary>

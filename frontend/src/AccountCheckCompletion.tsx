@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { markAccountInReview } from "./AccountMaintenance";
-import { readReviewCycle } from "./guided-review";
+import { readReviewCycle, reviewCanCheckAccount } from "./guided-review";
 import type { ReviewCycle } from "./guided-review";
 import { loadInvestment } from "./InvestmentView";
 import type { InvestmentSnapshot } from "./InvestmentView";
 
-export function AccountCheckCompletion({ data, accountId }: { data: InvestmentSnapshot; accountId: string }) {
+export function AccountCheckCompletion({ data, accountId, onPreferencesReadFailure }: {
+  data: InvestmentSnapshot; accountId: string; onPreferencesReadFailure: () => void;
+}) {
   const navigate = useNavigate();
   const [available, setAvailable] = useState(false);
   const [cycle, setCycle] = useState<ReviewCycle | null>(null);
@@ -16,7 +18,7 @@ export function AccountCheckCompletion({ data, accountId }: { data: InvestmentSn
     try {
       const cycle = readReviewCycle(data.portfolio_id);
       setCycle(cycle);
-      setAvailable(Boolean(cycle && cycle.revision === data.revision && cycle.accountIds.includes(accountId)));
+      setAvailable(reviewCanCheckAccount(cycle, data.revision, accountId));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The guided review is unavailable.");
     }
@@ -26,7 +28,7 @@ export function AccountCheckCompletion({ data, accountId }: { data: InvestmentSn
     setBusy(true);
     try {
       if (cycle && await markAccountInReview(data, accountId, cycle,
-        () => loadInvestment(new AbortController().signal)))
+        () => loadInvestment(new AbortController().signal), onPreferencesReadFailure))
         navigate("/investment#account-review");
       else setError("The review or journal changed. Return to your portfolio and refresh before continuing.");
     } catch (reason) {

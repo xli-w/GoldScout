@@ -456,10 +456,27 @@ tbody tr:hover { background: #182b21; }
 .setup-check { padding: 12px 0; font-size: 13px; }
 .investment-next-steps > ul { display: grid; gap: 12px; }
 .investment-detail > summary { line-height: 1.5; }
+.portfolio-view-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.portfolio-view-nav a { min-height: 40px; padding: 10px 12px; border-bottom: 2px solid transparent; color: var(--muted); }
+.portfolio-view-nav a[aria-current="page"] { border-color: var(--green); color: var(--green); font-weight: 600; }
+.portfolio-view-nav a:hover { color: var(--ink); }
+.investment-view .metrics.portfolio-overview-metric { grid-template-columns: minmax(0, 1fr); max-width: 520px; }
+.account-review-cycle { margin: 16px 0; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.account-review-cycle h3 { margin: 0; font-size: 15px; }
+.account-review-cycle button { min-height: 36px; padding: 8px 12px; border: 1px solid #34785a; border-radius: 4px; color: #78e1b0; }
+.account-review-cycle .recording-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.review-restart { margin-top: 12px; }
+.review-restart button { margin: 0 8px 8px 0; }
+.account-overview-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; min-width: 0; overflow-wrap: anywhere; }
+.account-overview-row .account-maintenance-heading { grid-column: 1 / -1; }
+.account-overview-row p { margin: 0; font-size: 12px; line-height: 1.5; }
+.account-overview-row a { align-self: center; font-size: 12px; white-space: nowrap; }
 @media (max-width: 640px) {
   .setup-shell main { padding: 24px 18px; }
   .setup-form .setup-row { padding: 12px; }
   .help-disclosure { padding: 10px; }
+  .portfolio-view-nav a { padding-inline: 8px; }
+  .account-overview-row { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 1150px) {

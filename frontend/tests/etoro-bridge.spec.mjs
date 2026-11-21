@@ -44,7 +44,7 @@ test("operator pairs distinct rows temporarily and follows the existing account 
   const { report, account, holdings } = await fixture(page);
   let writes = 0;
   page.on("request", request => { if (!["GET", "HEAD"].includes(request.method())) writes++; });
-  await page.goto("/investment");
+  await page.goto("/investment?view=tools");
   const bridge = page.getByRole("region", { name: "Review eToro against journal" });
   await expect(bridge).toContainText("Nothing is imported");
   await bridge.getByLabel("Journal account").selectOption(account.id);
@@ -75,7 +75,13 @@ test("operator pairs distinct rows temporarily and follows the existing account 
   await bridge.getByRole("button", { name: "Remove pairing for instrument 101" }).click();
   await expect(source.locator('option[value="direct:101"]')).toHaveCount(1);
   await expect(bridge).toContainText("Unpaired does not mean absent or zero");
+  await page.getByRole("link", { name: "Overview", exact: true }).click();
   await expect(page.getByRole("region", { name: "Investment totals" })).not.toContainText("999999");
+  await page.getByRole("link", { name: "Tools", exact: true }).click();
+  await expect(bridge.getByLabel("Journal account")).toHaveValue("");
+  await expect(pairs).toHaveCount(0);
+  await bridge.getByLabel("Journal account").selectOption(account.id);
+  await bridge.getByRole("checkbox", { name: /I checked that eToro account/ }).check();
   await bridge.getByRole("link", { name: `Update ${account.name} using independent evidence` }).click();
   await expect(page).toHaveURL(new RegExp(`/investment/update\\?account_id=${account.id}$`));
   await expect(page.getByRole("heading", { name: account.name, exact: true })).toBeVisible();
@@ -87,7 +93,7 @@ test("operator pairs distinct rows temporarily and follows the existing account 
 test("changing the account or journal revision clears temporary pairings and account confirmation", async ({ page }) => {
   const { report, account, holdings } = await fixture(page);
   report.accounts.push({ ...account, id: "another-broker", name: "Another synthetic broker" });
-  await page.goto("/investment");
+  await page.goto("/investment?view=tools");
   const bridge = page.getByRole("region", { name: "Review eToro against journal" });
   const selectAccount = bridge.getByLabel("Journal account");
   await selectAccount.selectOption(account.id);
@@ -130,7 +136,7 @@ for (const reason of ["demo", "wrong account", "failed read", "conflicting sessi
     } else {
       report.source_mode = "demo";
     }
-    await page.goto("/investment");
+    await page.goto("/investment?view=tools");
     await expect(page.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Review eToro against journal" })).toHaveCount(0);
     if (reason !== "unavailable journal") {

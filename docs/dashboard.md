@@ -72,13 +72,18 @@ Partial or uncertain setup does not enable recording.
 Monitoring cache/workflow writes have separate gates; a page refresh never
 collects provider data or updates accounting.
 
-The portfolio view puts attention and account review first, then value
-comparisons, with holdings, detailed records and optional tools below. Account
-review and comparison dates use readable UTC formatting. Recorded account
-cards carry their cash and holdings details, avoiding a second account-and-cash
-summary; the synthetic demo still shows that summary. Backup and recovery
-controls are collapsed and load only when opened, and the optional eToro view
-is lower on the page. Recording previews show a human-readable summary with
+The portfolio **Overview** shows the recorded value and its date, current
+attention, compact account actions and up to three recent activity entries.
+Saved goals appear only when configured. **History and insights** contains the
+value comparison, money-added and gain figures, holdings, performance, cash
+evidence and journal records. **Tools** contains optional checks, public
+context, backup and the separate eToro view. Existing portfolio section bookmarks
+open their corresponding view. Opening Tools does not collect provider data or
+start a backup. Backup controls load only when opened; closing them or switching
+between these portfolio views retains their selected file and result. A failed
+snapshot refresh hides the controls until the same recorded portfolio is
+available again; leaving or reloading the page, or changing portfolio, clears
+them. Recording previews show a human-readable summary with
 the exact event retained in expandable details. Monitoring observation entry
 uses separate holding and explicit mapping fields; comparison results are
 displayed separately from append-only review-inbox actions. Neither workflow
@@ -86,8 +91,11 @@ status nor a reconciliation match establishes current custody or approves a
 trade.
 Each account has one status and next action, using an account-specific
 weekly-to-yearly cadence saved in this browser or the configured workspace
-default; the source is stated on the account card. Savings-term rechecks have
-their own independent cadence. If workspace settings cannot be loaded, no
+default; the source is stated in the account's review reminders. Savings-term rechecks have
+their own independent cadence. An unknown rate, future-effective terms or an
+old observation remains a recheck, even if the source became available
+recently. Unrecorded notice and maturity details are shown without assuming
+they apply. If workspace settings cannot be loaded, no
 replacement cadence is assumed: age-based freshness stays unknown until an
 interval is chosen, while account-specific choices remain available. The
 status shows shared portfolio valuation dates, account cash and holding
@@ -98,17 +106,24 @@ cash differences take priority over choosing a cadence; a later matching cash
 check does not resolve an earlier difference. Historical performance
 limitations are presented separately from current attention, without hiding
 correction-related cash replay warnings. Account cards show their next action
-first; recorded cash, valuation dates and other account facts remain in each
-card's expandable details.
+first; open an account for its evidence, actions and reminder settings.
 **Guided account review** keeps a local checklist across active accounts. It
-resumes after a browser restart when the journal revision is unchanged; after
-any journal record changes, the old checklist is retained but marked stale and
-must be restarted. Completion counts accounts reviewed, not issues resolved:
+starts with the first account and resumes after a browser restart when the
+journal revision is unchanged. Supported account updates confirmed in that
+review preserve unaffected checks; other or outside journal changes make the
+saved checklist stale. Starting over requires confirmation and leaves the saved
+comparison point untouched. Completion counts accounts reviewed, not issues resolved:
 remaining missing values, cash differences, overdue reminders and checks
 affected by corrections stay visible in the completion summary and account actions. This progress is
 browser-local, is not included in journal backups, and does not change the
-journal.
-The overview also shows the largest direct holding exposures against complete
+journal. Reminder changes and account checks require browser Web Locks so
+concurrent tabs cannot overwrite one another's settings; unsupported browsers
+show an error instead of saving. Comparison-point saves use the same tab
+coordination, check the current journal revision and refuse to replace a point
+that changed unseen. If a point cannot be saved, retry reading it before
+attempting to finish again; unreadable saved data is not repaired or
+overwritten.
+History and insights also shows the largest direct holding exposures against complete
 recorded value. It does not look through funds or assess suitability or risk.
 Explicit account/platform charges can be recorded as fees and reduce recorded
 cash without being treated as an external withdrawal. The fee total still omits
@@ -126,7 +141,8 @@ rates, access, notice and maturity with the provider; they do not compare
 obtainable returns. Recorded fill fees are not a full cost assessment. Cash
 observations do not update journal cash. Recent recorded activity lists dated
 flows, income, fills and corrections, not all changes or a complete attribution
-of returns.
+of returns. The overview preview can omit entries sharing the same time;
+the fuller activity list is in History and insights.
 **What changed between recorded values?** compares the latest complete
 valuation with a selectable earlier complete valuation (the latest 100 earlier
 choices, plus a still-available older selection). It displays exact recorded
@@ -139,20 +155,24 @@ comparison unavailable. Incomplete intermediate points are flagged, not
 reconstructed. The remainder is not a verified return or a complete explanation
 of price movements. A browser-local review marker can anchor this comparison to
 the complete valuation date last reviewed; it stores only a date and journal
-revision, not a journal snapshot. It does not establish current balances,
-complete activity, external fees, or custody.
+revision, not a journal snapshot. Later evidence effective at that same time
+can change the replayed starting value; compare retained earlier reports. It
+does not establish current balances, complete activity, external fees, or
+custody.
 Saving a comparison point replaces the previous browser-local point. Marking an
 account checked saves a separate reminder date and does not save that comparison
 point or resolve a discrepancy. Neither is included in a journal backup.
 Changes to a saved comparison point are reflected in other tabs on the same
-browser origin. If it cannot be read, comparison is unavailable rather than
-silently choosing another date; the saved data is not changed.
+browser origin. A save in progress remains visible if you leave and return to
+the portfolio; a failed save is reported and can be retried. If the point
+cannot be read, comparison is unavailable rather than silently choosing another
+date; the saved data is not changed.
 For recorded portfolios, a selected comparison date remains selected across
 refreshes while still available; otherwise the comparison asks for a new date.
 Demo dates move with its synthetic clock, so its selection follows the same
 relative history position instead.
 
-The portfolio's recovery section downloads a verified journal copy with its
+The Tools recovery section downloads a verified journal copy with its
 receipt after explicit user action. The selected database path is shown, and
 the browser controls where the ZIP is saved. The archive is not encrypted.
 Restore rehearsal checks and copies a selected backup to a temporary new path,

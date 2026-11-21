@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import Decimal from "decimal.js";
 import { evidenceAge, pounds, timestamp } from "./api";
-import { readReviewCycle, reviewStorageKey, sameReview } from "./guided-review";
+import { readReviewCycle, reviewCanCheckAccount, reviewStorageKey, sameReview,
+  savingsTermsNeedReview } from "./guided-review";
 import { accountDisplay } from "./portfolio-display";
 import type { ReviewCycle } from "./guided-review";
 import type { InvestmentSnapshot } from "./InvestmentView";
@@ -22,6 +23,14 @@ function accountStoragePrefix(portfolioId: string) {
 
 function accountStorageKey(portfolioId: string, accountId: string) {
   return `${accountStoragePrefix(portfolioId)}${encodeURIComponent(accountId)}`;
+}
+
+function parseSavedPreferenceJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error("Saved account review settings are invalid. They were not changed.");
+  }
 }
 
 function parsePreference(value: unknown): AccountPreference {
@@ -49,7 +58,7 @@ function readPreferences(portfolioId: string): PreferenceState {
     throw new Error("Saved account review settings are too large. They were not changed.");
   const result: PreferenceState = {};
   if (raw !== null) {
-    const value: unknown = JSON.parse(raw);
+    const value = parseSavedPreferenceJson(raw);
     if (typeof value !== "object" || value === null || Array.isArray(value) ||
       Object.keys(value).length > 100)
       throw new Error("Saved account review settings are invalid. They were not changed.");
@@ -65,7 +74,7 @@ function readPreferences(portfolioId: string): PreferenceState {
     if (saved === null) continue;
     if (saved.length > 4096)
       throw new Error("Saved account review settings are too large. They were not changed.");
-    result[id] = parsePreference(JSON.parse(saved));
+    result[id] = parsePreference(parseSavedPreferenceJson(saved));
     if (Object.keys(result).length > 100)
       throw new Error("Saved account review settings are invalid. They were not changed.");
   }
@@ -77,6 +86,16 @@ function isReviewDue(preference: AccountPreference | undefined, now: number) {
   if (preference.reviewedAt === null) return true;
   const age = now - Date.parse(preference.reviewedAt);
   return !Number.isFinite(age) || age < 0 || age >= preference.intervalDays * 86400000;
+}
+
+function unrecordedSavingsDetails(terms: InvestmentSnapshot["accounts"][number]["terms"]) {
+  if (!terms) return null;
+  const missing = [
+    terms.notice_days === null ? "notice period" : null,
+    terms.maturity_date === null ? "maturity date" : null,
+  ].filter((item): item is string => item !== null);
+  if (missing.length === 0) return null;
+  return `Recorded terms: ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not recorded; check whether ${missing.length === 1 ? "it applies" : "they apply"}.`;
 }
 
 function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
@@ -106,15 +125,13 @@ function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
       (cashObservation === null ||
       now - Date.parse(cashObservation.timestamp) < 0 ||
       now - Date.parse(cashObservation.timestamp) > preference.intervalDays * 86400000);
-    const termsAge = account.terms === null ? null : now - Date.parse(account.terms.available_at);
-    const termsStale = account.kind === "deposit" && (
-      preference?.termsIntervalDays === null || preference?.termsIntervalDays === undefined ||
-      (termsAge === null || !Number.isFinite(termsAge) || termsAge < 0 ||
-        termsAge > preference.termsIntervalDays * 86400000));
+    const termsStale = account.kind === "deposit" &&
+      savingsTermsNeedReview(account.terms, preference?.termsIntervalDays, now);
     const maturityDays = account.terms?.maturity_date
       ? Math.ceil((Date.parse(`${account.terms.maturity_date}T00:00:00Z`) - now) / 86400000)
       : null;
     const name = accountDisplay(data, account.id);
+    const missingSavingsDetails = account.kind === "deposit" ? unrecordedSavingsDetails(account.terms) : null;
     if (preference?.intervalDays === null || preference?.intervalDays === undefined)
       unresolved.push(`${name} account review interval has not been chosen`);
     if (hasMissingPrice) unresolved.push(`${name} has an unpriced holding`);
@@ -126,7 +143,8 @@ function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
         (preference?.termsIntervalDays === null || preference?.termsIntervalDays === undefined))
       unresolved.push(`${name} savings terms review interval has not been chosen`);
     else if (termsStale)
-      unresolved.push(`${name} savings terms are missing or past their separate chosen interval`);
+      unresolved.push(`${name} savings terms are incomplete, not yet effective or need rechecking`);
+    if (missingSavingsDetails) unresolved.push(`${name}: ${missingSavingsDetails}`);
     if (maturityDays !== null && maturityDays <= 90)
       unresolved.push(`${name} has an approaching recorded maturity date`);
     if (isReviewDue(preference, reviewNow))
@@ -157,44 +175,55 @@ async function requireCurrentSnapshot(data: InvestmentSnapshot, refresh: () => P
 }
 
 export async function markAccountInReview(data: InvestmentSnapshot, accountId: string,
-  expectedCycle: ReviewCycle, refresh: () => Promise<InvestmentSnapshot>) {
+  expectedCycle: ReviewCycle, refresh: () => Promise<InvestmentSnapshot>,
+  onPreferencesReadFailure: () => void) {
   if (!navigator.locks) throw new Error("This browser cannot coordinate review progress across tabs.");
   return navigator.locks.request("goldscout-recording-confirmation", async () => {
     const cycle = readReviewCycle(data.portfolio_id);
     const activeIds = data.accounts.filter(account => account.status === "active").map(account => account.id);
-    if (!cycle || !sameReview(cycle, expectedCycle) || cycle.revision !== data.revision ||
+    if (!cycle || !reviewCanCheckAccount(cycle, data.revision, accountId) ||
+        !sameReview(cycle, expectedCycle) ||
         cycle.accountIds.length !== activeIds.length ||
-        !cycle.accountIds.every((id, index) => id === activeIds[index]) ||
-        !cycle.accountIds.includes(accountId)) return false;
+        !cycle.accountIds.every((id, index) => id === activeIds[index])) return false;
     await requireCurrentSnapshot(data, refresh);
-    const preferences = readPreferences(data.portfolio_id);
+    let preferences: PreferenceState;
+    try {
+      preferences = readPreferences(data.portfolio_id);
+    } catch (reason) {
+      onPreferencesReadFailure();
+      throw reason;
+    }
     const preference = preferences[accountId] ?? {
       intervalDays: null, termsIntervalDays: null, reviewedAt: null,
     };
     savePreference(data.portfolio_id, accountId, {
       ...preference, reviewedAt: new Date().toISOString(),
     });
-    const checkedAccountIds = cycle.checkedAccountIds.includes(accountId)
-      ? cycle.checkedAccountIds : [...cycle.checkedAccountIds, accountId];
+    const checkedAccountIds = [...cycle.checkedAccountIds, accountId];
     localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify({ ...cycle, checkedAccountIds }));
     return true;
   });
 }
 
-function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, refreshSnapshot,
+function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refreshSnapshot,
   defaults, defaultsStatus }: {
-  data: InvestmentSnapshot; now: number; onReviewCashEvidence: () => void; onFinishReview: () => boolean;
+  data: InvestmentSnapshot; now: number; mode: "overview" | "account"; accountId?: string;
+  onFinishReview?: () => boolean;
   refreshSnapshot: () => Promise<InvestmentSnapshot>;
   defaults: { reviewIntervalDays: number; termsIntervalDays: number } | null;
   defaultsStatus: "loading" | "unavailable" | "ready";
 }) {
+  const navigate = useNavigate();
   const [preferences, setPreferences] = useState<PreferenceState>({});
+  const [preferencesUnavailable, setPreferencesUnavailable] = useState(false);
   const [cycle, setCycle] = useState<ReviewCycle | null>(null);
   const [error, setError] = useState("");
+  const [confirmRestart, setConfirmRestart] = useState(false);
 
   useEffect(() => {
     try {
       setPreferences(readPreferences(data.portfolio_id));
+      setPreferencesUnavailable(false);
       try {
         setCycle(readReviewCycle(data.portfolio_id));
         setError("");
@@ -204,6 +233,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
       }
     } catch (reason) {
       setPreferences({});
+      setPreferencesUnavailable(true);
       setError(reason instanceof Error ? reason.message : "Saved review settings could not be read.");
     }
   }, [data.portfolio_id]);
@@ -217,6 +247,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
           event.key !== cycleKey && !event.key.startsWith(prefix)) return;
       try {
         setPreferences(readPreferences(data.portfolio_id));
+        setPreferencesUnavailable(false);
         try {
           setCycle(readReviewCycle(data.portfolio_id));
           setError("");
@@ -225,6 +256,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
           setError(reason instanceof Error ? reason.message : "Saved guided review could not be read.");
         }
       } catch (reason) {
+        setPreferencesUnavailable(true);
         setError(reason instanceof Error ? reason.message : "Saved review settings could not be read.");
       }
     }
@@ -253,32 +285,44 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
   const checkedIds = currentCycle ? cycle.checkedAccountIds : [];
   const nextAccount = activeIds.find(id => !checkedIds.includes(id));
   const reviewNow = Date.now();
-  const unresolved = unresolvedReviewItems(data, activeIds, effectivePreferences, now, reviewNow);
+  const unresolved = [
+    ...(preferencesUnavailable ? ["Saved review settings could not be read; reminder status is unknown."] : []),
+    ...unresolvedReviewItems(data, activeIds, effectivePreferences, now, reviewNow),
+  ];
   const unmatchedPreferences = useMemo(() => Object.keys(preferences)
     .filter(id => !data.accounts.some(account => account.id === id)), [data.accounts, preferences]);
 
-  function update(accountId: string, changes: Partial<AccountPreference>): boolean {
+  async function update(accountId: string, changes: Partial<AccountPreference>) {
+    let readFailed = false;
     try {
-      const current = readPreferences(data.portfolio_id);
-      const previous = current[accountId] ?? preferences[accountId];
-      const intervalDays = changes.intervalDays ?? previous?.intervalDays ?? null;
-      const termsIntervalDays = changes.termsIntervalDays !== undefined
-        ? changes.termsIntervalDays : previous?.termsIntervalDays ?? null;
-      if (intervalDays === null && termsIntervalDays === null)
-        throw new Error("Choose a review interval first.");
-      const next: AccountPreference = {
-        intervalDays,
-        termsIntervalDays,
-        reviewedAt: changes.reviewedAt ?? current[accountId]?.reviewedAt ??
-          preferences[accountId]?.reviewedAt ?? null,
-      };
-      savePreference(data.portfolio_id, accountId, next);
-      setPreferences({ ...current, [accountId]: next });
+      if (!navigator.locks) throw new Error("This browser cannot coordinate review settings across tabs.");
+      const updated = await navigator.locks.request("goldscout-recording-confirmation", () => {
+        let current: PreferenceState;
+        try {
+          current = readPreferences(data.portfolio_id);
+        } catch (reason) {
+          readFailed = true;
+          throw reason;
+        }
+        const previous = current[accountId];
+        const intervalDays = changes.intervalDays ?? previous?.intervalDays ?? null;
+        const termsIntervalDays = changes.termsIntervalDays !== undefined
+          ? changes.termsIntervalDays : previous?.termsIntervalDays ?? null;
+        if (intervalDays === null && termsIntervalDays === null && changes.reviewedAt === undefined)
+          throw new Error("Choose a review interval first.");
+        const next: AccountPreference = {
+          intervalDays, termsIntervalDays,
+          reviewedAt: changes.reviewedAt ?? previous?.reviewedAt ?? null,
+        };
+        savePreference(data.portfolio_id, accountId, next);
+        return { ...current, [accountId]: next };
+      });
+      setPreferences(updated);
+      setPreferencesUnavailable(false);
       setError("");
-      return true;
-    } catch {
-      setError("The browser could not save this local review setting. No journal record was changed.");
-      return false;
+    } catch (reason) {
+      if (readFailed) setPreferencesUnavailable(true);
+      setError(`${reason instanceof Error ? reason.message : "The browser could not save this local review setting."} No journal record was changed.`);
     }
   }
 
@@ -297,25 +341,12 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
         localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
       });
       setCycle(next);
+      setConfirmRestart(false);
       setError("");
+      if (next.accountIds[0])
+        navigate(`/investment/update?account_id=${encodeURIComponent(next.accountIds[0])}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The browser could not save this review session.");
-    }
-  }
-
-  async function markReviewed(accountId: string) {
-    if (!cycle || !currentCycle || !cycle.accountIds.includes(accountId)) return;
-    try {
-      if (!await markAccountInReview(data, accountId, cycle, refreshSnapshot)) {
-        setCycle(readReviewCycle(data.portfolio_id));
-        setError("The review changed. Refresh the portfolio before continuing.");
-        return;
-      }
-      setCycle(readReviewCycle(data.portfolio_id));
-      setPreferences(readPreferences(data.portfolio_id));
-      setError("");
-    } catch (reason) {
-      setError(`${reason instanceof Error ? reason.message : "The browser could not save review progress."} A reminder date may have been saved; check it before continuing. No journal record was changed.`);
     }
   }
 
@@ -324,30 +355,43 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
       if (!navigator.locks) throw new Error("This browser cannot coordinate review progress across tabs.");
       await navigator.locks.request("goldscout-recording-confirmation", async () => {
         const latest = readReviewCycle(data.portfolio_id);
-        if (!latest || !sameReview(latest, cycle) || latest.revision !== data.revision ||
+        if (!latest || latest.finishedAt || !sameReview(latest, cycle) || latest.revision !== data.revision ||
             latest.accountIds.length !== activeIds.length ||
             !latest.accountIds.every((id, index) => id === activeIds[index]) ||
             latest.checkedAccountIds.length !== activeIds.length)
           throw new Error("The review changed. Refresh the portfolio before finishing.");
         await requireCurrentSnapshot(data, refreshSnapshot);
-        if (data.complete && data.as_of && !onFinishReview()) return;
+        try {
+          setPreferences(readPreferences(data.portfolio_id));
+          setPreferencesUnavailable(false);
+        } catch (reason) {
+          setPreferencesUnavailable(true);
+          throw reason;
+        }
+        if (data.complete && data.as_of) {
+          if (!onFinishReview) throw new Error("The comparison point is unavailable on this page.");
+          if (!onFinishReview()) return;
+        }
         const next = { ...latest, finishedAt: new Date().toISOString() };
         localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
         setCycle(next);
+        setError("");
       });
     } catch (reason) {
       setError(`${reason instanceof Error ? reason.message : "The review could not be finished."} A comparison value may already have been saved.`);
     }
   }
 
-  return <section id="account-review" className="history-group account-maintenance" aria-label="Account freshness and next actions">
-    <h2>Account status and next action</h2>
+  return <section id={mode === "overview" ? "account-review" : undefined}
+    className="history-group account-maintenance" aria-label={mode === "overview"
+      ? "Account freshness and next actions" : "Account review reminders"}>
+    <h2>{mode === "overview" ? "Accounts" : "Review reminders"}</h2>
     <p className="position-note">These are reminders based on your chosen review interval and recorded journal dates.
       They do not verify a bank or broker. A complete value for an older date is not a current balance.</p>
     {defaultsStatus === "loading" && <p role="status">Loading workspace review defaults. Saved account-specific choices remain in effect.</p>}
     {defaultsStatus === "unavailable" && <p role="alert">Workspace review defaults are unavailable; they have not been replaced with assumed settings.
       {" "}Saved account-specific choices remain in effect. Choose an interval for each account or <NavLink to="/settings">retry Settings</NavLink>.</p>}
-    <section className="account-review-cycle" aria-label="Guided portfolio review">
+    {mode === "overview" && <section className="account-review-cycle" aria-label="Guided portfolio review">
       <h3>Guided account review</h3>
       {activeIds.length === 0 ? <p>No active accounts are available to review.</p> : <>
         {currentCycle ? <>
@@ -361,7 +405,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
             {unresolved.length > 0 && <ul aria-label="Unresolved review items">
               {unresolved.map(item => <li key={item}>{item}</li>)}
             </ul>}
-            {!cycle.finishedAt ? <button type="button" onClick={() => void finishReview()}>
+            {!cycle.finishedAt ? <button type="button" disabled={preferencesUnavailable} onClick={() => void finishReview()}>
               {data.complete && data.as_of ? "Finish review and save this value for next time" : "Finish review"}</button>
               : <p role="status">Review complete. Finished {timestamp(cycle.finishedAt)}. A comparison value is saved separately when available.
                 {" "}Outstanding items remain visible below. This does not verify your accounts.</p>}
@@ -372,19 +416,28 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
           ? <div className="recording-actions">
             <NavLink className="record-action"
               to={`/investment/update?account_id=${encodeURIComponent(nextAccount)}`}>Continue review</NavLink>
-            <button type="button" onClick={() => void startReview()}>Restart review</button>
+            <button type="button" disabled={preferencesUnavailable} onClick={() => setConfirmRestart(true)}>Restart review</button>
           </div>
-          : <button type="button" onClick={() => void startReview()}>
+          : <button type="button" disabled={preferencesUnavailable} onClick={() => {
+            if (cycle) setConfirmRestart(true);
+            else void startReview();
+          }}>
             {cycle ? "Start a new review" : "Start account review"}
           </button>}
+        {confirmRestart && <div className="review-restart" role="group" aria-label="Confirm starting a new review">
+          <p>Starting again replaces the saved checklist progress. It does not replace the saved comparison value.</p>
+          <button type="button" disabled={preferencesUnavailable} onClick={() => void startReview()}>Start a new review and replace progress</button>
+          <button type="button" onClick={() => setConfirmRestart(false)}>Keep current progress</button>
+        </div>}
       </>}
-    </section>
+    </section>}
     {error && <p role="alert">{error}</p>}
     {unmatchedPreferences.length > 0 && <p role="status">
       {unmatchedPreferences.length} saved review setting{unmatchedPreferences.length === 1 ? "" : "s"} refer to account IDs
       no longer in this journal; those settings were left untouched.
     </p>}
-    {data.accounts.filter(account => account.status === "active").map(account => {
+    {data.accounts.filter(account => account.status === "active" &&
+      (mode === "overview" || account.id === accountId)).map(account => {
       const preference = effectivePreferences[account.id];
       const savedPreference = preferences[account.id];
       const hasAccountReviewInterval = savedPreference?.intervalDays !== null &&
@@ -401,10 +454,10 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
       const correctionCouldChangeChecks = data.recorded_corrections.length > 0 &&
         data.cash_observations.some(observation => observation.account_id === account.id);
       const cashCheckAge = latestCashCheck === null ? null : now - Date.parse(latestCashCheck.timestamp);
-      const termsAge = account.terms === null ? null : now - Date.parse(account.terms.available_at);
       const maturityDays = account.terms?.maturity_date
         ? Math.ceil((Date.parse(`${account.terms.maturity_date}T00:00:00Z`) - now) / 86400000)
         : null;
+      const missingSavingsDetails = account.kind === "deposit" ? unrecordedSavingsDetails(account.terms) : null;
       const asOfAge = data.as_of === null ? null : now - Date.parse(data.as_of);
       const markAge = marks.map(holding => holding.mark_at === null ? null : now - Date.parse(holding.mark_at));
       const oldestMarkAge = markAge.length === 0 || markAge.some(age => age === null)
@@ -417,10 +470,8 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
       const cashCheckStale = preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
         (cashCheckAge === null ||
         cashCheckAge < 0 || cashCheckAge > preference.intervalDays * 86400000);
-      const savingsTermsStale = account.kind === "deposit" && (
-        preference?.termsIntervalDays === null || preference?.termsIntervalDays === undefined ||
-        (termsAge === null || !Number.isFinite(termsAge) || termsAge < 0 ||
-          termsAge > preference.termsIntervalDays * 86400000));
+      const savingsTermsStale = account.kind === "deposit" &&
+        savingsTermsNeedReview(account.terms, preference?.termsIntervalDays, now);
       const maturityNeedsCheck = account.kind === "deposit" &&
         maturityDays !== null && maturityDays <= 90;
       const reviewDue = isReviewDue(preference, reviewNow);
@@ -434,6 +485,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
         action = "Compare prior reports with the original cash checks and correction evidence; replay may have changed past differences.";
       else if (missingPrice) action = "Update the missing investment price; the full portfolio value is unavailable.";
       else if (!data.complete) action = "Review the portfolio evidence; the full portfolio value is unavailable.";
+      else if (preferencesUnavailable) action = "Saved review settings could not be read; resolve the error before relying on reminders.";
       else if (preference?.intervalDays == null && maturityNeedsCheck)
         action = "Confirm the recorded maturity date and access or notice options using current provider information.";
       else if (preference?.intervalDays == null) action = "Choose how often you expect to review this account.";
@@ -452,14 +504,28 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
         : "Review this account's records.";
       else action = "No review is due under your chosen interval.";
 
+      const status = needsAction ? "Action needed" : preferencesUnavailable ? "Review settings unavailable"
+        : reviewNeeded ? "Check due" : preference?.intervalDays == null ? "Freshness unknown"
+          : hasAccountReviewInterval ? "Within account interval" : "Within workspace default";
+      if (mode === "overview") return <article className="account-maintenance-card account-overview-row" key={account.id}>
+        <div className="account-maintenance-heading">
+          <div><h3>{accountDisplay(data, account.id)}</h3>
+            <span>{account.kind === "deposit" ? "Savings account" : "Investment account"}
+              {checkedIds.includes(account.id) && " · Checked in this review"}</span></div>
+          <strong>{status}</strong>
+        </div>
+        <p>{action}{missingSavingsDetails && ` ${missingSavingsDetails}`}</p>
+        <NavLink className="text-link" aria-label={`Update ${accountDisplay(data, account.id)}`}
+          to={`/investment/update?account_id=${encodeURIComponent(account.id)}`}>Open account</NavLink>
+      </article>;
+
       return <article className="account-maintenance-card" key={account.id}>
         <div className="account-maintenance-heading">
-          <div><h3>{accountDisplay(data, account.id)}</h3><span>{account.kind === "deposit" ? "Savings account" : "Investment account"}</span></div>
-          <strong>{needsAction ? "Action needed" : reviewNeeded ? "Check due"
-            : preference?.intervalDays == null ? "Freshness unknown"
-              : hasAccountReviewInterval ? "Within account interval" : "Within workspace default"}</strong>
+          <div><h3>Review status for {accountDisplay(data, account.id)}</h3><span>{account.kind === "deposit" ? "Savings account" : "Investment account"}</span></div>
+          <strong>{status}</strong>
         </div>
-        <p className="account-next-action"><strong>Next action:</strong> {action}</p>
+        <p className="account-next-action"><strong>Next action:</strong> {action}
+          {missingSavingsDetails && ` ${missingSavingsDetails}`}</p>
         {preference?.reviewedAt && preference.intervalDays !== null && <p className="position-note">
           Next reminder: {timestamp(new Date(Date.parse(preference.reviewedAt) + preference.intervalDays * 86400000).toISOString())}.
         </p>}
@@ -487,6 +553,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
               {` · effective ${account.terms.effective_from}`}
               {account.terms.maturity_date !== null && ` · maturity ${account.terms.maturity_date}`}
               {account.terms.notice_days !== null && ` · notice ${account.terms.notice_days} days`}
+              {` · observed ${timestamp(account.terms.observed_at)} (age: ${evidenceAge(account.terms.observed_at, now)})`}
               {` · available ${timestamp(account.terms.available_at)} (age: ${evidenceAge(account.terms.available_at, now)})`}
             </>}</dd></div>}
         </dl>
@@ -502,7 +569,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
             onChange={event => {
               const intervalDays = Number(event.target.value);
               if (!INTERVALS.includes(intervalDays)) return;
-              update(account.id, { intervalDays });
+              void update(account.id, { intervalDays });
             }}>
             <option value="">Choose an interval</option>
             {INTERVALS.map(days => <option key={days} value={days}>
@@ -523,7 +590,7 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
             onChange={event => {
               const termsIntervalDays = Number(event.target.value);
               if (!INTERVALS.includes(termsIntervalDays)) return;
-              update(account.id, { termsIntervalDays });
+              void update(account.id, { termsIntervalDays });
             }}>
             <option value="">Choose an interval</option>
             {INTERVALS.map(days => <option key={days} value={days}>
@@ -539,31 +606,11 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
               : "No interval is set. Choose one to start a local reminder."}</span>
         </label>}
         <div className="recording-actions">
-          <NavLink className="record-action"
-            to={`/investment/update?account_id=${encodeURIComponent(account.id)}`}>Update this account</NavLink>
-          {missingPrice && marks.filter(holding => holding.value_gbp === null).map(holding =>
-            <NavLink key={holding.product_id}
-              to={`/investment/record?record=account-update&account_id=${encodeURIComponent(account.id)}&kind=mark&product_id=${encodeURIComponent(holding.product_id)}`}>
-              Update price for {holding.name}
-            </NavLink>)}
-          {cashCheckStale && <NavLink
-            to={`/investment/record?record=account-update&account_id=${encodeURIComponent(account.id)}&kind=cash_observation`}>
-            Check this account's cash
-          </NavLink>}
-          {account.kind === "deposit" && (savingsTermsStale || maturityNeedsCheck) && <NavLink
-            to={`/investment/record?record=account-update&account_id=${encodeURIComponent(account.id)}&kind=savings_terms`}>
-            Record this account's savings terms
-          </NavLink>}
           {(cashDifference || earlierCashDifference || correctionCouldChangeChecks) &&
-            <a href="#investment-accounts" onClick={onReviewCashEvidence}>Review cash evidence</a>}
-          {currentCycle && cycle && cycle.accountIds.includes(account.id) &&
-            !checkedIds.includes(account.id) && <button type="button" disabled={error !== ""}
-              onClick={() => void markReviewed(account.id)}>
-              Mark reviewed in this session
-            </button>}
+            <NavLink to="/investment?view=history#investment-accounts">Review cash evidence</NavLink>}
           {preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
-            !currentCycle && <button type="button" disabled={error !== ""}
-            onClick={() => update(account.id, { reviewedAt: new Date().toISOString() })}>
+            (!currentCycle || cycle?.finishedAt) && <button type="button" disabled={preferencesUnavailable}
+            onClick={() => void update(account.id, { reviewedAt: new Date().toISOString() })}>
             Mark account checked today
           </button>}
         </div>
@@ -572,11 +619,11 @@ function AccountMaintenance({ data, now, onReviewCashEvidence, onFinishReview, r
     <p className="position-note">Review intervals, account check dates and guided-review progress are saved in this browser only.
       Marking an account checked sets only a reminder date; it does not save a portfolio
       comparison point, change the journal or resolve differences. eToro remains a separate read-only view and is not mapped into these totals.</p>
-    <p className="position-note">The dashboard has a common-date portfolio valuation, not a separately reconstructed balance history for each account.
+    {mode === "account" && <><p className="position-note">The dashboard has a common-date portfolio valuation, not a separately reconstructed balance history for each account.
       Cash and holding values above are the latest journal records and may not share the valuation date.</p>
     <p className="position-note">Recorded trade and account charges: {pounds(data.recorded_fees_gbp)}. This includes only explicitly recorded purchase/sale fees and account charges;
       fund, subscription, FX, tax and other costs may be missing. Savings terms are dated display facts, not an earned-return
-      calculation or proof of the best obtainable rate.</p>
+      calculation or proof of the best obtainable rate.</p></>}
   </section>;
 }
 

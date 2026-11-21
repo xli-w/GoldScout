@@ -1,13 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { NavLink, useLocation } from "react-router-dom";
+import { useState } from "react";
 import Decimal from "decimal.js";
 import { accountDisplay, loadInvestment } from "./InvestmentView";
 import { evidenceAge, pounds, timestamp } from "./api";
 import { AccountCheckCompletion } from "./AccountCheckCompletion";
+import AccountMaintenance from "./AccountMaintenance";
 
-export function AccountUpdatePage({ now }: { now: number }) {
+export function AccountUpdatePage({ now, reviewDefaults, reviewDefaultsStatus }: {
+  now: number;
+  reviewDefaults: { reviewIntervalDays: number; termsIntervalDays: number } | null;
+  reviewDefaultsStatus: "loading" | "unavailable" | "ready";
+}) {
   const { search, state } = useLocation();
   const accountId = new URLSearchParams(search).get("account_id");
+  const [preferencesEpoch, setPreferencesEpoch] = useState(0);
   const query = useQuery({
     queryKey: ["investment"], queryFn: ({ signal }) => loadInvestment(signal),
     refetchOnMount: "always",
@@ -44,6 +51,10 @@ export function AccountUpdatePage({ now }: { now: number }) {
     {savedNotice}
     <p>Use a dated statement or account screen. Work through the changes one at a time; each record gets its own preview and confirmation.</p>
     <p className="position-note">This review does not contact a provider or import the separate eToro snapshot. It cannot certify that your statement or transaction history is complete.</p>
+
+    <AccountMaintenance key={`${account.id}:${preferencesEpoch}`} data={data} now={now} mode="account" accountId={account.id}
+      defaults={reviewDefaults} defaultsStatus={reviewDefaultsStatus}
+      refreshSnapshot={() => loadInvestment(new AbortController().signal)} />
 
     <section className="record-review" aria-label="Account evidence to review">
       <h3>Start with what is recorded</h3>
@@ -126,6 +137,7 @@ export function AccountUpdatePage({ now }: { now: number }) {
         </section>
       </div>
     </section>
-    <AccountCheckCompletion data={data} accountId={account.id} />
+    <AccountCheckCompletion data={data} accountId={account.id}
+      onPreferencesReadFailure={() => setPreferencesEpoch(epoch => epoch + 1)} />
   </article>;
 }

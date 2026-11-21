@@ -92,8 +92,8 @@ discarded rather than reused; no full preview or acknowledgement is restored.
 The separate uncertain-save reference only supports retrying the same
 confirmation, never composing or confirming a different record.
 
-The portfolio's **Back up and practise recovery** section downloads an explicitly
-requested verified SQLite copy with its receipt. It displays the selected
+The portfolio's **Tools > Backup and recovery tools** section downloads an
+explicitly requested verified SQLite copy with its receipt. It displays the selected
 journal path; the browser controls the download destination. The archive is not
 encrypted. Restore rehearsal verifies and copies a selected backup only to a
 temporary new location and removes that copy; it never installs or overwrites
@@ -214,13 +214,14 @@ reconstruct and verify the exact record. Ambiguous recovery times when clocks
 move back are refused rather than silently choosing an occurrence.
 
 On **Your portfolio**, start with **What needs attention**, the valuation
-date and the change comparison, then choose **Review accounts**. Historical
+date and each account's next action, then choose **Start account review**.
+The comparison and recorded holdings are in **History and insights**. Historical
 performance limitations are shown separately from immediate value and cash
 issues; they do not prevent normal recording. This is not a live bank balance;
 latest cash and unit counts can be from
 different journal dates. Each holding's price-effective and source-available
 dates are available in a collapsed detail. Optional roles and detailed history
-are collapsed; section shortcuts open the relevant panel. Performance help
+are collapsed in History and insights. Performance help
 explains the starting point (baseline), cash-flow-neutral return and largest
 fall (drawdown). A missing-price link identifies the affected account and
 investment and opens a mark-record draft with those fields selected only when
@@ -234,7 +235,7 @@ correction clock instead of silently changing it. Monitoring snapshots remain se
 not transactions or repairs. Technical identities and provider details remain
 available in expandable panels; errors and missing-data warnings stay visible.
 
-**What changed between recorded values?** compares the latest complete
+Under **History and insights**, **What changed between recorded values?** compares the latest complete
 portfolio valuation with an earlier complete recorded valuation you select.
 It separates recorded external deposits and withdrawals, newly included
 account value, interest and dividends, and recorded purchase/sale fees.
@@ -247,7 +248,7 @@ without filling them. An optional browser-local comparison point records a
 valuation date, not proof of an account review. GoldScout does not independently
 verify the records or know that all activity and fees have been captured.
 
-For a regular account review, choose **Update** beside that account. The guided
+For a regular account review, choose **Open account** beside that account. The guided
 page combines recorded cash, the last cash-check difference and holding price
 dates, then offers plain-language actions for transactions, cash checks and
 price updates, account charges and savings terms. No monitoring configuration is needed. Each action still needs

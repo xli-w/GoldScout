@@ -176,7 +176,7 @@ remain the operator's responsibility.
 
 ## Dashboard inbox and local workflow
 
-On **Your portfolio**, open **Optional checks**, then **Review checks and
+On **Your portfolio**, open **Tools**, then **Optional checks** and **Review checks and
 compare account figures**. This separate workflow tracks review statuses and
 compares manually entered source figures; it is not the guided account review.
 
