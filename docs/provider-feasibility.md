@@ -16,7 +16,7 @@ configurable; no account values or personal identifiers belong in these docs.
 | --- | --- | --- |
 | NatWest Digital Regular Saver | Manual normalized GBP evidence | Exact saver's Excel/PDF export, fields, balance clock, history, applicable terms |
 | Moneybox S&S LISA | Manual normalized evidence and separately evidenced wrapper notes | Statement format/fields/history; actual funds, fee waivers and transfer terms |
-| eToro | Fixed GET adapter; manual closed-trade preview and expiring current-portfolio startup refresh require explicit consent | UK/account eligibility, verified Read scope or accepted one-time broader-key risk, credentials, data retention/deletion, schema/completeness, account association and currencies |
+| eToro | Fixed GET adapter; explicitly activated current-portfolio startup reads and manual closed-trade preview | UK/account eligibility, key scope, credentials, data retention/deletion, schema/completeness, account association and currencies |
 | Trading 212 | Comparator only; not selected | Actual account fit, beta API limitations, terms and total migration costs |
 | AJ Bell Dodl | LISA cost comparator only | Matched funds, complete charges, transfer effects; no verified API/export schema |
 | TrueLayer / other bank aggregators | Deferred | Personal production eligibility, pricing, exact saver coverage and permitted retention |
@@ -28,23 +28,24 @@ New integration code is offline engineering, not verified account connectivity.
 
 The eToro collector is separately gated and live-unvalidated; the wizard keeps
 a partial provider portfolio observation in memory and shows a separate
-provider-reported GBP balance when available. A separately confirmed manual
+provider-reported GBP balance when available. A manual
 refresh can also show a bounded closed-trade history preview. Neither is a GBP
 journal sync.
 NatWest and Moneybox remain operator-normalized manual evidence until a
 supported route, the exact account fields and permitted retention are verified.
 A manual or partial route must not be labelled a complete live connection.
 
-The dashboard offers one current-portfolio eToro read set per server startup
-only after separate operator consent, verified Read-only key scope and a 1-30
-day expiry. Manual closed-trade history is never collected at startup. This
-permission is revocable and does not renew itself; failed reads are not retried.
+Once activated, the dashboard attempts one current-portfolio eToro read set per
+server startup. It does not impose a separate approval or expiry. It accepts
+Read-only or trade-capable credentials, but cannot verify their scope; a
+trade-capable key can place, modify or cancel orders if exposed or misused.
+Manual closed-trade history is never collected at startup. Activation can be
+disabled; failed reads are not retried.
 It is not a periodic watch loop or OS schedule, and the feature is not live
 validated or blanket approval to connect an actual account. The separate
-`monitor-collect --watch` CLI retains its shorter, one-day approval behavior.
-No recurring collector is approved; any such design needs separately reviewed
-scope, permissions, source-specific rate/retention terms, revocation and stop
-controls, and a failure/restart policy.
+`monitor-collect --watch` CLI requires explicit network activation and runs
+until stopped or an error, without a time-limited approval file. See
+[monitoring](monitoring.md) for its constraints and failure behavior.
 
 ## What the recovered public research supports
 
@@ -109,7 +110,7 @@ unknown product classification and uncertain snapshot clocks stay unavailable.
 
 The official [List trading history API reference](https://api-portal.etoro.com/api-reference/trading--real/list-trading-history)
 documents a paginated, `minDate`-bounded closed-trade feed. GoldScout can request
-the trailing 365 calendar days only during an explicitly confirmed manual read,
+the trailing 365 calendar days only during a manual refresh,
 with a 1,000-row cap; startup refresh remains limited to the current portfolio.
 The projection keeps documented trade fields but does not infer a row's
 currency, instrument type, account identity or complete transaction coverage.
@@ -144,16 +145,16 @@ switch is established by the component examples in the source review.
 
 ## Operator-only activation checklist
 
-1. Privately verify existing account/wrapper and supported Read-only permissions;
-   never test permission by submitting an order.
+1. Privately verify the existing account/wrapper and understand the key's
+   permissions; never test permission by submitting an order.
 2. Resolve retention, caching, deletion, attribution and permitted use for the
    exact fields to be stored. Define a permitted retention duration.
 3. Confirm account/subaccount identity, currencies, timestamps, pagination,
    source coverage and applicable charges; no guessed GBP conversion.
 4. Provide only non-sensitive capability/schema answers, not statements or keys.
    The operator manages secrets outside chat; the browser never receives them.
-5. Obtain separate task-specific approval for a minimal supervised Read check.
-   API code, documentation or a saved setting does not grant that approval.
+5. Development-time authenticated calls still require task-specific approval;
+   API code, documentation or a saved setting does not grant it.
 
 See [monitoring operations](monitoring.md). Offline tests do not establish live
 provider behavior, complete accounting, suitability or profitability.

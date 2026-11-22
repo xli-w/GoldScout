@@ -218,7 +218,6 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
   const [preferencesUnavailable, setPreferencesUnavailable] = useState(false);
   const [cycle, setCycle] = useState<ReviewCycle | null>(null);
   const [error, setError] = useState("");
-  const [confirmRestart, setConfirmRestart] = useState(false);
 
   useEffect(() => {
     try {
@@ -341,7 +340,6 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
         localStorage.setItem(reviewStorageKey(data.portfolio_id), JSON.stringify(next));
       });
       setCycle(next);
-      setConfirmRestart(false);
       setError("");
       if (next.accountIds[0])
         navigate(`/investment/update?account_id=${encodeURIComponent(next.accountIds[0])}`);
@@ -416,19 +414,11 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
           ? <div className="recording-actions">
             <NavLink className="record-action"
               to={`/investment/update?account_id=${encodeURIComponent(nextAccount)}`}>Continue review</NavLink>
-            <button type="button" disabled={preferencesUnavailable} onClick={() => setConfirmRestart(true)}>Restart review</button>
+            <button type="button" disabled={preferencesUnavailable} onClick={() => void startReview()}>Restart review</button>
           </div>
-          : <button type="button" disabled={preferencesUnavailable} onClick={() => {
-            if (cycle) setConfirmRestart(true);
-            else void startReview();
-          }}>
+          : <button type="button" disabled={preferencesUnavailable} onClick={() => void startReview()}>
             {cycle ? "Start a new review" : "Start account review"}
           </button>}
-        {confirmRestart && <div className="review-restart" role="group" aria-label="Confirm starting a new review">
-          <p>Starting again replaces the saved checklist progress. It does not replace the saved comparison value.</p>
-          <button type="button" disabled={preferencesUnavailable} onClick={() => void startReview()}>Start a new review and replace progress</button>
-          <button type="button" onClick={() => setConfirmRestart(false)}>Keep current progress</button>
-        </div>}
       </>}
     </section>}
     {error && <p role="alert">{error}</p>}

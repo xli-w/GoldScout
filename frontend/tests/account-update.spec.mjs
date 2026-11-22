@@ -293,9 +293,7 @@ test("performance loss is explained and requires acknowledgement before a verifi
   await expect(impact.getByRole("alert")).toContainText("previously available figures unavailable");
   await expect(impact).toContainText("Synthetic missing flow-time valuation.");
   const confirm = page.getByRole("button", { name: "Confirm and append record" });
-  await expect(confirm).toBeDisabled();
   expect(confirmations).toBe(0);
-  await page.getByRole("checkbox", { name: /I understand that these previously available figures/ }).check();
   await expect(confirm).toBeEnabled();
   await confirm.click();
   await expect(page).toHaveURL(new RegExp(`/investment/update\\?account_id=${account.id}$`));
@@ -435,7 +433,7 @@ test("guided transfer from the second account submits the displayed other accoun
 });
 
 for (const loss of ["value", "drawdown", "already unavailable"]) {
-  test(`preview handles ${loss} independently and resets acknowledgement`, async ({ page }) => {
+  test(`preview reports ${loss} independently without an acknowledgement gate`, async ({ page }) => {
     const { report, account } = await fixture(page);
     if (loss === "already unavailable" || loss === "value") {
       report.twr_pct = null;
@@ -463,25 +461,21 @@ for (const loss of ["value", "drawdown", "already unavailable"]) {
     await page.getByLabel("Source description / correction reason").fill("Synthetic evidence");
     await page.getByRole("button", { name: "Preview record" }).click();
     const confirm = page.getByRole("button", { name: "Confirm and append record" });
-    const acknowledgement = page.getByRole("checkbox", { name: /I understand that these previously available figures/ });
+    await expect(confirm).toBeEnabled();
     if (loss === "already unavailable") {
-      await expect(confirm).toBeEnabled();
-      await expect(acknowledgement).toHaveCount(0);
       await expect(page.getByRole("region", { name: "Valuation and performance impact" }))
         .toContainText("Return reporting is unavailable after this record");
     } else {
-      await expect(confirm).toBeDisabled();
-      await acknowledgement.check();
-      await expect(confirm).toBeEnabled();
+      await expect(page.getByRole("region", { name: "Valuation and performance impact" }).getByRole("alert"))
+        .toContainText("previously available figures unavailable");
       await page.getByRole("button", { name: "Cancel preview" }).click();
       await page.getByRole("button", { name: "Preview record" }).click();
-      await expect(acknowledgement).not.toBeChecked();
-      await expect(confirm).toBeDisabled();
+      await expect(confirm).toBeEnabled();
     }
   });
 }
 
-test("lost confirmation after performance acknowledgement retries the same reference after reload", async ({ page }) => {
+test("lost confirmation after performance impact retries the same reference after reload", async ({ page }) => {
   const { report, account } = await fixture(page);
   let previewEvent;
   const previewId = "uncertain-impact-preview";
@@ -509,14 +503,60 @@ test("lost confirmation after performance acknowledgement retries the same refer
   await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
   await page.getByLabel("Source description / correction reason").fill("Synthetic receipt");
   await page.getByRole("button", { name: "Preview record" }).click();
-  await page.getByRole("checkbox", { name: /I understand that these previously available figures/ }).check();
   await page.getByRole("button", { name: "Confirm and append record" }).click();
   await expect(page.getByRole("status")).toContainText("save outcome is unknown");
-  page.once("dialog", dialog => dialog.accept());
+  expect(await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  })).toBe(false);
   await page.reload();
   await expect(page.getByRole("heading", { name: "Check an unfinished save" })).toBeVisible();
   await page.getByRole("button", { name: "Retry same confirmation" }).click();
   await expect(page).toHaveURL(new RegExp(`/investment/update\\?account_id=${account.id}$`));
   expect(references).toEqual([previewId, previewId]);
   expect(appends).toBe(1);
+});
+
+test("navigating during a confirmation retains the pending save reference", async ({ page }) => {
+  const { report, account } = await fixture(page);
+  let previewEvent;
+  const previewId = "in-flight-preview";
+  const references = [];
+  let firstSent;
+  let releaseFirst;
+  const firstStarted = new Promise(resolve => { firstSent = resolve; });
+  const firstResponse = new Promise(resolve => { releaseFirst = resolve; });
+  await page.route("**/api/investment/v1/recording/preview", route => {
+    previewEvent = route.request().postDataJSON().event;
+    return route.fulfill({ json: {
+      preview_id: previewId, revision: report.revision, event: previewEvent, before: report,
+      after: { ...report, revision: report.revision + 1 },
+      expires_at: "2030-01-01T12:05:00Z",
+    } });
+  });
+  await page.route("**/api/investment/v1/recording/confirm", async route => {
+    references.push(route.request().postDataJSON().preview_id);
+    if (references.length === 1) {
+      firstSent();
+      await firstResponse;
+      await route.abort("failed").catch(() => {});
+      return;
+    }
+    await route.fulfill({ json: { id: previewEvent.id, revision: report.revision + 1 } });
+  });
+  await page.goto(`/investment/record?record=account-update&account_id=${account.id}&kind=contribution`);
+  await page.getByLabel("GBP amount").fill("1");
+  await page.getByLabel("Applies at (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source available from (local time)").fill("2030-01-01T12:00");
+  await page.getByLabel("Source description / correction reason").fill("Synthetic receipt");
+  await page.getByRole("button", { name: "Preview record" }).click();
+  await page.getByRole("button", { name: "Confirm and append record" }).click();
+  await firstStarted;
+  await page.reload();
+  releaseFirst();
+  await expect(page.getByRole("heading", { name: "Check an unfinished save" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry same confirmation" }).click();
+  await expect(page).toHaveURL(new RegExp(`/investment/update\\?account_id=${account.id}$`));
+  expect(references).toEqual([previewId, previewId]);
 });

@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { timestamp } from "./api";
 import { EToroJournalBridge } from "./EToroJournalBridge";
 import { canReviewEToro } from "./etoro-bridge-model";
+import { activationReceiptMessage, hasUnrevokedEToroConnection, hasUncertainEToroRead,
+  isActivationReceipt, recordEToroUncertainty, retainActivationReceipt,
+  waitingForEToroStartup, type ActivationReceipt, type UncertainOutcome } from "./etoro-controls-model";
 import type { InvestmentSnapshot } from "./InvestmentView";
 
 type Instrument = {
@@ -41,28 +44,35 @@ export type EToroSnapshot = {
   };
 };
 type Connection = {
-  environment: "real" | "demo"; account_id: number; expires_at: string | null;
+  environment: "real" | "demo"; account_id: number;
   revoked_at: string | null; revision: number; reauthorization_required?: boolean;
 };
 type Session = {
   enabled: boolean; csrf?: string | null; state: string; last_status: string;
   snapshot_available: boolean; connection?: Connection | null; message?: string;
   read_generation?: number | null;
+  connection_revision?: number | null;
+  startup_pending?: boolean | null;
 };
-type Preview = { preview_id: string; expires_at: string; snapshot: EToroSnapshot };
 type PortfolioState = {
   state: string; snapshot: EToroSnapshot | null; connection?: Connection | null;
   last_status: string; message?: string;
+  startup_pending?: boolean | null;
 };
 type StatusResult = { session: Session | null; portfolio: PortfolioState | null; error: string };
 class EToroRequestError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) { super(message); }
 }
-let uncertainOutcome: "confirmation" | "refresh" | "connection" | "revocation" | null = null;
+let uncertainOutcome: UncertainOutcome = null;
 let lastRevocationSession: Session | null = null;
 let refreshInFlight = false;
 let connectionReadInFlight = false;
 let statusGeneration = 0;
+type ActivationRequest = {
+  request_id: string; environment: "real" | "demo";
+  read_generation: number; connection_revision: number | null;
+};
+let unresolvedActivation: ActivationRequest | null = null;
 
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -163,7 +173,8 @@ async function post(path: string, csrf: string, body: unknown): Promise<unknown>
       ? ` (${value.error_code})`
       : object(value) && typeof value.message === "string" ? ` ${value.message}` : "";
     throw new EToroRequestError(`eToro request was refused or unavailable.${detail}`,
-      response.status, object(value) && typeof value.error === "string" ? value.error : "");
+      response.status, object(value) && typeof value.error_code === "string" ? value.error_code :
+        object(value) && typeof value.error === "string" ? value.error : "");
   }
   return value;
 }
@@ -171,7 +182,6 @@ async function post(path: string, csrf: string, body: unknown): Promise<unknown>
 function isConnection(value: unknown): value is Connection {
   return object(value) && (value.environment === "real" || value.environment === "demo") &&
     Number.isSafeInteger(value.account_id) && Number.isSafeInteger(value.revision) &&
-    (value.expires_at === null || typeof value.expires_at === "string") &&
     (value.revoked_at === null || typeof value.revoked_at === "string") &&
     (value.reauthorization_required === undefined || typeof value.reauthorization_required === "boolean");
 }
@@ -183,6 +193,11 @@ function isSession(value: unknown): value is Session {
     (value.read_generation === undefined || value.read_generation === null ||
       typeof value.read_generation === "number" && Number.isSafeInteger(value.read_generation) &&
       value.read_generation >= 0) &&
+    (value.connection_revision === undefined || value.connection_revision === null ||
+      typeof value.connection_revision === "number" && Number.isSafeInteger(value.connection_revision) &&
+      value.connection_revision > 0) &&
+    (value.startup_pending === undefined || value.startup_pending === null ||
+      typeof value.startup_pending === "boolean") &&
     (value.csrf === undefined || value.csrf === null || typeof value.csrf === "string") &&
     (value.connection === undefined || value.connection === null || isConnection(value.connection)) &&
     (value.message === undefined || typeof value.message === "string");
@@ -191,6 +206,8 @@ function isSession(value: unknown): value is Session {
 function isPortfolioState(value: unknown): value is PortfolioState {
   return object(value) && typeof value.state === "string" &&
     typeof value.last_status === "string" &&
+    (value.startup_pending === undefined || value.startup_pending === null ||
+      typeof value.startup_pending === "boolean") &&
     (value.snapshot === null || isSnapshot(value.snapshot)) &&
     (value.connection === undefined || value.connection === null || isConnection(value.connection)) &&
     (value.message === undefined || typeof value.message === "string");
@@ -200,7 +217,7 @@ function matchingConnections(left: Connection | null | undefined, right: Connect
   if (left === undefined || right === undefined) return left === right;
   if (left === null || right === null) return left === right;
   return left.environment === right.environment && left.account_id === right.account_id &&
-    left.revision === right.revision && left.expires_at === right.expires_at &&
+    left.revision === right.revision &&
     left.revoked_at === right.revoked_at &&
     left.reauthorization_required === right.reauthorization_required;
 }
@@ -366,31 +383,20 @@ function ClosedTradeHistoryView({ history }: { history: ClosedTradeHistory }) {
   </section>;
 }
 
-function waitingForStartup(session: Session | null, portfolio: PortfolioState | null) {
-  return Boolean(session?.enabled && session.state === "startup_refresh_enabled" &&
-    portfolio && !portfolio.snapshot &&
-    (session.last_status === "not_collected" || portfolio.last_status === "not_collected"));
-}
-
 export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalNow, viewActive = true }: {
   revokeOnly?: boolean; journal?: InvestmentSnapshot; now?: number; viewActive?: boolean;
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioState | null>(null);
   const [revocationSession, setRevocationSession] = useState<Session | null>(lastRevocationSession);
-  const [preview, setPreview] = useState<Preview | null>(null);
   const [environment, setEnvironment] = useState<"" | "real" | "demo">("");
-  const [readScope, setReadScope] = useState(false);
-  const [tradeRisk, setTradeRisk] = useState(false);
-  const [eligibility, setEligibility] = useState(false);
-  const [retention, setRetention] = useState(false);
-  const [binding, setBinding] = useState(false);
-  const [startupRefresh, setStartupRefresh] = useState(false);
-  const [refreshDays, setRefreshDays] = useState(30);
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState("");
+  const [activationMessage, setActivationMessage] = useState("");
+  const [activationReceipt, setActivationReceipt] = useState<ActivationReceipt | null>(null);
+  const [receiptStatusLoading, setReceiptStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState("");
   const [reconciliationRequired, setReconciliationRequired] = useState(Boolean(uncertainOutcome));
   const [now, setNow] = useState(Date.now());
@@ -398,14 +404,23 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
   const busyRef = useRef(false);
   const readingRef = useRef(false);
   const revokingRef = useRef(false);
+  const statusPollEpoch = useRef(0);
+  const mounted = useRef(true);
 
   const applyStatus = (status: StatusResult) => {
+    if (hasUncertainEToroRead(status.session?.last_status, status.portfolio?.last_status)) {
+      if (!uncertainOutcome) uncertainOutcome = "provider_read";
+      setReconciliationRequired(true);
+    }
     setSession(status.session);
     setPortfolio(status.portfolio);
     setStatusError(status.error);
+    if (!status.error) setReceiptStatusLoading(false);
     if (status.session) {
       if (!status.session.enabled || !status.session.csrf) lastRevocationSession = null;
-      else if (status.session.state === "startup_refresh_enabled" ||
+      else if (hasUnrevokedEToroConnection(status.session) ||
+          uncertainOutcome === "connection" || uncertainOutcome === "provider_read" ||
+          status.session.state === "startup_refresh_enabled" ||
           status.portfolio?.state === "startup_refresh_enabled" ||
           status.session.state === "unavailable" || status.portfolio?.state === "unavailable")
         lastRevocationSession = status.session;
@@ -415,6 +430,7 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
     if (!status.error && !uncertainOutcome) setReconciliationRequired(false);
   };
   const load = async (generation = statusGeneration): Promise<StatusResult> => {
+    statusPollEpoch.current += 1;
     const status = await readStatus();
     if (generation === statusGeneration) applyStatus(status);
     return status;
@@ -426,20 +442,48 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
   };
   useEffect(() => {
     let active = true;
+    mounted.current = true;
     const generation = statusGeneration;
     void readStatus().then(status => {
       if (active && generation === statusGeneration) applyStatus(status);
     });
     return () => {
       active = false;
+      mounted.current = false;
       if (revokingRef.current)
-        uncertainOutcome = "revocation";
+        uncertainOutcome = recordEToroUncertainty(uncertainOutcome, "revocation");
       else if (readingRef.current)
-        uncertainOutcome = refreshInFlight ? "refresh" : "connection";
+        uncertainOutcome = recordEToroUncertainty(uncertainOutcome, refreshInFlight ? "refresh" : "connection");
     };
   }, []);
   useEffect(() => {
-    if (busy || revoking || preview || !waitingForStartup(session, portfolio)) return;
+    if (!session?.enabled || !viewActive) return;
+    let active = true;
+    let polling = false;
+    const check = async () => {
+      if (polling || busyRef.current || revokingRef.current || document.hidden) return;
+      polling = true;
+      const epoch = ++statusPollEpoch.current;
+      const generation = statusGeneration;
+      try {
+        const status = await readStatus();
+        if (active && epoch === statusPollEpoch.current && generation === statusGeneration &&
+            !busyRef.current && !revokingRef.current) applyStatus(status);
+      } finally { polling = false; }
+    };
+    const timer = window.setInterval(() => void check(), 5000);
+    const onFocus = () => void check();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [session?.enabled, viewActive]);
+  useEffect(() => {
+    if (busy || revoking || !waitingForEToroStartup(session, portfolio)) return;
     let active = true;
     const generation = statusGeneration;
     const timer = window.setTimeout(async () => {
@@ -447,13 +491,13 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       if (active && generation === statusGeneration) applyStatus(status);
     }, 1000);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [session, portfolio, busy, revoking, preview]);
+  }, [session, portfolio, busy, revoking]);
   useEffect(() => {
-    if (!preview && !portfolio?.snapshot) return;
+    if (!portfolio?.snapshot) return;
     setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), preview ? 1000 : 60000);
+    const timer = window.setInterval(() => setNow(Date.now()), 60000);
     return () => window.clearInterval(timer);
-  }, [preview, portfolio?.snapshot]);
+  }, [portfolio?.snapshot]);
 
   const run = async (action: () => Promise<void>) => {
     if (busyRef.current || revokingRef.current) return;
@@ -465,7 +509,7 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       if (generation === statusGeneration) {
         if (failure instanceof EToroRequestError &&
             failure.code === "connection_read_outcome_uncertain") {
-          uncertainOutcome = "connection";
+          uncertainOutcome = recordEToroUncertainty(uncertainOutcome, "connection");
           setReconciliationRequired(true);
           setError("A provider request may have been sent; the connection read outcome is uncertain.");
         } else {
@@ -482,77 +526,96 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
     if (!session?.csrf || !environment) throw new Error("Choose an eToro environment and load the local session first.");
     if (typeof session.read_generation !== "number")
       throw new Error("Reload eToro status before starting a connection read.");
-    if (readScope === tradeRisk) throw new Error("Verify Read scope or accept broader-key risk for this one-time read.");
-    if (!eligibility || !retention) throw new Error("Confirm account eligibility and permitted local display/retention.");
+    if (session.connection_revision === undefined)
+      throw new Error("Reload eToro status before enabling the connection.");
+    setActivationMessage("");
+    setActivationReceipt(null);
+    statusPollEpoch.current += 1;
     const requestId = pendingRequest.current ?? crypto.randomUUID();
     pendingRequest.current = requestId;
     const generation = statusGeneration;
+    const request: ActivationRequest = {
+      request_id: requestId, environment, read_generation: session.read_generation,
+      connection_revision: session.connection_revision,
+    };
+    unresolvedActivation = request;
     connectionReadInFlight = true; readingRef.current = true; setReading(true);
     try {
-      const result = await post("/api/investment/v1/etoro/connect", session.csrf, {
-        request_id: requestId, environment, read_scope_verified: readScope,
-        trade_capable_key_risk_accepted: tradeRisk,
-        eligibility_verified: eligibility, retention_rights_verified: retention,
-        read_generation: session.read_generation,
-      });
-      if (generation !== statusGeneration) return;
-      if (!object(result) || typeof result.preview_id !== "string" ||
-          !hasTimezone(result.expires_at) || !isSnapshot(result.snapshot))
-        throw new Error("eToro preview failed validation. Nothing was saved.");
-      setPreview({ preview_id: result.preview_id, expires_at: result.expires_at, snapshot: result.snapshot });
-      setBinding(false); setStartupRefresh(false); setNow(Date.now());
+      let result: unknown;
+      let recoveredReceipt: ActivationReceipt | null = null;
+      try {
+        result = await post("/api/investment/v1/etoro/connect", session.csrf, request);
+        if (!object(result) || typeof result.state !== "string")
+          throw new Error("Invalid activation response.");
+        const receipt = isActivationReceipt(result.activation_receipt, environment)
+          ? result.activation_receipt : null;
+        if (result.state !== "startup_refresh_enabled" || !isConnection(result.connection)) {
+          if (!receipt || !["reauthorization_required", "revoked", "not_connected", "unavailable"].includes(result.state))
+            throw new Error("Invalid activation response.");
+          recoveredReceipt = receipt;
+        } else if (receipt && receipt.revision !== result.connection.revision) {
+          recoveredReceipt = receipt;
+        }
+      } catch (failure) {
+        if (!(failure instanceof EToroRequestError) || hasUncertainEToroRead(failure.code)) {
+          uncertainOutcome = recordEToroUncertainty(uncertainOutcome, "connection");
+          setReconciliationRequired(true);
+          throw new Error("Activation may have completed. Check status and the dashboard's logs before another read.");
+        }
+        unresolvedActivation = null;
+        pendingRequest.current = null;
+        throw failure;
+      }
+      if (retainActivationReceipt(mounted.current, generation, statusGeneration)) return;
+      unresolvedActivation = null;
+      pendingRequest.current = null;
+      if (recoveredReceipt) {
+        setReceiptStatusLoading(true);
+        setActivationReceipt(recoveredReceipt);
+      }
+      await loadAfterChange("The connection was enabled", generation);
     } finally {
       connectionReadInFlight = false; readingRef.current = false; setReading(false);
     }
   });
-  const confirm = () => void run(async () => {
-    if (revokeOnly || reconciliationRequired || statusError || !portfolio)
-      throw new Error("Check eToro status before confirming a connection.");
-    if (!session?.csrf || !preview) throw new Error("The eToro preview is unavailable.");
-    if (!binding) throw new Error("Confirm that the returned account identifier is the account you selected.");
-    if (startupRefresh && !readScope)
-      throw new Error("Automatic startup refresh requires verified Read-only key scope.");
-    try {
-      const result = await post("/api/investment/v1/etoro/confirm", session.csrf, {
-        preview_id: preview.preview_id, account_binding_confirmed: binding,
-        startup_refresh: startupRefresh, refresh_days: startupRefresh ? refreshDays : null,
-      });
-      if (!object(result) || result.state !== (startupRefresh ? "startup_refresh_enabled" : "connected"))
-        throw new Error("Confirmation response was invalid.");
-    } catch {
-      uncertainOutcome = "confirmation";
-      setPreview(null); pendingRequest.current = null; setSession(null); setPortfolio(null);
-      setStatusError(""); setReconciliationRequired(true); setStartupRefresh(false);
-      throw new Error("Connection confirmation could not be verified and may already be saved. Check status and the dashboard's logs before reconnecting.");
+  const checkActivationReceipt = () => void run(async () => {
+    const request = unresolvedActivation;
+    const csrf = session?.csrf || revocationSession?.csrf;
+    if (!request || !csrf) throw new Error("The activation receipt or local session is unavailable.");
+    const result = await post("/api/investment/v1/etoro/activation-receipt", csrf, request);
+    if (!object(result)) throw new Error("The activation receipt response was invalid.");
+    if (result.receipt_status === "unknown") {
+      setActivationMessage("No completed activation receipt is available. The read outcome remains unverified.");
+      return;
     }
-    setPreview(null); pendingRequest.current = null; setStartupRefresh(false);
-    setReconciliationRequired(true);
-    await loadAfterChange("The connection was saved");
-  });
-  const discard = () => void run(async () => {
-    if (!session?.csrf || !preview) throw new Error("The eToro preview is unavailable.");
-    const result = await post("/api/investment/v1/etoro/discard", session.csrf, {
-      preview_id: preview.preview_id,
-    });
-    if (!object(result) || typeof result.discarded !== "boolean")
-      throw new Error("The eToro preview could not be discarded.");
-    setPreview(null); pendingRequest.current = null; setBinding(false); setStartupRefresh(false);
+    if (result.receipt_status !== "committed" ||
+        !isActivationReceipt(result.activation_receipt, request.environment) ||
+        typeof result.state !== "string")
+      throw new Error("The activation receipt response was invalid.");
+    setActivationMessage("");
+    setReceiptStatusLoading(true);
+    setActivationReceipt(result.activation_receipt);
+    unresolvedActivation = null;
+    pendingRequest.current = null;
+    if (uncertainOutcome === "connection") {
+      uncertainOutcome = null;
+      setReconciliationRequired(false);
+    }
+    await loadAfterChange("The activation receipt was checked");
   });
   const revoke = async () => {
     if (revokingRef.current || (busyRef.current && !readingRef.current)) return;
     const csrf = session?.csrf || revocationSession?.csrf;
     if (!csrf) { setError("The local eToro session is unavailable."); return; }
-    if (!window.confirm((connectionReadInFlight || refreshInFlight) && session?.state !== "startup_refresh_enabled"
-      ? "Stop the current eToro read and revoke the connection? A request already sent may finish; reconnect before another read."
-      : "Revoke automatic eToro startup refresh? The current journal will not change.")) return;
     revokingRef.current = true;
+    statusPollEpoch.current += 1;
     setRevoking(true); setError("");
     statusGeneration += 1;
     if (refreshInFlight) {
-      uncertainOutcome = "refresh";
+      uncertainOutcome = recordEToroUncertainty(uncertainOutcome, "refresh");
       setReconciliationRequired(true);
     } else if (connectionReadInFlight) {
-      uncertainOutcome = "connection";
+      uncertainOutcome = recordEToroUncertainty(uncertainOutcome, "connection");
       setReconciliationRequired(true);
     }
     try {
@@ -561,12 +624,13 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
         if (!object(result) || !["revoked", "not_connected"].includes(String(result.state)))
           throw new Error("Revocation response was invalid.");
       } catch {
-        setPreview(null); pendingRequest.current = null; setStartupRefresh(false);
+        uncertainOutcome = recordEToroUncertainty(uncertainOutcome, "revocation");
+        pendingRequest.current = null;
         setSession(null); setPortfolio(null); setStatusError(""); setReconciliationRequired(true);
         throw new Error("Revocation could not be verified and may already have taken effect. Retry status before trying again.");
       }
-      setPreview(null); pendingRequest.current = null; setStartupRefresh(false);
-      await loadAfterChange("Startup refresh was revoked");
+      pendingRequest.current = null;
+      await loadAfterChange("The connection was disabled");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "eToro request was unavailable.");
     } finally {
@@ -579,7 +643,7 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       throw new Error("Check eToro status before requesting another read.");
     if (!session?.csrf || typeof session.read_generation !== "number" || !session.connection)
       throw new Error("The local eToro session is unavailable; reload status.");
-    if (!window.confirm(`Request one eToro read for ${session.connection.environment} account ${session.connection.account_id} now? It fetches the current portfolio and up to 365 calendar days of closed-trade history (maximum 1,000 rows). Confirm that this API use and transient in-memory display are permitted. History rows do not identify their currency, instrument type or account, are not journal evidence, and will not update the journal. A key with trading permissions can place, modify or cancel orders if exposed or misused.`)) return;
+    statusPollEpoch.current += 1;
     const generation = statusGeneration;
     refreshInFlight = true;
     readingRef.current = true; setReading(true);
@@ -587,8 +651,6 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       let failedCode = "";
       try {
         const result = await post("/api/investment/v1/etoro/refresh", session.csrf, {
-          confirm_read: true, confirm_closed_trade_history: true,
-          history_retention_rights_verified: true,
           read_generation: session.read_generation,
           revision: session.connection.revision, account_id: session.connection.account_id,
           environment: session.connection.environment,
@@ -597,6 +659,8 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
           throw new Error("Refresh response was invalid.");
         if (result.state === "refresh_failed")
           failedCode = typeof result.error_code === "string" ? result.error_code : "unknown";
+        if (failedCode === "connection_read_outcome_uncertain")
+          throw new Error("Read outcome uncertain.");
       } catch (failure) {
         if (generation !== statusGeneration) return;
         if (failure instanceof EToroRequestError && failure.status === 409 &&
@@ -604,7 +668,7 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
           await load(generation);
           throw failure;
         }
-        uncertainOutcome = "refresh";
+        uncertainOutcome = recordEToroUncertainty(uncertainOutcome, "refresh");
         setSession(null); setPortfolio(null); setStatusError(""); setReconciliationRequired(true);
         throw new Error("The refresh result could not be verified. Check status and the dashboard's logs before requesting another read.");
       }
@@ -617,13 +681,12 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
     }
   });
 
-  const missingReportedSnapshot = Boolean(!preview && session?.state === "startup_refresh_enabled" &&
-    portfolio && !portfolio.snapshot && !waitingForStartup(session, portfolio) &&
+  const missingReportedSnapshot = Boolean(session?.state === "startup_refresh_enabled" &&
+    portfolio && !portfolio.snapshot && !waitingForEToroStartup(session, portfolio) &&
     (session.last_status === "success" || portfolio.last_status === "success"));
-  const previewExpired = preview !== null && Date.parse(preview.expires_at) <= now;
   const snapshot = portfolio?.snapshot;
   const bridgeReady = canReviewEToro({
-    revokeOnly, preview: preview !== null, busy, revoking, statusError, reconciliationRequired,
+    revokeOnly, preview: false, busy, revoking, statusError, reconciliationRequired,
     session, portfolioStatus: portfolio?.last_status, snapshot, journal, now: journalNow,
   });
   const bridgeKey = snapshot && journal
@@ -633,10 +696,10 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
     <p className="etoro-intro">Optional provider view, separate from your journal and its totals.
       Provider coverage is partial and not yet live-validated.</p>
     <details className="help-disclosure">
-      <summary>About eToro data and permissions</summary>
+      <summary>About eToro data</summary>
       <p>Instrument types and individual position legs are not provided. Exposure is net by instrument;
         copied positions appear separately. Pending-order details are unavailable beyond reserved cash.</p>
-      <p>Closed-trade history is fetched only by an explicitly confirmed manual refresh, for up to 365 calendar
+      <p>Closed-trade history is fetched only by manual refresh, for up to 365 calendar
         days and 1,000 rows. Startup refresh reads the current portfolio only. History is kept in memory for
         this dashboard session and is not saved.</p>
       <p>The closed-trade response does not identify row-level currency, instrument type or account. It is a
@@ -644,28 +707,32 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       <p>The GBP balance is a separate, unsynchronized read with unverified coverage and source time.
         No holdings valuation, conversion or journal import is inferred.</p>
       <p>Keys stay in private server-side settings and account evidence is never sent to hosted AI.
-        Only consent and account ID are saved; the portfolio remains in memory for this dashboard run.</p>
+        Only activation, environment and account ID are saved; the portfolio remains in memory for this dashboard run.</p>
       <p>Revocation cannot guarantee cancellation of an already sent read or prevent cross-instance races.
         Refresh checks the account binding before the separate balance and history requests; the initial connection
-        read does not yet have a confirmed binding.</p>
+        read establishes the binding from the returned account.</p>
     </details>
     {error && <p role="alert" className="investment-warnings">{error}</p>}
+    {activationMessage && <p role="status">{activationMessage}</p>}
+    {activationReceipt && <p role="status">{activationReceiptMessage(activationReceipt, session, Boolean(statusError) || revoking || receiptStatusLoading)}</p>}
     {statusError && <p role="alert" className="investment-warnings">{statusError}</p>}
     {session?.message && <p role="alert" className="investment-warnings">{session.message}</p>}
     {!session && !error && !statusError && <p role="status">Checking eToro status.</p>}
     {(error || statusError || reconciliationRequired || missingReportedSnapshot) &&
       <button type="button" disabled={busy || revoking} onClick={() => void run(async () => { await load(); })}>Retry status</button>}
-    {reconciliationRequired && <p role="status">{uncertainOutcome === "confirmation"
-      ? "Confirmation is still unverified. Status is not a request-specific receipt; check the dashboard's logs before reconnecting."
-      : uncertainOutcome === "refresh"
+    {unresolvedActivation && reconciliationRequired && <button type="button" disabled={busy || revoking || !(session?.csrf || revocationSession?.csrf)}
+      onClick={checkActivationReceipt}>Check activation receipt</button>}
+    {reconciliationRequired && <p role="status">{uncertainOutcome === "refresh"
       ? "Refresh is still unverified. Status is not a request-specific receipt; check the dashboard's logs before requesting another read."
       : uncertainOutcome === "connection"
       ? "The connection read is still unverified. Check the dashboard's logs before requesting another read."
       : uncertainOutcome === "revocation"
       ? "Revocation or a read is still unverified. Status is not a request-specific receipt; check the dashboard's logs before requesting another read."
-      : "Check both eToro status reads before starting or confirming another read."}</p>}
+      : uncertainOutcome === "provider_read"
+      ? "A provider read is still unverified. Check the dashboard's logs before requesting another read."
+      : "Check both eToro status reads before starting another read."}</p>}
     {revokeOnly && <p role="note">While portfolio status needs attention, you can check eToro status,
-      discard a preview or revoke startup refresh, but cannot start or confirm new reads here.</p>}
+      or disable the connection, but cannot start new reads here.</p>}
     {!session && revocationSession && <p role="note">Connection status is unavailable. Revocation can use the
       last available local session, but its result must be checked.</p>}
     {session && !session.enabled && <p role="status">eToro is not enabled for this session.
@@ -673,31 +740,22 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
       Opening this view does not request a read.</p>}
     {session?.enabled && !session.csrf && <p role="alert">eToro controls are unavailable because the local session
       could not be verified. Reload the page to retry.</p>}
-    {!preview && !statusError && session?.state === "not_connected" && <p role="status">Not connected. Connecting requires an explicit one-time read.</p>}
-    {!preview && !statusError && session?.state === "connected" && <p role="status">Connection saved.
-      {!portfolio ? " The latest read status is unavailable."
-        : portfolio.snapshot ? " The latest read is available below." : " No read is available in this dashboard session."}</p>}
-    {!preview && !statusError && session?.state === "reauthorization_required" &&
-      <p role="status">eToro credentials have changed. Reconnect and confirm the account before another read.
+    {!statusError && session?.state === "not_connected" && <p role="status">Not connected. Enable eToro to read and activate startup refresh.</p>}
+    {!statusError && session?.state === "reauthorization_required" &&
+      <p role="status">A legacy connection or changed credentials require explicit activation before another read.
         Any displayed portfolio snapshot is from an earlier read.</p>}
-    {!preview && portfolio && !portfolio.snapshot &&
-      ["connected", "expired"].includes(session?.state ?? "") &&
-      !["not_collected", "success"].includes(portfolio.last_status) &&
-      <p role="status">The last eToro read did not complete ({portfolio.last_status}).
-        No provider snapshot is available in this session.</p>}
-    {!preview && portfolio && !portfolio.snapshot && session?.state === "startup_refresh_enabled" &&
-      <p role="status">{waitingForStartup(session, portfolio)
-        ? "Waiting for the one authorized startup read. This screen does not initiate a request."
+    {portfolio && !portfolio.snapshot && session?.state === "startup_refresh_enabled" &&
+      <p role="status">{waitingForEToroStartup(session, portfolio)
+        ? "Waiting for the startup read. This screen does not initiate a request."
         : missingReportedSnapshot
         ? "The startup read was reported, but its snapshot is unavailable. Retry status before requesting another read."
+        : session.last_status === "not_collected" && portfolio.last_status === "not_collected"
+        ? "No startup read is pending in this dashboard instance. You can refresh now."
         : `The automatic startup read did not complete (${session.last_status}). It will not be retried automatically.`}</p>}
-    {!preview && session?.state === "expired" && <p role="status">{statusError
-      ? "Connection status reports expiry; check the unavailable or conflicting status."
-      : "Startup permission expired. The portfolio will not be fetched automatically; reconnect to renew."}</p>}
-    {!preview && session?.state === "revoked" && <p role="status">{statusError
+    {session?.state === "revoked" && <p role="status">{statusError
       ? "Connection status reports revocation; check the unavailable or conflicting status."
-      : "Startup permission is revoked. Further startup reads are not authorized by this permission."}</p>}
-    {!preview && portfolio?.snapshot && <div className="recording-preview">
+      : "eToro connection is disabled."}</p>}
+    {portfolio?.snapshot && <div className="recording-preview">
       <h3>Latest eToro read</h3>
       {portfolio.last_status !== "success" && <p role="status">Last refresh status: {portfolio.last_status}.
         The displayed source snapshot is not refreshed.</p>}
@@ -709,47 +767,22 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
         Side-by-side review is unavailable until a valid, bound real-account read and journal are available.
         No records have been changed.</p>}
     </div>}
-    {!preview && session?.connection &&
-      <p className="position-note">Account ID {session.connection.account_id} · {session.connection.environment} environment.
-        {session.connection.expires_at && <> Startup-read permission expiry: {providerTimestamp(session.connection.expires_at)}.</>}</p>}
-    {(["connected", "expired", "startup_refresh_enabled"].includes(session?.state ?? "") || revocationSession ||
+    {session?.connection &&
+      <p className="position-note">Account ID {session.connection.account_id} · {session.connection.environment} environment.</p>}
+    {(hasUnrevokedEToroConnection(session) || session?.state === "startup_refresh_enabled" || revocationSession ||
+      (reconciliationRequired && session?.enabled && session.csrf) ||
       (connectionReadInFlight && session?.enabled && session.csrf)) && <div className="etoro-actions">
-      {!preview && !revokeOnly && ["connected", "expired", "startup_refresh_enabled"].includes(session?.state ?? "") && <button type="button"
+      {!revokeOnly && session?.state === "startup_refresh_enabled" && <button type="button"
         disabled={busy || revoking || !session?.csrf || !portfolio || Boolean(statusError) || reconciliationRequired ||
-          waitingForStartup(session, portfolio)} onClick={refresh}>Refresh once now</button>}
-      {(session?.state === "startup_refresh_enabled" || revocationSession || reading) && <button type="button" disabled={revoking || (busy && !reading) || !(session?.csrf || revocationSession?.csrf)}
-        onClick={() => void revoke()}>{session?.state === "startup_refresh_enabled" || revocationSession
-          ? "Revoke startup refresh" : "Stop current read"}</button>}
+          waitingForEToroStartup(session, portfolio)} onClick={refresh}>Refresh once now</button>}
+      {(hasUnrevokedEToroConnection(session) || session?.state === "startup_refresh_enabled" || revocationSession || reading || reconciliationRequired && session?.enabled && session.csrf) && <button type="button" disabled={revoking || (busy && !reading) || !(session?.csrf || revocationSession?.csrf)}
+        onClick={() => void revoke()}>{hasUnrevokedEToroConnection(session) || session?.state === "startup_refresh_enabled" || revocationSession
+          || !reading ? "Disable eToro" : "Stop current read"}</button>}
       <p className="position-note">An already sent read may still finish.</p>
     </div>}
-    {preview ? <div className="recording-preview" aria-label="Review eToro portfolio before saving consent">
-      <h3>Review eToro read</h3>
-      <p>Review the returned account and its source coverage. No portfolio snapshot is stored on disk;
-        only your explicit connection permission and account identifier are saved.</p>
-      <SnapshotView snapshot={preview.snapshot} now={now} />
-      <label className="setup-check"><input type="checkbox" checked={binding} disabled={revokeOnly}
-        onChange={event => setBinding(event.target.checked)} />
-        I verified account ID {preview.snapshot.account_id} is the eToro account I selected.</label>
-      <label className="setup-check"><input type="checkbox" checked={startupRefresh}
-        disabled={revokeOnly || !readScope} onChange={event => setStartupRefresh(event.target.checked)} />
-        Allow one automatic read at each server startup while permission is active.</label>
-      {!readScope && <p role="note">Automatic refresh is unavailable unless Read-only key scope is verified.</p>}
-      {startupRefresh && <label>Permission expires in
-        <select value={refreshDays} onChange={event => setRefreshDays(Number(event.target.value))}>
-          <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
-        </select>
-      </label>}
-      <p className="position-note">Only consent and account ID are saved; the portfolio stays in memory.</p>
-      {previewExpired && <p role="alert">This eToro preview expired. Discard it and request a new read.</p>}
-      <button type="button" disabled={busy || revoking || revokeOnly || reconciliationRequired || Boolean(statusError) ||
-        !portfolio || !binding || previewExpired} onClick={confirm}>
-        Confirm connection and account
-      </button>
-      <button type="button" disabled={busy || revoking} onClick={discard}>
-        Discard preview
-      </button>
-    </div> : !revokeOnly && !reconciliationRequired && !statusError && portfolio &&
-      session?.enabled && session.csrf && session.state !== "unavailable" && <details className="help-disclosure">
+    {!revokeOnly && !reconciliationRequired && !statusError && portfolio &&
+      session?.enabled && session.csrf && session.state !== "unavailable" &&
+      session.state !== "startup_refresh_enabled" && <details className="help-disclosure">
       <summary>{session.connection ? "Update eToro connection" : "Connect eToro"}</summary>
       <p className="etoro-intro">Keys stay in private server-side settings. Opening this panel does not request a read.</p>
       <form className="recording-form etoro-form" onSubmit={event => { event.preventDefault(); begin(); }}>
@@ -759,24 +792,9 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
           <option value="">Choose explicitly</option><option value="real">Real</option><option value="demo">Demo</option>
         </select>
       </label>
-      <fieldset><legend>Connection checks</legend>
-        <p>Closed-trade history is collected only by a separately confirmed manual read.
-          Startup permission covers current portfolio snapshots only.</p>
-        <label className="setup-check"><input type="checkbox" checked={readScope}
-          onChange={event => { setReadScope(event.target.checked); if (event.target.checked) setTradeRisk(false); else setStartupRefresh(false); }} />
-          I verified this key has Read-only permission.</label>
-        <label className="setup-check"><input type="checkbox" checked={tradeRisk}
-          onChange={event => { setTradeRisk(event.target.checked); if (event.target.checked) { setReadScope(false); setStartupRefresh(false); } }} />
-          I accept the risk if this credential can place, modify or cancel orders. This permits one supervised read only.</label>
-        <label className="setup-check"><input type="checkbox" checked={eligibility}
-          onChange={event => setEligibility(event.target.checked)} />
-          I verified my account is eligible for this API use.</label>
-        <label className="setup-check"><input type="checkbox" checked={retention}
-          onChange={event => setRetention(event.target.checked)} />
-          I verified rights for local display and transient in-memory processing of portfolio data and, when manually requested,
-          up to 365 calendar days of closed-trade history; I understand only consent and account ID are saved.</label>
-      </fieldset>
-      <button type="submit" disabled={busy || revoking}>Connect and retrieve once</button>
+      <p>Enabling reads the selected environment now and at each server startup, until disabled.
+        Either key scope can be used; credentials with trading permissions can place, modify or cancel orders if misused.</p>
+      <button type="submit" disabled={busy || revoking}>Enable eToro</button>
       </form>
     </details>}
   </section>;

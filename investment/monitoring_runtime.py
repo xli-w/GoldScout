@@ -1,75 +1,62 @@
-"""Explicit monitoring orchestration; only approved read collection may contact eToro."""
+"""Explicit monitoring orchestration for gated eToro read collection."""
 
-from datetime import timedelta
 import threading
 import uuid
 
 from . import InvestmentError
-from .core import clock, explicit_clock, fields, iso, text
+from .core import clock, explicit_clock, iso
 from .monitoring import validate_profile
 from .monitoring_store import append_attempt, read_cache
-from .store import canonical, digest, read_with_clock
+from .store import read_with_clock
 
 
-def validate_approval(value, profile, account_id, now):
-    fields(value, ("profile_hash", "account_id", "approved_at", "expires_at",
-                   "read_scope_verified", "trade_capable_key_risk_accepted",
-                   "eligibility_verified", "retention_rights_verified",
-                   "account_binding_verified", "supervised_read_approved",
-                   "credential_revision", "evidence"))
-    if type(value["credential_revision"]) is not int or value["credential_revision"] < 0:
-        raise InvestmentError("Collection approval must identify the current eToro credential revision")
-    if value["profile_hash"] != digest(canonical(profile)) or value["account_id"] != account_id:
-        raise InvestmentError("Collection approval does not match the monitoring profile/account")
-    approved, expires = explicit_clock(value["approved_at"]), explicit_clock(value["expires_at"])
-    if not approved <= now < expires or not timedelta(0) < expires - approved <= timedelta(days=1):
-        raise InvestmentError("Collection approval expired or outside its maximum one-day window")
-    read_scope_verified = value["read_scope_verified"]
-    trade_capable_key_risk_accepted = value["trade_capable_key_risk_accepted"]
-    if (type(read_scope_verified) is not bool or type(trade_capable_key_risk_accepted) is not bool
-            or read_scope_verified == trade_capable_key_risk_accepted):
-        raise InvestmentError(
-            "Verify read-only key scope or explicitly accept the risks of a trade-capable key")
-    for key in ("eligibility_verified", "retention_rights_verified",
-                "account_binding_verified", "supervised_read_approved"):
-        if value[key] is not True:
-            raise InvestmentError("Read access, identity, rights and supervised-read approval are required")
-    text(value["evidence"])
+class WatchCredentialRevision:
+    """Keep one effective credential snapshot for the lifetime of a watch."""
+
+    def __init__(self):
+        self._snapshot = None
+
+    def check(self, snapshot):
+        if self._snapshot is None:
+            self._snapshot = snapshot
+        elif self._snapshot != snapshot:
+            raise InvestmentError("eToro credentials changed during watch; collection stopped")
 
 
-def collect_once(database, profile, cache_path, account_id, approval, *, allow_network=False,
-                 now=None, transport=None, credential_accessor=None, collector=None, completion_clock=None):
+def collect_once(database, profile, cache_path, account_id, *, allow_network=False,
+                 now=None, transport=None, credential_accessor=None, collector=None, completion_clock=None,
+                 watch_credential_revision=None):
     ledger, started = read_with_clock(database, now)
     validate_profile(profile, ledger, started)
     if allow_network is not True:
-        raise InvestmentError("Collection is off; explicit --allow-network and approval are required")
-    validate_approval(approval, profile, account_id, started)
-    from proxy_config import ProxyConfigurationError, connection_revision
-
-    try:
-        current_credential_revision = connection_revision(
-            "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
-    except ProxyConfigurationError:
-        raise InvestmentError("eToro credential configuration is unavailable") from None
-    if approval["credential_revision"] != current_credential_revision:
-        raise InvestmentError(
-            "Collection approval is for different eToro credentials; create a fresh approval")
+        raise InvestmentError("Collection is off; explicit --allow-network is required")
     mapping = next((a for a in profile["accounts"] if a["account_id"] == account_id), None)
     if mapping is None or mapping["provider"] != "etoro":
         raise InvestmentError("Select an explicitly mapped eToro account")
     read_cache(cache_path, profile, started)
+    from proxy_config import ProxyConfigurationError, connection_snapshot
+
+    try:
+        bound_credentials = connection_snapshot(
+            "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
+    except ProxyConfigurationError:
+        raise InvestmentError("eToro credential configuration is unavailable") from None
+    if watch_credential_revision is not None:
+        watch_credential_revision.check(bound_credentials)
     from .etoro import EToroError, EToroTransport, collect_portfolio
 
     def credentials():
-        from proxy_config import configured_connection_values
-
-        values = configured_connection_values("GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY")
-        return {"x-api-key": values["GOLDSCOUT_ETORO_API_KEY"],
-                "x-user-key": values["GOLDSCOUT_ETORO_USER_KEY"]}
+        values = bound_credentials.values
+        expected = {"x-api-key": values["GOLDSCOUT_ETORO_API_KEY"],
+                    "x-user-key": values["GOLDSCOUT_ETORO_USER_KEY"]}
+        if credential_accessor is not None and credential_accessor() != expected:
+            raise EToroError("credentials_unavailable")
+        return expected
 
     identifier = str(uuid.uuid4())
     clock_lock = threading.Lock()
     last_checked = started
+    dispatch_clock_failure = None
 
     def failed(code, completed):
         append_attempt(cache_path, profile, {
@@ -90,28 +77,34 @@ def collect_once(database, profile, cache_path, account_id, approval, *, allow_n
             last_checked = checked
             return checked
 
-    def check_approval():
+    def check_dispatch():
+        nonlocal dispatch_clock_failure
         try:
-            checked = completion()
-            validate_approval(approval, profile, account_id, checked)
-            if connection_revision(
-                    "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY"
-            ) != current_credential_revision:
-                raise InvestmentError("eToro credentials changed during collection")
-        except InvestmentError:
+            completion()
+        except InvestmentError as exc:
+            dispatch_clock_failure = str(exc)
             raise EToroError("approval_interrupted") from None
+        try:
+            if connection_snapshot(
+                    "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY"
+            ) != bound_credentials:
+                raise EToroError("approval_interrupted")
         except ProxyConfigurationError:
             raise EToroError("approval_interrupted") from None
 
     try:
-        selected_transport = transport if transport is not None else EToroTransport(before_request=check_approval)
-        check_approval()
+        selected_transport = transport if transport is not None else EToroTransport(before_request=check_dispatch)
+        check_dispatch()
 
         def guarded_transport(path, headers):
-            check_approval()
+            if (type(headers) is not dict
+                    or headers.get("x-api-key") != bound_credentials.values["GOLDSCOUT_ETORO_API_KEY"]
+                    or headers.get("x-user-key") != bound_credentials.values["GOLDSCOUT_ETORO_USER_KEY"]):
+                raise EToroError("approval_interrupted")
+            check_dispatch()
             return selected_transport(path, headers)
 
-        result = (collector or collect_portfolio)(guarded_transport, credential_accessor or credentials)
+        result = (collector or collect_portfolio)(guarded_transport, credentials)
     except EToroError as exc:
         if exc.code == "cancellation_unconfirmed":
             warning = "eToro cancellation could not be confirmed; a request may remain in flight"
@@ -125,10 +118,12 @@ def collect_once(database, profile, cache_path, account_id, approval, *, allow_n
             except Exception:
                 raise InvestmentError(warning + "; failed attempt recording could not be confirmed") from None
             raise InvestmentError(warning + "; a failed attempt was recorded") from None
+        if exc.code == "approval_interrupted" and dispatch_clock_failure is not None:
+            raise InvestmentError(dispatch_clock_failure) from None
         completed = completion()
         if exc.code == "approval_interrupted":
             failed("collection_interrupted", completed)
-            raise InvestmentError("Collection approval expired or became unavailable before dispatch") from None
+            raise InvestmentError("Collection interrupted: credentials changed or dispatch check unavailable") from None
         code = ("permission_denied" if exc.code in ("authentication_refused", "permission_refused")
                 else "invalid_response" if exc.code in ("schema_invalid", "schema_unsupported", "payload_invalid")
                 else "provider_unavailable")
@@ -136,10 +131,13 @@ def collect_once(database, profile, cache_path, account_id, approval, *, allow_n
         raise InvestmentError("eToro read failed; a sanitized failed attempt was recorded: " + code) from None
     completed = completion()
     try:
-        validate_approval(approval, profile, account_id, completed)
-    except InvestmentError:
+        revision_unchanged = connection_snapshot(
+            "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY") == bound_credentials
+    except ProxyConfigurationError:
+        revision_unchanged = False
+    if not revision_unchanged:
         failed("collection_interrupted", completed)
-        raise
+        raise InvestmentError("Collection interrupted: credentials changed or revision unavailable before publication") from None
     # This endpoint has no verified source clock, currency-complete holdings or
     # account identity. Never call receipt time the valuation's as-of time.
     observation = {

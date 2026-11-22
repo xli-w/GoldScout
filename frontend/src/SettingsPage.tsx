@@ -141,7 +141,7 @@ export function SettingsPage({ session, onSaved, loadError }: {
       setClearOverrides({});
       setDisableProxy(false);
       setMessage(reauthorization
-        ? "Connection settings saved. Reconnect eToro before another read; previous consent no longer applies."
+        ? "Connection settings saved. Re-enable eToro before another read; the previous activation no longer applies."
         : "Connection settings saved. Changes apply to the next provider request; an in-flight request may finish.");
       onSaved();
     } catch (reason) {
@@ -211,8 +211,8 @@ export function SettingsPage({ session, onSaved, loadError }: {
         </label>}
       </div>)}
       <button type="submit" disabled={busy}>Save connection settings</button>
-      <p className="position-note">Changing either eToro key requires a new eToro connection confirmation. Saving credentials does not make a provider request or grant any account permission.</p>
-      <p className="position-note">Current eToro credential revision: {session.etoro_credential_revision}. Use this value when creating a separate CLI monitoring approval.</p>
+      <p className="position-note">Changing either eToro key requires enabling the eToro connection again. Saving credentials does not make a provider request.</p>
+      <p className="position-note">Current eToro credential revision: {session.etoro_credential_revision}. A separate CLI watch pins its revision and must be restarted after a key change.</p>
       <p className="position-note">Close older GoldScout processes before changing connections. A request already dispatched cannot be recalled. The private connections file is ignored when PYTHON_DOTENV_DISABLED=1.</p>
     </form> : <p role="status">Connection settings are disabled because PYTHON_DOTENV_DISABLED=1. Existing project values were not read or changed.</p>}
   </section>;

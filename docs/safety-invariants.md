@@ -123,20 +123,18 @@ change hooks, CI, offline isolation or host permissions.
 ## Monitoring, reconciliation and awareness
 
 - Monitoring is local and read-only; provider collection requires explicit
-  activation and account/retention approval, never page refresh. The fixed eToro
-  GET adapter may use a trade-capable key only after explicit operator acceptance
-  that the credential can place, modify or cancel orders if exposed or misused.
-  The optional eToro wizard read requires explicit account/retention consent.
-  Explicit manual refresh may also request a bounded closed-trade history read;
-  that data remains in dashboard memory and never becomes journal accounting.
-  Startup refresh additionally requires verified Read-only scope, an expiring
-  1-30 day permission and revocation; it attempts one current-portfolio read set
-  per server startup and does not retry failures or collect trade history.
+  activation, never page refresh. The fixed eToro adapter has no order methods
+  and does not verify key scope; a trade-capable key can place, modify or
+  cancel orders if exposed or misused. Eligibility and retention rights remain
+  unresolved and the operator's responsibility. Manual refresh may also request
+  bounded closed-trade history, which remains in dashboard memory and never
+  becomes journal accounting. Once activated, startup refresh has no separate
+  approval expiry; it attempts one current-portfolio read set per server
+  startup, without retries or trade history. Activation can be disabled.
   Status/page loads never collect, and provider observations remain separate
-  from journal accounting.
-  This acceptance does not verify read-only scope; the adapter has no order
-  methods. Failed collection cannot refresh source clocks or repair journal
-  differences. Native-currency evidence cannot manufacture GBP valuation.
+  from journal accounting. Failed collection cannot refresh source clocks or
+  repair journal differences. Native-currency evidence cannot manufacture GBP
+  valuation.
 - Dynamic-share monitoring uses completely valued, fresh, role-attributed
   non-LISA investment holdings, excluding savings, LISA and all cash.
   Unassigned/missing classification or marks makes it unavailable. The

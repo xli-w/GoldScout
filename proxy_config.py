@@ -11,7 +11,8 @@ from pathlib import Path
 import secrets
 import stat
 import threading
-from typing import Dict, Optional, TextIO, Tuple
+from types import MappingProxyType
+from typing import Dict, Mapping, Optional, TextIO, Tuple
 from urllib.parse import unquote, urlsplit
 
 from dotenv.parser import parse_stream
@@ -37,6 +38,17 @@ class HTTPProxy:
     host: str
     port: int
     authorization: Optional[str] = field(repr=False)
+
+
+@dataclass(frozen=True, repr=False)
+class ConnectionSnapshot:
+    """Effective values and their revision; never include either in a repr."""
+
+    revision: int
+    values: Mapping[str, str] = field(repr=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
 
 
 def _dotenv_loading_disabled() -> bool:
@@ -272,6 +284,28 @@ def connection_revision(*names: str, path=None) -> int:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).digest()[:8], "big")
+
+
+def connection_snapshot(*names: str, path=None) -> ConnectionSnapshot:
+    """Resolve effective values once and derive the revision from those same values."""
+    selected = Path(path or CONNECTIONS_PATH).absolute()
+    if not names or any(name not in CONNECTION_NAMES for name in names):
+        raise ProxyConfigurationError("Connection revision request is invalid")
+    disabled = _dotenv_loading_disabled()
+    private_sources_disabled = disabled and selected == CONNECTIONS_PATH.absolute()
+    settings = _connection_defaults() if private_sources_disabled else read_connection_settings(selected)
+    dotenv = {} if disabled else _read_proxy_dotenv(names) or {}
+    saved = settings["values"]
+    environment = {name: os.environ.get(name, "") for name in names
+                   if name not in saved and name not in dotenv}
+    values = {name: saved[name] if name in saved else
+              dotenv[name] if name in dotenv else environment.get(name, "") for name in names}
+    revision = int.from_bytes(
+        hashlib.sha256(json.dumps(
+            [[settings["versions"][name] for name in names],
+             [values[name] for name in names]], separators=(",", ":")
+        ).encode("utf-8")).digest()[:8], "big")
+    return ConnectionSnapshot(revision, values)
 
 
 def update_connection_settings(updates: dict, clear_names=(), *,

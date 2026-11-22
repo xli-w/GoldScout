@@ -157,14 +157,15 @@ corresponding provider unavailable.
 environment contains a proxy, and may allow a direct request.** The example
 therefore leaves its entries commented out. Values are literal; variable
 interpolation is not performed. Close older GoldScout processes before changing connection settings. Changed
-eToro keys invalidate saved connection consent and CLI monitoring approvals;
-reauthorize before another read. A request already dispatched cannot be
-recalled.
+eToro keys invalidate the saved dashboard connection; activate it again before
+another dashboard read. A running CLI watch stops when its pinned keys change
+and must be restarted to use the new keys. A request already dispatched
+cannot be recalled.
 
 #### Proxy configuration
 
 `TRADER_PROXY_URL` configures the shared HTTP CONNECT proxy for public feeds,
-hosted AI and the separately approved eToro read adapter. It does not affect
+hosted AI and the separately activated eToro read adapter. It does not affect
 local-loopback AI or configure other applications; `HTTP_PROXY` and
 `HTTPS_PROXY` are not substitutes. For HTTP Basic authentication its form is
 `http://<username>:<password>@<proxy-host>:<port>`; percent-encode reserved

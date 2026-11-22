@@ -47,9 +47,10 @@ For a selected workspace, the optional Goals page uses a separate local profile
 outside the journal workspace. Source-checkout and `--workspace` launches select
 `.goldscout-planning/<workspace-name>.json` beside the workspace by default;
 when selecting a journal directly, opt in with `--planning-profile <path>`.
-Viewing does not create that file. Changes require a revision-bound preview and
-explicit confirmation. A companion lock file serializes writes from concurrent
-dashboard instances. The profile stores purpose, target/access dates, liquidity
+Viewing does not create that file. Saving requests a revision-bound preview and
+commits it in one action; an uncertain save can be retried using the same request.
+A companion lock file serializes writes from concurrent dashboard instances.
+The profile stores purpose, target/access dates, liquidity
 needs, comfort with losses, user-entered current/monthly amounts, and optional
 whole-account associations as local plaintext. An account can be assigned to
 only one goal and associations do not move or reserve money. A linked amount
@@ -59,7 +60,7 @@ portfolio identity and journal revision are checked at preview and confirmation;
 values are dated records, not live provider balances. Simple illustrations
 assume no growth, interest, fees, tax or withdrawals and are not forecasts or
 recommendations. Existing v1 and v2 goal profiles are read with new fields
-defaulted to unknown or unlinked and upgraded only after a confirmed save. It is not part of journal
+defaulted to unknown or unlinked and upgraded only after a save. It is not part of journal
 backups or sent to hosted AI. Choose a device and backup location you control.
 
 Normal launches enable manual recording for the selected journal, including
@@ -111,7 +112,7 @@ first; open an account for its evidence, actions and reminder settings.
 starts with the first account and resumes after a browser restart when the
 journal revision is unchanged. Supported account updates confirmed in that
 review preserve unaffected checks; other or outside journal changes make the
-saved checklist stale. Starting over requires confirmation and leaves the saved
+saved checklist stale. Starting over leaves the saved
 comparison point untouched. Completion counts accounts reviewed, not issues resolved:
 remaining missing values, cash differences, overdue reminders and checks
 affected by corrections stay visible in the completion summary and account actions. This progress is
@@ -129,8 +130,8 @@ Explicit account/platform charges can be recorded as fees and reduce recorded
 cash without being treated as an external withdrawal. The fee total still omits
 many possible costs, including fund charges, taxes, FX, spread and slippage.
 Setup and recording forms also save incomplete drafts in the same browser and
-workspace context. Only form fields are restored; a full preview and its
-acknowledgement checkbox are not resumed. The separate uncertain-save safeguard
+workspace context. Only form fields are restored; a full preview is not resumed.
+The separate uncertain-save safeguard
 retains an exact pending confirmation reference so only that same save can be
 retried; it blocks new entries until resolved. Recovery re-entry is not saved.
 If browser storage is unavailable or malformed, the page surfaces that state
@@ -200,9 +201,9 @@ update link still requires independent source evidence and reviewed recording.
 
 Recording previews validate both complete report shapes and show valuation,
 return and drawdown before and after the proposed record, together with new
-evidence warnings. Losing a previously available value or performance metric
-requires explicit acknowledgement before a new confirmation. Uncertain-save
-retries retain the same existing confirmation reference. Deposits/withdrawals
+evidence warnings. The impact remains visible when a value or performance
+metric becomes unavailable. Uncertain-save retries retain the same existing
+confirmation reference. Deposits/withdrawals
 also show a preflight reminder to record source-supported flow-time prices
 across the whole portfolio first. Cash-check previews show their replayed
 observed balance and difference; a match is not independent verification.

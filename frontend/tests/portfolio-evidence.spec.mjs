@@ -474,10 +474,6 @@ test("guided review resumes, records completion, and restarts when journal revis
   const checkpointKey = `goldscout.review-checkpoint.v1.${report.portfolio_id}`;
   const originalCheckpoint = await page.evaluate(key => localStorage.getItem(key), checkpointKey);
   await guided.getByRole("button", { name: "Start a new review" }).click();
-  await guided.getByRole("button", { name: "Keep current progress" }).click();
-  await expect(guided).toContainText("The journal changed after this review began");
-  await guided.getByRole("button", { name: "Start a new review" }).click();
-  await guided.getByRole("button", { name: "Start a new review and replace progress" }).click();
   await expect(page.getByRole("heading", { name: active[0].name, exact: true })).toBeVisible();
   expect(await page.evaluate(key => localStorage.getItem(key), checkpointKey)).toBe(originalCheckpoint);
 });

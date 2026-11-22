@@ -72,10 +72,11 @@ class BootstrapTests(unittest.TestCase):
         state.mkdir(parents=True)
         (state / "connection.json").write_text("{}", encoding="utf-8")
         (state / "startup.lock").write_bytes(b"0")
+        (state / "connection.lock").write_bytes(b"0")
         self.assertEqual(workspace_status(self.path, NOW)["state"], "empty")
         self.preview()
         self.assertEqual(
-            {item.name for item in state.iterdir()}, {"connection.json", "startup.lock"})
+            {item.name for item in state.iterdir()}, {"connection.json", "startup.lock", "connection.lock"})
 
         (state / "unexpected.json").write_text("{}", encoding="utf-8")
         self.assertEqual(workspace_status(self.path, NOW)["state"], "blocked")

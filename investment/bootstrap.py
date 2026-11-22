@@ -112,7 +112,7 @@ def inspect_workspace(path, now=None):
         etoro_directory = path / ETORO
         if not etoro_directory.is_dir():
             raise InvestmentError("The recognized eToro state location is not a directory")
-        if directory_entries(etoro_directory) - {"connection.json", "startup.lock"}:
+        if directory_entries(etoro_directory) - {"connection.json", "startup.lock", "connection.lock"}:
             raise InvestmentError("Unexpected eToro state entries; preserve and inspect them")
     if names - {database.name, exported.name, operation.name, ETORO}:
         raise InvestmentError("Unexpected workspace entries; preserve and inspect them")

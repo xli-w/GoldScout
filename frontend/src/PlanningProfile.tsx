@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { planningConfirm, planningPreview, planningSession, type GoalInput, type PlanningGoal, type PlanningPreview, type PlanningSession } from "./planning-api";
-import { pounds, timestamp } from "./api";
+import { pounds } from "./api";
 import { goalScenario } from "./planning-scenarios";
 import { loadInvestment, type InvestmentSnapshot } from "./InvestmentView";
 import { duplicateAccountLinks, linkedGoalValue, recordedAccountValues } from "./goal-values";
@@ -70,6 +70,14 @@ export function PlanningProfilePage() {
     setPreview(null);
   }
 
+  async function reloadAfterError() {
+    setBusy(true); setError("");
+    try { await reload(); }
+    catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Local planning is unavailable.");
+    } finally { setBusy(false); }
+  }
+
   async function reloadPortfolio(signal?: AbortSignal) {
     setPortfolioLoading(true);
     setPortfolioError("");
@@ -106,7 +114,6 @@ export function PlanningProfilePage() {
     ? portfolio.accounts.filter(account => account.status === "active" && account.cash_gbp !== null)
     : [];
   const duplicateLinks = useMemo(() => duplicateAccountLinks(goals), [goals]);
-  const previewDuplicateLinks = useMemo(() => duplicateAccountLinks(preview?.goals ?? []), [preview]);
 
   function updateGoal(key: string,
     field: Exclude<keyof GoalInput, "linked_portfolio_id" | "linked_account_ids">, value: string) {
@@ -141,40 +148,36 @@ export function PlanningProfilePage() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!session?.enabled || !session.csrf || !session.profile_hash || busy) return;
-    setBusy(true); setError(""); setSaved(""); setPreview(null);
-    try {
-      const result = await planningPreview(session.csrf, {
-        request_id: crypto.randomUUID(),
-        expected_revision: session.revision,
-        expected_hash: session.profile_hash,
-        goals: goals.map(({ key: _key, ...goal }) => goal),
-        expected_portfolio_id: goals.some(goal => goal.linked_account_ids.length > 0)
-          ? portfolio?.portfolio_id ?? null : null,
-        expected_journal_revision: goals.some(goal => goal.linked_account_ids.length > 0)
-          ? portfolio?.revision ?? null : null,
-      });
-      setPreview(result);
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Goal preview was rejected.";
-      setError(message);
-      if (message.includes("planning portfolio changed")) void reloadPortfolio();
-    } finally { setBusy(false); }
-  }
-
-  async function confirm() {
-    if (!session?.csrf || !preview || busy) return;
     setBusy(true); setError(""); setSaved("");
+    let pending = preview;
     try {
-      const result = await planningConfirm(session.csrf, preview.preview_id);
+      if (!pending) {
+        pending = await planningPreview(session.csrf, {
+          request_id: crypto.randomUUID(),
+          expected_revision: session.revision,
+          expected_hash: session.profile_hash,
+          goals: goals.map(({ key: _key, ...goal }) => goal),
+          expected_portfolio_id: goals.some(goal => goal.linked_account_ids.length > 0)
+            ? portfolio?.portfolio_id ?? null : null,
+          expected_journal_revision: goals.some(goal => goal.linked_account_ids.length > 0)
+            ? portfolio?.revision ?? null : null,
+        });
+        setPreview(pending);
+      }
+      const result = await planningConfirm(session.csrf, pending.preview_id);
+      setPreview(null);
       setSaved(`Saved as local planning revision ${result.revision}.`);
       try { await reload(); }
       catch {
-        setError("The save was confirmed, but the latest profile could not be reloaded. Keep this page open and retry.");
+        setError("The profile was saved, but the latest profile could not be reloaded. Keep this page open and retry.");
       }
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Goal save was rejected.";
+      const detail = reason instanceof Error ? reason.message : "Goal save was rejected.";
+      const message = pending
+        ? `${detail} The save may have completed; retry the same save or discard this draft and reload the profile before making changes.`
+        : detail;
       setError(message);
-      if (message.includes("planning portfolio changed")) {
+      if (detail.includes("planning portfolio changed")) {
         setPreview(null);
         void reloadPortfolio();
       }
@@ -202,15 +205,11 @@ export function PlanningProfilePage() {
     {duplicateLinks.size > 0 && <p role="alert">
       An account is linked to more than one goal. Values for affected goals are unavailable until duplicate assignments are removed.
     </p>}
-    {session && <p className="planning-revision">Saved profile revision {session.revision}. No profile file is created until you confirm a save.</p>}
+    {session && <p className="planning-revision">Saved profile revision {session.revision}. No profile file is created until you save.</p>}
     {error && <div role="alert" className="error-state"><p>{error}</p>
-      {session ? <button type="button" disabled={busy} onClick={() => {
-        setError(""); void reload().catch(reason =>
-          setError(reason instanceof Error ? reason.message : "Local planning is unavailable."));
-      }}>Reload profile</button> : <button type="button" onClick={() => {
-        setError(""); void reload().catch(reason =>
-          setError(reason instanceof Error ? reason.message : "Local planning is unavailable."));
-      }}>Retry</button>}
+      <button type="button" disabled={busy} onClick={() => void reloadAfterError()}>
+        {session ? "Discard draft and reload profile" : "Retry"}
+      </button>
     </div>}
     {saved && <p role="status" className="success-message">{saved}</p>}
     {session && session.enabled && <form className="recording-form" onSubmit={submit}>
@@ -374,40 +373,10 @@ export function PlanningProfilePage() {
       </fieldset>
       <div className="recording-actions">
         <button type="submit" disabled={busy || !session.csrf || !session.profile_hash}>
-          {busy ? "Working…" : "Preview changes"}
+          {busy ? "Saving…" : preview ? "Retry save" : "Save goals"}
         </button>
       </div>
     </form>}
-    {preview && <section className="recording-preview" aria-label="Review goals before saving">
-      <h2>Review before saving</h2>
-      <p>This will replace the separate planning profile with revision {preview.revision}; it will not update the investment journal.</p>
-      <ul>{preview.goals.map(goal => {
-        const linkedAmount = linkedGoalValue(goal, portfolio, accountValues, previewDuplicateLinks);
-        return <li key={goal.id}>
-        <strong>{goal.name}</strong>
-        {` · ${goal.purpose === "not_set" ? "Purpose not set" : goal.purpose.replaceAll("_", " ")}`}
-        {goal.target_amount_gbp && ` · £${goal.target_amount_gbp}`}
-        {goal.target_date && ` · target ${goal.target_date}`}
-        {goal.access_date && ` · access from ${goal.access_date}`}
-        {` · liquidity: ${goal.liquidity.replaceAll("_", " ")}`}
-        {` · loss comfort: ${goal.loss_tolerance.replaceAll("_", " ")}`}
-        {goal.linked_account_ids.length > 0 && ` · linked accounts: ${
-          goal.linked_account_ids.map(id =>
-            portfolio?.accounts.find(account => account.id === id)?.name ?? id).join(", ")}`}
-        {goal.linked_account_ids.length > 0 && ` · recorded amount: ${
-          linkedAmount === null ? "unavailable"
-            : `${pounds(linkedAmount.toString(), true)} as of ${portfolio?.as_of}`}`}
-        {goal.linked_account_ids.length === 0 && goal.current_amount_gbp !== null &&
-          ` · set aside £${goal.current_amount_gbp}`}
-        {goal.monthly_contribution_gbp !== null && ` · £${goal.monthly_contribution_gbp}/month expected`}
-        {goal.notes && <p>{goal.notes}</p>}
-      </li>})}</ul>
-      <p>Preview expires {timestamp(preview.expires_at)}.</p>
-      <button type="button" disabled={busy} onClick={() => void confirm()}>
-        {busy ? "Saving…" : "Confirm and save locally"}
-      </button>
-      <button type="button" disabled={busy} onClick={() => setPreview(null)}>Edit goals</button>
-    </section>}
     <p className="planning-storage-note">
       This file is separate from the accounting workspace. It is local plaintext, not an encrypted vault;
       use a device and backup location you control. Removing it does not affect journal records.

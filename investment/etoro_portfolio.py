@@ -429,6 +429,8 @@ def collect_portfolio(transport, credential_accessor, environment, *, now=None,
         balance_payload = transport(balance_path, {
             **credentials, "x-request-id": str(uuid.uuid4())})
     except etoro.EToroError as exc:
+        if exc.code in ("approval_interrupted", "cancellation_unconfirmed"):
+            raise
         error_code = exc.code
     except Exception:
         error_code = "collection_unavailable"

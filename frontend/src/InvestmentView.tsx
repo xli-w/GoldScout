@@ -1025,7 +1025,6 @@ function InvestmentRecording() {
   const [priceTargetStatus, setPriceTargetStatus] = useState<"matched" | "stale" | null>(null);
   const [cashTargetStatus, setCashTargetStatus] = useState<"matched" | "stale" | null>(null);
   const [updateTargetStatus, setUpdateTargetStatus] = useState<"matched" | "stale" | null>(null);
-  const [impactAcknowledged, setImpactAcknowledged] = useState(false);
   const [role, setRole] = useState<"core" | "dynamic" | "unassigned">("unassigned");
   const [assignmentAsset, setAssignmentAsset] = useState<"cash" | "holding">("cash");
   const [accountId, setAccountId] = useState("");
@@ -1079,7 +1078,6 @@ function InvestmentRecording() {
   const [draftReady, setDraftReady] = useState(false);
   const [draftDirty, setDraftDirty] = useState(false);
   const [draftError, setDraftError] = useState("");
-  const resolvedConfirmation = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -1128,7 +1126,6 @@ function InvestmentRecording() {
     setPriceTargetStatus(null);
     setCashTargetStatus(null);
     setUpdateTargetStatus(null);
-    setImpactAcknowledged(false);
     setMessage(null);
     async function refreshSession() {
       try {
@@ -1317,15 +1314,6 @@ function InvestmentRecording() {
     window.addEventListener("storage", changed);
     return () => window.removeEventListener("storage", changed);
   }, []);
-  useEffect(() => {
-    if (!pending) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      if (!resolvedConfirmation.current) { event.preventDefault(); event.returnValue = ""; }
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [pending]);
-
   async function makePreview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!session?.csrf) return;
@@ -1451,7 +1439,6 @@ function InvestmentRecording() {
         throw new Error("The preview's valuation and performance evidence failed validation. No confirmation is available; request a fresh preview.");
       if (recordingVersion(window.localStorage) !== version) throw new RecordingPreviewChangedError();
       setPreviewVersion(version);
-      setImpactAcknowledged(false);
       setPreview(result);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "preview_rejected");
@@ -1463,10 +1450,6 @@ function InvestmentRecording() {
 
   async function confirmPreview() {
     if (!session?.csrf || (!preview && !pending)) return;
-    if (!pending && preview && losesReportedMetrics(preview).length > 0 && !impactAcknowledged) {
-      setMessage("Review and acknowledge the loss of reported figures before confirming.");
-      return;
-    }
     const eventId = preview?.event.id;
     const attempt = pending ?? (typeof eventId === "string" && preview &&
       Number.isSafeInteger(preview.revision) && preview.revision >= 0
@@ -1482,7 +1465,6 @@ function InvestmentRecording() {
     }
     setBusy(true);
     setMessage(null);
-    resolvedConfirmation.current = false;
     setPending(attempt);
     let reviewNotice = "";
     try {
@@ -1501,7 +1483,6 @@ function InvestmentRecording() {
           }
         }
       });
-      resolvedConfirmation.current = true;
       setPending(null);
       setPreview(null);
       let savedDraftNotice = "";
@@ -1636,13 +1617,9 @@ function InvestmentRecording() {
       </dl>
       <RecordReview preview={preview} session={session} />
       <RecordingImpact preview={preview} />
-      {losesReportedMetrics(preview).length > 0 && !pending && <label className="impact-acknowledgement">
-        <input type="checkbox" checked={impactAcknowledged} onChange={event => setImpactAcknowledged(event.target.checked)} />
-        I understand that these previously available figures will become unavailable. I have checked the source evidence and the warning.
-      </label>}
       <p className="position-note">Only confirm if the account, figures, dates, source and before/after values match the record you checked.</p>
       {pending && <p role="alert">This record may already have been saved. Do not enter it again; retry the same confirmation.</p>}
-      <button type="button" disabled={busy || (!pending && losesReportedMetrics(preview).length > 0 && !impactAcknowledged)}
+      <button type="button" disabled={busy}
         onClick={() => void confirmPreview()}>{pending ? "Retry same confirmation" : "Confirm and append record"}</button>
       <button type="button" disabled={busy || Boolean(pending)} onClick={() => setPreview(null)}>Cancel preview</button>
     </div> : <form className="recording-form" onSubmit={makePreview}

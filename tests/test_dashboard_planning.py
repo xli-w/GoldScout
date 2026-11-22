@@ -2,11 +2,12 @@ import json
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Barrier
 
 from dashboard.app import create_app
+from dashboard.monitoring_workflow import WorkflowError
 from dashboard.planning import PlanningError, PlanningProfile
 from investment.core import iso
 from investment.service import demo_events, demo_profile
@@ -150,6 +151,27 @@ class PlanningProfileTests(unittest.TestCase):
             self.assertEqual(
                 client.get("/api/investment/v1/planning/session").json()["goals"][0]["name"],
                 "Long-term goal")
+
+    def test_planning_save_has_no_separate_preview_expiry(self):
+        planning = PlanningProfile(self.path)
+        session, token = planning.session_payload(None, NOW)
+        preview = planning.preview(
+            token, "delayed-save", session["revision"], session["profile_hash"],
+            [self.basic_goal("Reserve")], None, None, NOW)
+        result = planning.confirm(token, preview["preview_id"], NOW + timedelta(minutes=6))
+        self.assertEqual(result, {"status": "saved", "revision": 1})
+        self.assertEqual(planning._read()["goals"][0]["name"], "Reserve")
+
+    def test_planning_preview_does_not_outlive_its_security_session(self):
+        planning = PlanningProfile(self.path)
+        session, token = planning.session_payload(None, NOW)
+        preview = planning.preview(
+            token, "expired-session", session["revision"], session["profile_hash"],
+            [self.basic_goal("Reserve")], None, None, NOW)
+        with self.assertRaises(WorkflowError) as error:
+            planning.confirm(token, preview["preview_id"], NOW + timedelta(minutes=15))
+        self.assertEqual(error.exception.code, "workflow_session_expired")
+        self.assertFalse(self.path.exists())
 
     def test_legacy_goal_profile_is_read_without_rewrite_and_upgraded_only_after_confirmation(self):
         self.path.parent.mkdir(parents=True)

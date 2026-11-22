@@ -30,6 +30,7 @@ test("requires a bound real snapshot, a recorded journal, and a valid current st
     value => { value.session.state = "revoked"; },
     value => { value.session.last_status = "refresh_failed"; },
     value => { value.session.snapshot_available = false; },
+    value => { value.snapshot = null; },
     value => { value.portfolioStatus = "refresh_failed"; },
     value => { value.reconciliationRequired = true; },
     value => { value.busy = true; },

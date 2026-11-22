@@ -17,7 +17,6 @@ from investment import InvestmentError
 MAX_PROFILE_BYTES = 64 * 1024
 MAX_GOALS = 20
 MAX_GOAL_ACCOUNTS = 50
-PREVIEW_TTL = timedelta(minutes=5)
 AMOUNT_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,2})?$")
 DATE_PATTERN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 LEGACY_GOAL_FIELDS = {"name", "target_amount_gbp", "target_date", "notes"}
@@ -295,16 +294,20 @@ class PlanningProfile:
         existing = self.sessions.existing_preview(token, request_id, request_hash, now)
         if existing is not None:
             return existing
+        _, session = self.sessions.session(token, now)
+        if session is None:
+            raise PlanningError("planning_session_expired", 401)
+        expires = session["expires"]
         preview_id = secrets.token_urlsafe(32)
         response = {
             "preview_id": preview_id,
             "revision": profile["revision"] + 1,
             "goals": normalized,
-            "expires_at": (now + PREVIEW_TTL).isoformat().replace("+00:00", "Z"),
+            "expires_at": expires.isoformat().replace("+00:00", "Z"),
         }
         pending = {
             "preview_id": preview_id,
-            "expires": now + PREVIEW_TTL,
+            "expires": expires,
             "response": response,
             "receipt": None,
             "expected_hash": expected_hash,

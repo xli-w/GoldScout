@@ -1,4 +1,4 @@
-"""Investment records and local monitoring. Only explicit approved monitor-collect may make provider reads."""
+"""Investment records and local monitoring. Only explicit monitor-collect may make provider reads."""
 
 import argparse
 import json
@@ -54,9 +54,8 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             command.add_argument("--attempt", required=True, help="operator-normalized attempt JSON, not provider exports")
         if name == "monitor-collect":
             command.add_argument("--account-id", required=True)
-            command.add_argument("--approval", required=True, help="nonsecret time-bounded operator attestation")
             command.add_argument("--allow-network", action="store_true")
-            command.add_argument("--watch", action="store_true", help="explicit daily loop; stops on errors or approval expiry")
+            command.add_argument("--watch", action="store_true", help="explicit daily loop; stops when interrupted or on error")
     review_init = commands.add_parser(
         "review-init", help="explicitly initialize a separate local monitoring review store")
     review_init.add_argument("--database", required=True)
@@ -139,11 +138,12 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             elif args.command == "monitor-purge":
                 value = purge_expired(args.cache, monitoring, observed)
             elif args.command == "monitor-collect":
-                from .monitoring_runtime import collect_once
+                from .monitoring_runtime import WatchCredentialRevision, collect_once
+                watch_revision = WatchCredentialRevision() if args.watch else None
                 while True:
                     value = collect_once(args.database, monitoring, args.cache, args.account_id,
-                                         load_json(args.approval), allow_network=args.allow_network,
-                                         now=requested_now)
+                                         allow_network=args.allow_network, now=requested_now,
+                                         watch_credential_revision=watch_revision)
                     if not args.watch:
                         break
                     print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout, flush=True)

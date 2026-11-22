@@ -56,7 +56,7 @@ test("settings persist preferences and keep entered credentials write-only", asy
   await page.getByLabel("eToro API key").fill(secret);
   await page.getByLabel("IPv4 DNS server").fill("8.8.8.8");
   await page.getByRole("button", { name: "Save connection settings" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Reconnect eToro before another read" }))
+  await expect(page.getByRole("status").filter({ hasText: "Re-enable eToro before another read" }))
     .toBeVisible();
   expect(savedCredentials).toHaveLength(1);
   expect(savedCredentials[0].updates.GOLDSCOUT_ETORO_API_KEY).toBe(secret);

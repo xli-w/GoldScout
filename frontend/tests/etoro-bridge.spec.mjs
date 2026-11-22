@@ -24,10 +24,11 @@ async function fixture(page) {
       source_balance: "105", source_currency: "USD", display_currency: "GBP",
       exchange_rate: "0.77", source_as_of: null, received_at: "2026-07-01T10:02:00Z" },
   };
-  const connection = { environment: "real", account_id: 12345, expires_at: null, revoked_at: null, revision: 1 };
-  const session = { enabled: true, csrf: "synthetic-csrf", state: "connected",
+  const connection = { environment: "real", account_id: 12345, revoked_at: null, revision: 1 };
+  const session = { enabled: true, csrf: "synthetic-csrf", state: "startup_refresh_enabled",
+    read_generation: 0, connection_revision: 1,
     last_status: "success", snapshot_available: true, connection };
-  const portfolio = { state: "connected", last_status: "success", snapshot, connection };
+  const portfolio = { state: "startup_refresh_enabled", last_status: "success", snapshot, connection };
   await page.route("**/api/v1/settings", route => route.fulfill({
     json: { mode: "recorded", workspace: "investment" },
   }));
@@ -115,6 +116,27 @@ test("changing the account or journal revision clears temporary pairings and acc
   await expect(bridge.getByRole("list", { name: "Temporary holding pairings" })).toHaveCount(0);
 });
 
+test("a later same-account activation hides the old bridge on status refresh", async ({ page }) => {
+  const { session, portfolio, connection } = await fixture(page);
+  const writes = [];
+  page.on("request", request => {
+    if (request.url().includes("/api/investment/v1/etoro/") && request.method() !== "GET")
+      writes.push(request.url());
+  });
+  await page.goto("/investment?view=tools");
+  await expect(page.getByRole("region", { name: "Review eToro against journal" })).toBeVisible();
+  connection.revision = 2;
+  session.connection_revision = 2;
+  session.snapshot_available = false;
+  session.last_status = "connection_changed";
+  portfolio.snapshot = null;
+  portfolio.last_status = "connection_changed";
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("region", { name: "Review eToro against journal" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Latest eToro read" })).toHaveCount(0);
+  expect(writes).toEqual([]);
+});
+
 for (const reason of ["demo", "wrong account", "failed read", "conflicting session",
   "missing session snapshot", "future clock", "duplicate source row", "unavailable journal"]) {
   test(`does not open a bridge with ${reason}`, async ({ page }) => {
@@ -142,6 +164,6 @@ for (const reason of ["demo", "wrong account", "failed read", "conflicting sessi
     if (reason !== "unavailable journal") {
       await expect(page.getByRole("region", { name: "eToro portfolio" })).toContainText("Side-by-side review is unavailable");
     }
-    expect(session.state).toBe("connected");
+    expect(session.state).toBe("startup_refresh_enabled");
   });
 }

@@ -252,7 +252,7 @@ Account-specific compatibility remains unverified.
 The transport fixes the host and allowlists documented GET paths for the P&L
 summary, Real/Demo aggregate portfolio, Trading-account GBP display balance,
 and bounded Real/Demo closed-trade history pages. The dashboard requests
-history only on an explicitly confirmed manual refresh; startup reads do not
+history only on a manual refresh; startup reads do not
 request it. It validates and pins public DNS addresses, uses TLS hostname
 verification, bounds requests/response sizes, refuses redirects and honors
 the configured proxy without direct fallback. It also honors
@@ -271,74 +271,50 @@ orders, FX, GBP value and returns are not inferred or written to accounting.
 No source clock means freshness remains unavailable even after a successful GET.
 The raw response and private instrument/position identifiers are discarded.
 
-Activation requires separate task-specific approval plus operator verification
-of account eligibility, account binding and permitted retention. Prefer a key
-with verified Read-only scope. A supervised read may also use a broader key if
-the operator explicitly accepts that the credential could place, modify or
-cancel orders if exposed or misused. That acknowledgement does not verify
-read-only permission or reduce the credential's actual authority. The adapter
-has no order/write methods or arbitrary URL support.
-Resolve [provider gates](provider-feasibility.md) first; never request keys or
-statements in chat or test permissions by attempting a trade.
+The CLI requires `--allow-network`, an eToro-mapped account and a cache bound to
+the selected monitoring profile. It does not require an approval file or apply
+an approval expiry. Account identity, eligibility and permitted retention are
+not verified by the provider response; see [provider gates](provider-feasibility.md).
+Prefer a key with verified Read-only scope: a broader key can place, modify or
+cancel orders if exposed or misused, even though this adapter has no order/write
+methods. Never request keys or statements in chat or test permissions with a trade.
 
-The operator may create a nonsecret approval file, bound to the monitoring
-profile hash and selected local account alias:
-
-```json
-{
-  "profile_hash": "replace-with-monitoring-report-profile-hash",
-  "account_id": "broker",
-  "approved_at": "2026-11-17T12:00:00Z",
-  "expires_at": "2026-11-17T13:00:00Z",
-  "read_scope_verified": false,
-  "trade_capable_key_risk_accepted": true,
-  "eligibility_verified": true,
-  "retention_rights_verified": true,
-  "account_binding_verified": true,
-  "supervised_read_approved": true,
-  "credential_revision": 0,
-  "evidence": "Operator-verified eligibility, binding and retention; accepts trade-capable key risk for supervised reads until expiry"
-}
-```
-
-Set exactly one of `read_scope_verified` or
-`trade_capable_key_risk_accepted` to `true`. If scope is unknown or broader than
-read-only, do not claim it was verified: set `read_scope_verified` to `false`
-and explicitly accept the broader-key risk instead. Approval files must include
-the `trade_capable_key_risk_accepted` and current `credential_revision` fields;
-older or mismatched approvals fail closed.
-Approval has a maximum one-day lifetime and is an operator attestation, not an
-authenticated approval service or proof of permissions. It is reusable for
-explicit collection runs while valid, including the daily `--watch` loop; it is
-not consumed by a successful or failed run. Every run still requires
-`--allow-network`, rechecks the approval and credential revision, and records
-its own result. The operator supplies
+The operator supplies
 `GOLDSCOUT_ETORO_API_KEY` and `GOLDSCOUT_ETORO_USER_KEY` through the local
 Settings page, `.env`, or process environment, never command-line arguments or
 committed files. The Settings fields are write-only. See
 [connection configuration](intelligence.md#connection-configuration) for
-precedence and plaintext storage risks. Only the explicitly invoked collector
-uses them after its approval gates. `credential_revision` is the current
-revision shown on Settings; it binds the approval to the effective eToro keys
-and changes when either key changes.
-Approval is checked against the current clock and credential revision before
-dispatch, and again after DNS and TLS setup for the built-in adapter. An already dispatched
-request cannot be retracted; an expired approval prevents publishing its
-result. If cancellation cannot be confirmed, the collector reports that the
-request may still be in flight. If no trustworthy completion time is
-available, no attempt is recorded rather than inventing a timestamp.
+precedence and plaintext storage risks. The collector checks the credential
+values and revision from the same effective snapshot before dispatch and again
+after DNS and TLS setup for the built-in adapter. The snapshot values are used
+for the request. It checks again after the response, before publication: a
+changed or unavailable snapshot prevents a success and records an interrupted
+attempt if the completion clock and cache are available. An already dispatched
+request cannot be retracted. These checks are not atomic with credential changes
+or cache publication: transient changes between checks can be missed. The
+separate settings file, environment and optional connection file are not read
+in a single cross-source transaction. If cancellation cannot be confirmed, the
+collector reports that the request may still be in flight. If no trustworthy
+completion time is available, no attempt is recorded rather than inventing a
+timestamp.
 
 ```powershell
-python -m investment monitor-collect --database .\investment.sqlite3 --monitoring-profile .\monitoring.json --cache .\monitoring.sqlite3 --account-id broker --approval .\read-approval.json --allow-network
+python -m investment monitor-collect --database .\investment.sqlite3 --monitoring-profile .\monitoring.json --cache .\monitoring.sqlite3 --account-id broker --allow-network
 ```
 
 Optional `--watch` waits one day between collections, never backfills missed
-intervals, and stops on an error or expired approval. Given the short approval
-lifetime it requires renewed operator approval before another day's read;
-this is not unattended standing authority. Ctrl+C stops the foreground loop.
+intervals, and continues until Ctrl+C or an error. Cache capacity and explicit
+purging requirements still apply. The credential revision is pinned for the
+watch: a changed revision detected at the next cycle stops it before another
+request. The profile is loaded at startup; restart the loop to use profile
+edits. Ctrl+C stops the foreground loop.
 No OS task/service is installed and no collection process starts with the
 dashboard. Concurrent publications serialize through SQLite; the in-process
 transport permits only one active request and bounds unresolved DNS workers.
+Concurrent completions published out of timestamp order can fail instead of
+recording the earlier attempt. The CLI does not pin the cache instance between
+preflight and publication, so replacing it during a collection can redirect the
+result to a different cache with the same profile.
 
 ### Startup wizard portfolio view
 
@@ -346,8 +322,8 @@ The local setup wizard has a separate eToro view using the documented
 aggregate-portfolio read for the explicitly selected Real or Demo environment,
 plus a separate Trading-account balance read with GBP display currency. The
 dashboard keeps the normalized provider observation in process memory only.
-Its `.etoro/connection.json` stores consent, account identity and expiry, not
-keys, raw responses or portfolio/history data. A separately confirmed manual
+Its `.etoro/connection.json` stores activation and account identity, not
+keys, raw responses or portfolio/history data. A manual
 refresh can also fetch up to 365 calendar days of closed trades, capped at
 1,000 rows. The history response has no row currency, instrument type or
 account ID and is not journal evidence. Startup refresh still reads only the
@@ -355,12 +331,12 @@ current portfolio. The separate GBP balance is provider-reported, lacks a
 source timestamp, and is not combined with the portfolio snapshot or used to
 value holdings.
 
-The initial read requires explicit consent, eligibility and retention checks,
-then confirmation of the returned account ID. A trade-capable key may be
-accepted only for that supervised one-time read. Automatic refresh requires
-verified Read-only scope, separate opt-in, an expiry of 1-30 days, and remains
-revocable. It attempts one read set on each server startup while permission is
-active; it does not retry failures. Status checks and page loads never collect.
+Enabling the connection performs an initial read and activates startup refresh.
+It accepts Read-only or trade-capable keys but cannot verify their scope.
+Eligibility, identity and permitted retention remain the operator's
+responsibility. While enabled it attempts one read set on each server startup,
+without an approval expiry or automatic retries. Disable the connection to stop
+startup reads. Status checks and page loads never collect.
 The dashboard routes are protected by loopback host, same-origin and short-lived
 CSRF defenses, which are not user authentication.
 

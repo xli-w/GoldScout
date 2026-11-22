@@ -33,8 +33,8 @@ only when the recorded portfolio value is complete and reconciles to its
 account records; it replaces, never adds to, a manually entered amount. Linked
 values are dated recorded evidence, not current provider balances. A simple
 contribution illustration assumes no growth, interest, fees, tax or withdrawals;
-it is not a forecast or investment recommendation. Editing requires a
-revision-bound preview and explicit save confirmation; viewing does not create
+it is not a forecast or investment recommendation. Editing saves in one action,
+using an internal revision-bound preview; viewing does not create
 the profile. The profile is local plaintext outside the journal workspace, is
 not included in journal backups, and is not sent to hosted AI. Source-checkout
 and `--workspace` launches choose a sibling `.goldscout-planning/<workspace-name>.json`
@@ -103,26 +103,32 @@ separately, and choose a protected off-device destination yourself.
 ## Optional eToro connection
 
 The startup wizard offers an optional eToro connection, and the portfolio shows
-the provider's latest in-memory read alongside the recorded accounts. Connecting
-requires an explicit one-time read, account-eligibility and
-permitted-retention attestations, and confirmation that the returned account ID
-matches the account selected. The eToro snapshot is displayed separately; it
+the provider's latest in-memory read alongside the recorded accounts. Choose
+the environment and explicitly enable the connection: it reads immediately,
+binds the returned account and enables one read per server startup until
+disabled. Either key scope is accepted; transport is fixed to GET and has no
+order runtime. The eToro snapshot is displayed separately; it
 does not create or populate a GBP journal account, balance, holding or mark.
 The provider figures are not included in portfolio totals. On the portfolio
 screen, connection controls remain accessible if its journal snapshot is
 unavailable. During interrupted or blocked setup, or after a setup receipt,
-status and revocation are available when the local eToro session is available,
-but new reads and connection confirmations are blocked there. If confirmation
+status and disabling are available when the local eToro session is available,
+but new reads are blocked there. If activation
 or a refresh has an uncertain outcome, the current dashboard tab blocks further
 reads, even after revocation; status and revocation remain available when
 possible. Interrupting a connection read or leaving the panel during a read or
 revocation also requires this check. A status or snapshot is not a request-specific
-receipt. This in-memory
-block does not survive reloads or coordinate other tabs or dashboard instances:
-reloading does not resolve the uncertainty. Check the dashboard's logs and
-verify the outcome before another read. The local server reads keys from
-private connection settings or the environment only after a read is requested,
-never from browser fields.
+receipt. The same tab can check a process-local activation receipt without
+another provider read; an unknown receipt does not prove that no activation
+committed. The receipt and server-observed read status are process-local; the
+receipt lookup reference and UI uncertainty block are tab-local and are lost on
+reload. Other tabs may observe the same process's uncertain status, but that
+status can change or be associated with a different connection. Neither other
+tabs nor other dashboard processes are guaranteed to block further reads after
+an uncertain outcome. Reloading does not resolve the uncertainty. Check the dashboard's logs and
+verify the outcome before another read. Keys remain in private server-side
+configuration, never browser fields; status checks use the effective credential
+revision without making a provider request.
 
 The panel shows provider account totals in their account currency, direct
 instrument aggregates with each asset's currency, and separate copy groups.
@@ -137,12 +143,12 @@ The documented
 portfolio response does not identify every instrument class or individual
 position leg, and pending-order details are unavailable beyond the provider's
 reserved-cash total. No FX, holdings valuation, or journal import is inferred.
-After a separately confirmed manual refresh, the panel also displays up to 365
+After a manual refresh, the panel also displays up to 365
 calendar days of closed-trade history, bounded to 1,000 rows. That history is
 kept in dashboard memory only; it is not fetched at startup or saved as history.
 The API response does not identify row-level currency, instrument type or
 account ID. It is not a complete transaction ledger or journal evidence.
-`.etoro/connection.json` holds consent and account identity, not keys or
+`.etoro/connection.json` holds activation, environment and account identity, not keys or
 portfolio/history data.
 
 For an available real-account read and a recorded journal, **Review this eToro
@@ -157,28 +163,33 @@ types; neither equality nor a difference establishes a match, transaction or
 error. The account-update link uses the normal manual review flow and does not
 copy provider data. No provider data or mapping is saved by this review.
 
-Startup collection is off unless separately enabled after the initial preview.
-It requires the operator to verify Read-only key scope and expires within
-1-30 days; at most one read set is attempted on each server startup while that
-permission remains active; startup reads collect the current portfolio only.
-A broader key may be accepted for a supervised one-time read, but cannot enable
-startup refresh. Status and page loads never collect. The operator can revoke
-startup refresh or explicitly confirm a one-time portfolio/history refresh
-even when startup permission is absent or expired. A revoked connection
-requires reconnecting; a broader key's trading risk is repeated at each manual
-confirmation. Revocation remains available while
+Activation has no arbitrary expiry. Legacy consent or permission records,
+including expired and revoked records, do not enable startup reads: explicitly
+enable again. Corrupt records are not overwritten or guessed. Startup reads
+collect the current portfolio only, at most once per server startup; status and
+page loads never collect. The visible panel rechecks local status on focus and
+periodically; a cached snapshot is hidden if its activation no longer matches.
+A change in another process may remain visible until the next status check.
+Manual refresh reads the bound portfolio and history
+immediately. Disable stops future reads until explicitly enabled again.
+Credentials with trading scope can place, modify or cancel orders if exposed or
+misused, even though this collector uses GET only. Disable remains available while
 a manual read is waiting for the provider. If revoked during a read,
 the tab treats the read outcome as unverified and blocks further reads pending
 the checks described above. Failed startup reads are not retried automatically.
 Known limitations: revocation cannot guarantee cancellation of an already sent
 request or eliminate races across dashboard instances; an expired local session
-or its shared command rate limit can also prevent revocation. Refresh checks
+or its shared command rate limit can also prevent revocation. Each read pins
+one credential snapshot and checks it before requests and publication. Resolving
+separate configuration sources and checking before dispatch are not one atomic
+transaction with external changes or revocation; an already dispatched GET
+cannot be recalled. Refresh checks
 the account binding before requesting the separate balance and history. A
 history failure is reported separately; it does not turn the current portfolio
 snapshot into history or journal evidence. Do not
 rely on the collector when those guarantees are required. The provider
 integration is engineering-only and has not been live-validated; eligibility,
-account-specific response behavior and data-retention rights remain the
+demo balance environment association, account-specific response behavior and data-retention rights remain the
 operator's responsibility.
 
 The wizard walks through **Accounts**, **Investments held (if any)**, **Starting
@@ -197,10 +208,10 @@ guessing. The opening is timestamped when you request
 its preview; setup does not backdate. Check that the figures still reflect the
 same current point in time rather than treating an old statement as current.
 Confirm the current-point check again after returning from a preview before
-requesting another one. If you change a holdings account to savings/deposit or
-remove an account that has holdings, the wizard asks before removing those
-linked rows; changing a holding's account or investment requires the affected
-completeness checks again. The review shows the preview time in local and UTC
+requesting another one. Removing an account or investment removes its linked
+holding rows. Changing a holdings account to savings/deposit keeps those rows,
+which must be reassigned or removed before saving; changing a holding's account
+or investment requires the affected completeness checks again. The review shows the preview time in local and UTC
 formats before confirmation. Form values can be resumed in the same browser;
 after returning, recheck all figures and completeness confirmations. Previews
 are always requested afresh.
@@ -264,8 +275,9 @@ every portfolio holding at the transaction time, available by that time, and
 record them before the flow. Do not invent prices or alter true dates to keep
 performance available. The preview shows the valuation and performance
 consequences before saving. If a previously available value, return or
-drawdown would disappear, review the warning and explicitly acknowledge it
-before confirmation. Cash-check previews show the historical difference
+drawdown would disappear, the preview shows a warning; the recording-impact
+checkbox is no longer required, while the bound record preview remains.
+Cash-check previews show the historical difference
 without changing cash; neither a match nor acknowledgement resolves earlier
 differences or verifies an account.
 
@@ -319,22 +331,10 @@ selects an existing journal and never falls back to setup.
 Same-origin, CSRF, revision and preview checks are mandatory but are not user
 authentication. Keep the dashboard on loopback.
 
-### Provider simplification follow-up
-
-Manual refresh requires a new one-time confirmation rather than automatic
-startup permission. Expiry disables startup reads but does not prevent a
-confirmed manual read; revocation blocks both until reconnection.
-
-Connection checks record distinct facts: real/demo environment, returned account
-identity, key scope or broader-key risk, API eligibility, and permitted local
-processing. They are operator attestations, not provider-verified guarantees.
-Consolidate repeated explanations rather than silently dropping those facts.
-Keep automatic refresh separately opt-in. Longer expiry and automatic retries
-are separate decisions, not consequences of simpler wording.
-
 Reassess provider scope semantics, eligibility, retention terms and response
-coverage before live validation. No automatic retry or persistent provider
-history is introduced by manual refresh.
+coverage before live validation. Manual refresh does not add automatic retries
+or persistent provider history. The separate CLI collector uses no approval
+file; its watch pins a credential revision and stops on a change.
 
 ## Manual CLI and input contract
 

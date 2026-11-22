@@ -29,7 +29,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                monitoring_workflow_enabled=False, setup_workspace=None, setup_enabled=False,
                etoro_connection_path=None, etoro_transport_factory=None,
                etoro_credential_accessor=None, planning_profile=None,
-               settings_path=None, connections_path=None):
+               settings_path=None, connections_path=None,
+               etoro_credential_revision_accessor=None, etoro_credential_snapshot_accessor=None):
     if setup_enabled and setup_workspace is None:
         raise ValueError("Setup requires a selected workspace")
     if setup_workspace is not None and (
@@ -90,18 +91,19 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         local_settings = LocalSettings(settings_path)
     from proxy_config import (
         CONNECTION_NAMES, CONNECTIONS_PATH, connection_revision, connection_settings_enabled,
-        configured_connection_values,
+        connection_snapshot,
     )
     selected_connections_path = Path(connections_path or CONNECTIONS_PATH).absolute()
-    if etoro_credential_accessor is None and etoro_connection_path is not None:
-        etoro_credential_accessor = lambda: {
-            "x-api-key": configured_connection_values(
-                "GOLDSCOUT_ETORO_API_KEY", connections_path=selected_connections_path
-            )["GOLDSCOUT_ETORO_API_KEY"],
-            "x-user-key": configured_connection_values(
-                "GOLDSCOUT_ETORO_USER_KEY", connections_path=selected_connections_path
-            )["GOLDSCOUT_ETORO_USER_KEY"],
-        }
+    if etoro_credential_accessor is not None or etoro_credential_revision_accessor is not None:
+        raise ValueError("Inject an atomic eToro credential snapshot instead of separate accessors")
+    if etoro_credential_snapshot_accessor is None and etoro_connection_path is not None:
+        def etoro_credential_snapshot_accessor():
+            snapshot = connection_snapshot(
+                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY",
+                path=selected_connections_path)
+            return snapshot.revision, {
+                "x-api-key": snapshot.values["GOLDSCOUT_ETORO_API_KEY"],
+                "x-user-key": snapshot.values["GOLDSCOUT_ETORO_USER_KEY"]}
     if etoro_connection_path is not None:
         etoro_connection_path = Path(etoro_connection_path).absolute()
         if (investment_database is not None
@@ -117,10 +119,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         from dashboard.monitoring_workflow import MonitoringWorkflowSessions
         etoro_connection = EToroConnection(
             etoro_connection_path, clock, transport_factory=etoro_transport_factory,
-            credential_accessor=etoro_credential_accessor,
-            credential_revision_accessor=lambda: connection_revision(
-                "GOLDSCOUT_ETORO_API_KEY", "GOLDSCOUT_ETORO_USER_KEY",
-                path=selected_connections_path))
+            credential_snapshot_accessor=etoro_credential_snapshot_accessor)
         etoro_sessions = MonitoringWorkflowSessions()
     backup_sessions = None
     settings_sessions = None
@@ -187,8 +186,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         "/api/investment/v1/planning/preview",
         "/api/investment/v1/planning/confirm",
         "/api/investment/v1/etoro/connect",
-        "/api/investment/v1/etoro/confirm",
-        "/api/investment/v1/etoro/discard",
+        "/api/investment/v1/etoro/activation-receipt",
         "/api/investment/v1/etoro/revoke",
         "/api/investment/v1/etoro/refresh",
         "/api/investment/v1/backup/download",
@@ -731,17 +729,20 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             request.cookies.get("etoro_session"),
             request.headers.get("x-csrf-token"), clock()))
 
-    def etoro_public_status():
+    def etoro_public_status(value=None):
         if etoro_connection is None:
             return {"enabled": False, "state": "not_selected",
                     "last_status": "not_selected", "snapshot_available": False}
-        value = etoro_connection.status(clock())
+        if value is None:
+            value = etoro_connection.status(clock())
         return {
             "enabled": True, "state": value["state"],
             "connection": value.get("connection"),
             "last_status": value["last_status"],
             "snapshot_available": value.get("snapshot") is not None,
             "read_generation": value.get("read_generation"),
+            "connection_revision": value.get("connection_revision"),
+            "startup_pending": value.get("startup_pending"),
             "message": value.get("message", ""),
         }
 
@@ -776,77 +777,67 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         value = etoro_connection.status(clock())
         return {"state": value["state"], "connection": value.get("connection"),
                 "snapshot": value.get("snapshot"), "last_status": value["last_status"],
+                "startup_pending": value.get("startup_pending"),
                 "message": value.get("message", "")}
 
     @app.post("/api/investment/v1/etoro/connect")
     async def etoro_connect(request: Request):
+        from investment import InvestmentError
         from investment.etoro import EToroError
         if etoro_connection is None or not etoro_authorized(request):
             return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
         try:
             payload = await bounded_json(request, maximum=16384, strict=True)
             if type(payload) is not dict or set(payload) != {
-                    "request_id", "environment", "read_scope_verified",
-                    "trade_capable_key_risk_accepted", "eligibility_verified",
-                    "retention_rights_verified", "read_generation"}:
+                    "request_id", "environment", "read_generation", "connection_revision"}:
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
             if type(payload["read_generation"]) is not int or payload["read_generation"] < 0:
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
+            if (payload["connection_revision"] is not None and
+                    (type(payload["connection_revision"]) is not int or payload["connection_revision"] < 1)):
+                return JSONResponse(status_code=400, content={"error": "invalid_request"})
             token = request.cookies.get("etoro_session")
-            consent = {key: payload[key] for key in (
-                "environment", "read_scope_verified", "trade_capable_key_risk_accepted",
-                "eligibility_verified", "retention_rights_verified")}
+            try:
+                initial = etoro_connection.capture_connection(clock())
+            except InvestmentError as exc:
+                initial = exc
             return await run_in_threadpool(
-                etoro_connection.begin, token, payload["request_id"], consent, clock(), payload["read_generation"])
+                etoro_connection.begin, token, payload["request_id"],
+                {"environment": payload["environment"]}, clock(), payload["read_generation"],
+                initial, payload["connection_revision"])
         except EToroError as exc:
             return JSONResponse(status_code=409, content={
                 "error": "etoro_read_failed", "error_code": exc.code})
+        except InvestmentError as exc:
+            return JSONResponse(status_code=409, content={
+                "error": "etoro_connection_unavailable", "message": str(exc)[:300]})
         except (ValueError, RecursionError):
             return JSONResponse(status_code=400, content={"error": "invalid_request"})
         except (OSError, RuntimeError) as exc:
             return JSONResponse(status_code=409, content={
                 "error": "etoro_read_failed", "message": str(exc)[:300]})
 
-    @app.post("/api/investment/v1/etoro/confirm")
-    async def etoro_confirm(request: Request):
+    @app.post("/api/investment/v1/etoro/activation-receipt")
+    async def etoro_activation_receipt(request: Request):
         from investment import InvestmentError
         if etoro_connection is None or not etoro_authorized(request):
             return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
         try:
             payload = await bounded_json(request, maximum=16384, strict=True)
             if (type(payload) is not dict or set(payload) != {
-                    "preview_id", "account_binding_confirmed", "startup_refresh", "refresh_days"}
-                    or not isinstance(payload["preview_id"], str)
-                    or not 1 <= len(payload["preview_id"]) <= 256
-                    or type(payload["account_binding_confirmed"]) is not bool
-                    or type(payload["startup_refresh"]) is not bool
-                    or (payload["refresh_days"] is not None
-                        and type(payload["refresh_days"]) is not int)):
+                    "request_id", "environment", "read_generation", "connection_revision"}
+                    or type(payload["read_generation"]) is not int or payload["read_generation"] < 0
+                    or (payload["connection_revision"] is not None and
+                        (type(payload["connection_revision"]) is not int or payload["connection_revision"] < 1))):
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
-            etoro_connection.confirm(
-                request.cookies.get("etoro_session"), payload["preview_id"],
-                payload["account_binding_confirmed"], payload["startup_refresh"],
-                payload["refresh_days"], clock())
-            return etoro_public_status()
+            return await run_in_threadpool(
+                etoro_connection.activation_receipt,
+                request.cookies.get("etoro_session"), payload["request_id"],
+                {"environment": payload["environment"]}, clock(), payload["read_generation"],
+                payload["connection_revision"])
         except InvestmentError as exc:
             return JSONResponse(status_code=409, content={
-                "error": "etoro_confirmation_rejected", "message": str(exc)})
-        except (ValueError, RecursionError):
-            return JSONResponse(status_code=400, content={"error": "invalid_request"})
-
-    @app.post("/api/investment/v1/etoro/discard")
-    async def etoro_discard(request: Request):
-        if etoro_connection is None or not etoro_authorized(request):
-            return JSONResponse(status_code=403, content={"error": "etoro_authorization_required"})
-        try:
-            payload = await bounded_json(request, maximum=1024, strict=True)
-            if (type(payload) is not dict or set(payload) != {"preview_id"}
-                    or not isinstance(payload["preview_id"], str)
-                    or not 1 <= len(payload["preview_id"]) <= 256):
-                return JSONResponse(status_code=400, content={"error": "invalid_request"})
-            discarded = etoro_connection.discard(
-                request.cookies.get("etoro_session"), payload["preview_id"])
-            return {"discarded": discarded}
+                "error": "etoro_receipt_unavailable", "message": str(exc)[:300]})
         except (ValueError, RecursionError):
             return JSONResponse(status_code=400, content={"error": "invalid_request"})
 
@@ -858,9 +849,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         try:
             if await bounded_json(request, maximum=1024, strict=True) != {}:
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
-            etoro_connection.revoke(clock())
-            return etoro_public_status()
-        except (InvestmentError, OSError) as exc:
+            return etoro_public_status(etoro_connection.revoke(clock()))
+        except (InvestmentError, OSError, RuntimeError) as exc:
             return JSONResponse(status_code=409, content={
                 "error": "etoro_revoke_failed", "message": str(exc)[:300]})
 
@@ -873,12 +863,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         try:
             payload = await bounded_json(request, maximum=1024, strict=True)
             if (type(payload) is not dict or set(payload) != {
-                    "confirm_read", "confirm_closed_trade_history",
-                    "history_retention_rights_verified", "read_generation",
-                    "revision", "account_id", "environment"}
-                    or payload["confirm_read"] is not True
-                    or payload["confirm_closed_trade_history"] is not True
-                    or payload["history_retention_rights_verified"] is not True
+                    "read_generation", "revision", "account_id", "environment"}
                     or type(payload["read_generation"]) is not int
                     or payload["read_generation"] < 0
                     or type(payload["revision"]) is not int or payload["revision"] < 1
@@ -887,9 +872,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                 return JSONResponse(status_code=400, content={"error": "invalid_request"})
             return await run_in_threadpool(
                 etoro_connection.refresh_explicitly, clock(),
-                manual_confirmed=True, generation=payload["read_generation"],
-                expected_connection=(payload["revision"], payload["account_id"], payload["environment"]),
-                history_confirmed=True)
+                generation=payload["read_generation"],
+                expected_connection=(payload["revision"], payload["account_id"], payload["environment"]))
         except ManualRefreshRejected as exc:
             return JSONResponse(status_code=409, content={
                 "error": "etoro_refresh_rejected", "message": str(exc)})

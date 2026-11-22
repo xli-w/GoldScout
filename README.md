@@ -49,10 +49,10 @@ quantity for each account that holds it. Use current figures for the same point
 in time; setup records them when you request the preview and cannot be
 backdated.
 
-The optional eToro connection shows a separate provider snapshot and, after an
-explicit manual refresh, up to 365 calendar days of closed-trade history. It
-does not populate the journal and is live-unvalidated. Basic use does not
-require it.
+The optional eToro connection is explicitly enabled for a selected environment.
+It reads now and once per server startup until disabled; manual refresh also
+shows up to 365 calendar days of closed-trade history. It is separate from the
+journal and live-unvalidated. Basic use does not require it.
 See [the connection guide](docs/investment.md#optional-etoro-connection).
 
 ## Review
@@ -94,9 +94,10 @@ are write-only in the page and stored as plaintext in the ignored project-root
 Saved project values take precedence over `.env` and process environment
 settings; clearing an override falls back to those existing sources.
 
-Changing either eToro key invalidates saved eToro read consent and the CLI
-monitoring approval revision; reconnect or create a fresh approval before
-another read. Close older GoldScout processes before changing connections.
+Changing either eToro key invalidates dashboard activation; re-enable the
+dashboard connection before another dashboard read. The separate CLI collector
+does not use an approval file; a running watch pins its credential revision and
+must be restarted after a change. Close older GoldScout processes before changing connections.
 Requests already dispatched cannot be recalled. Settings do not collect data,
 send private portfolio evidence to hosted AI, or enable trades.
 
@@ -135,7 +136,7 @@ These use synthetic evidence, not account access.
 - Exact GBP accounting, replay, valuation, cash observations and
   core/dynamic/unassigned attribution. Attribution is not an approved risk budget.
 - Optional [monitoring](docs/monitoring.md), a separate observation cache and
-  review inbox. Provider collection has separate explicit approval gates and
+  review inbox. Provider collection requires separate explicit activation and
   is live-unvalidated.
 - Optional [intelligence](docs/intelligence.md) supplies public advisory context;
   private account evidence never enters hosted AI. It has no trading authority.

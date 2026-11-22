@@ -48,10 +48,10 @@ async function setupRoutes(page, options = {}) {
     const refreshed = etoroSessionReads > 2;
     return route.fulfill({ json: {
       enabled: true, csrf: "synthetic-etoro-csrf",
+      read_generation: 0, connection_revision: 1,
       state: "startup_refresh_enabled", last_status: refreshed ? "success" : "not_collected",
       snapshot_available: refreshed,
-      connection: { environment: "real", account_id: 12345,
-        expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 },
+      connection: { environment: "real", account_id: 12345, revoked_at: null, revision: 1 },
     } });
   });
   await page.route("**/api/investment/v1/etoro/portfolio", route => {
@@ -71,7 +71,7 @@ async function setupRoutes(page, options = {}) {
       state: options.startupRefresh ? "startup_refresh_enabled" : "not_selected",
       snapshot, last_status: snapshot ? "success" : "not_collected",
       ...(options.startupRefresh ? { connection: { environment: "real", account_id: 12345,
-        expires_at: "2099-01-01T00:00:00Z", revoked_at: null, revision: 1 } } : {}),
+        revoked_at: null, revision: 1 } } : {}),
     } });
   });
   await page.route("**/api/investment/v1/setup/**", async route => {
@@ -168,7 +168,7 @@ test("startup refresh result appears without reloading the setup wizard", async 
   const etoro = page.locator("#setup-etoro");
   await expect(etoro).not.toHaveAttribute("open", "");
   await etoro.locator("summary").first().click();
-  await expect(page.getByText("Waiting for the one authorized startup read. This screen does not initiate a request."))
+  await expect(page.getByText("Waiting for the startup read. This screen does not initiate a request."))
     .toBeVisible();
   await expect(page.getByRole("heading", { name: "Latest eToro read" }))
     .toBeVisible({ timeout: 5000 });
@@ -187,51 +187,49 @@ test("legacy eToro setup link opens the optional connection inside setup", async
   await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible();
 });
 
-test("eToro consent preview survives collapsing and reviewing portfolio setup", async ({ page }) => {
-  await page.clock.install({ time: new Date("2026-01-01T10:00:00Z") });
+test("eToro activation survives collapsing and reviewing portfolio setup", async ({ page }) => {
   await setupRoutes(page);
   const writes = [];
-  await page.route("**/api/investment/v1/etoro/session", route => route.fulfill({ json: {
-    enabled: true, read_generation: 0, csrf: "synthetic-etoro-csrf", state: "not_connected", last_status: "not_collected",
-    snapshot_available: false, connection: null,
-  } }));
-  await page.route("**/api/investment/v1/etoro/portfolio", route => route.fulfill({ json: {
-    state: "not_connected", last_status: "not_collected", snapshot: null, connection: null,
-  } }));
-  await page.route("**/api/investment/v1/etoro/connect", route => {
-    writes.push(route.request().postDataJSON());
-    return route.fulfill({ json: { preview_id: "synthetic-etoro-preview", expires_at: "2026-01-01T10:00:10Z",
-      snapshot: { schema_version: 1, environment: "demo", account_id: 12345,
+  let enabled = false;
+  const connection = { environment: "demo", account_id: 12345, revoked_at: null, revision: 1 };
+  const snapshot = { schema_version: 1, environment: "demo", account_id: 12345,
         source_as_of: "2026-01-01T10:00:00Z", account_currency: "USD",
         account_totals: { accountAvailableCash: "100", accountFrozenCash: "0",
           accountCurrentPnl: "0", accountTotalValue: "100", accountTotalUsedMargin: "0", accountBalance: "100" },
         direct_positions: [], mirrors: [],
         closed_trade_history: { status: "not_requested", from_date: null, through_date: null,
           received_at: null, trades: [] },
-        coverage: {}, gbp_balance: null } } });
+        coverage: {}, gbp_balance: null };
+  await page.route("**/api/investment/v1/etoro/**", route => {
+    const path = new URL(route.request().url()).pathname.split("/").at(-1);
+    if (path === "connect") {
+      writes.push(route.request().postDataJSON());
+      enabled = true;
+      return route.fulfill({ json: { state: "startup_refresh_enabled", connection } });
+    }
+    const state = enabled ? "startup_refresh_enabled" : "not_connected";
+    const common = { state, last_status: enabled ? "success" : "not_collected",
+      connection: enabled ? connection : null };
+    return route.fulfill({ json: path === "session"
+      ? { ...common, enabled: true, read_generation: 0, connection_revision: enabled ? 1 : null,
+        csrf: "synthetic-etoro-csrf", snapshot_available: enabled }
+      : { ...common, snapshot: enabled ? snapshot : null } });
   });
   await unlock(page);
   const optional = page.locator("#setup-etoro");
   await optional.locator(":scope > summary").click();
   await optional.getByText("Connect eToro", { exact: true }).click();
   await optional.getByLabel("eToro environment").selectOption("demo");
-  await optional.getByLabel("I verified this key has Read-only permission.").check();
-  await optional.getByLabel("I verified my account is eligible for this API use.").check();
-  await optional.getByLabel(/I verified rights for local display/).check();
-  await optional.getByRole("button", { name: "Connect and retrieve once" }).click();
-  const binding = optional.getByLabel("I verified account ID 12345 is the eToro account I selected.");
-  await binding.check();
+  await optional.getByRole("button", { name: "Enable eToro" }).click();
+  await expect(optional.getByRole("heading", { name: "Latest eToro read" })).toBeVisible();
   await optional.locator(":scope > summary").click();
   await optional.locator(":scope > summary").click();
-  await expect(binding).toBeChecked();
+  await expect(optional).toContainText("Account ID 12345");
   await depositPreview(page);
-  await expect(binding).toBeChecked();
-  const confirm = optional.getByRole("button", { name: "Confirm connection and account" });
-  await expect(confirm).toBeEnabled();
-  await page.clock.fastForward(11000);
-  await expect(confirm).toBeDisabled();
-  await expect(optional).toContainText("This eToro preview expired. Discard it and request a new read.");
+  await expect(optional).toContainText("Account ID 12345");
   expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({ environment: "demo", read_generation: 0, connection_revision: null });
+  expect(Object.keys(writes[0]).sort()).toEqual(["connection_revision", "environment", "read_generation", "request_id"]);
 });
 
 async function activeEToroRoutes(page) {
@@ -249,19 +247,16 @@ async function activeEToroRoutes(page) {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").at(-1);
     if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
-      enabled: true, read_generation: 0, csrf: "synthetic-etoro-csrf",
+      enabled: true, read_generation: 0, connection_revision: 1, csrf: "synthetic-etoro-csrf",
       state: revoked ? "revoked" : "startup_refresh_enabled",
       last_status: revoked ? "startup_refresh_revoked" : "rate_limited", snapshot_available: false,
-      connection: { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+      connection: { environment: "demo", account_id: 12345,
         revoked_at: revoked ? "2026-01-01T10:00:00Z" : null, revision: 1 },
     } : { state: revoked ? "revoked" : "startup_refresh_enabled",
       last_status: revoked ? "startup_refresh_revoked" : "rate_limited", snapshot: null,
-      connection: { environment: "demo", account_id: 12345, expires_at: "2099-01-01T00:00:00Z",
+      connection: { environment: "demo", account_id: 12345,
         revoked_at: revoked ? "2026-01-01T10:00:00Z" : null, revision: 1 } } });
     writes.push(path);
-    if (path === "connect") return route.fulfill({ json: {
-      preview_id: "synthetic-etoro-preview", expires_at: "2099-01-01T00:00:00Z", snapshot,
-    } });
     if (path === "revoke") { revoked = true; return route.fulfill({ json: { state: "revoked" } }); }
     return route.abort();
   });
@@ -276,44 +271,33 @@ for (const state of ["blocked", "manual_unopened", "recoverable"]) {
     const etoro = page.locator("#setup-etoro");
     await expect(etoro).toBeVisible();
     await etoro.locator(":scope > summary").click();
-    await expect(etoro).toContainText("cannot start or confirm new reads");
+    await expect(etoro).toContainText("cannot start new reads here");
     await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
-    await expect(etoro.getByRole("button", { name: "Connect and retrieve once" })).toHaveCount(0);
-    const revoke = etoro.getByRole("button", { name: "Revoke startup refresh" });
+    await expect(etoro.getByRole("button", { name: "Enable eToro" })).toHaveCount(0);
+    const revoke = etoro.getByRole("button", { name: "Disable eToro" });
     await expect(revoke).toBeEnabled();
     expect(writes).toEqual([]);
-    page.once("dialog", dialog => dialog.accept());
     await revoke.click();
-    await expect(etoro).toContainText("Startup permission is revoked");
+    await expect(etoro).toContainText("eToro connection is disabled");
     expect(writes).toEqual(["revoke"]);
   });
 }
 
-test("a partial setup receipt keeps revocation available and blocks an existing eToro preview", async ({ page }) => {
+test("a partial setup receipt keeps disable available and blocks new eToro reads", async ({ page }) => {
   await setupRoutes(page, { partial: true });
   const writes = await activeEToroRoutes(page);
   await unlock(page);
   const etoro = page.locator("#setup-etoro");
   await etoro.locator(":scope > summary").click();
-  await etoro.getByText("Update eToro connection", { exact: true }).click();
-  await etoro.getByLabel("eToro environment").selectOption("demo");
-  await etoro.getByLabel("I verified this key has Read-only permission.").check();
-  await etoro.getByLabel("I verified my account is eligible for this API use.").check();
-  await etoro.getByLabel(/I verified rights for local display/).check();
-  await etoro.getByRole("button", { name: "Connect and retrieve once" }).click();
-  await etoro.getByLabel("I verified account ID 12345 is the eToro account I selected.").check();
   await depositPreview(page);
   await page.getByRole("button", { name: "Confirm and create local records" }).click();
   await expect(page.getByRole("heading", { name: /Setup partially completed/ })).toBeVisible();
-  await expect(etoro).toContainText("cannot start or confirm new reads");
-  await expect(etoro.getByRole("button", { name: "Confirm connection and account" })).toBeDisabled();
-  await expect(etoro.getByRole("button", { name: "Discard preview" })).toBeEnabled();
+  await expect(etoro).toContainText("cannot start new reads here");
+  await expect(etoro.getByRole("button", { name: "Enable eToro" })).toHaveCount(0);
   await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
-  page.once("dialog", dialog => dialog.accept());
-  await etoro.getByRole("button", { name: "Revoke startup refresh" }).click();
-  await expect(etoro).toContainText("Startup permission is revoked");
-  await expect(etoro.getByRole("button", { name: "Confirm connection and account" })).toHaveCount(0);
-  expect(writes).toEqual(["connect", "revoke"]);
+  await etoro.getByRole("button", { name: "Disable eToro" }).click();
+  await expect(etoro).toContainText("eToro connection is disabled");
+  expect(writes).toEqual(["revoke"]);
 });
 
 test("cash-only setup skips investments in both directions", async ({ page }) => {
@@ -588,7 +572,7 @@ test("holding completeness checks survive amount edits but clear when a holding 
   await expect(secondCheck).not.toBeChecked();
 });
 
-test("removing an account warns before removing its linked holdings", async ({ page }) => {
+test("removing an account also removes its linked holdings without a dialog", async ({ page }) => {
   await setupRoutes(page);
   await unlock(page);
   await page.getByLabel("Account 1 name").fill("Synthetic brokerage");
@@ -612,22 +596,49 @@ test("removing an account warns before removing its linked holdings", async ({ p
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
-  let warning = "";
-  page.once("dialog", async dialog => {
-    warning = dialog.message();
-    await dialog.dismiss();
-  });
-  await page.getByRole("button", { name: "Remove account 1" }).click();
-  expect(warning).toContain("Synthetic brokerage");
-  expect(warning).toContain("1 linked holding row");
-  await expect(page.getByLabel("Account 1 name")).toHaveValue("Synthetic brokerage");
-
-  page.once("dialog", dialog => dialog.accept());
+  await expect(page.getByText(/Removing this account also removes its linked holding rows/)).toBeVisible();
   await page.getByRole("button", { name: "Remove account 1" }).click();
   await expect(page.getByLabel("Account 1 name")).toHaveValue("Synthetic savings");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Starting balances", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add holding", exact: true })).toHaveCount(0);
+});
+
+test("changing an account type preserves its holdings across reload", async ({ page }) => {
+  await setupRoutes(page);
+  await unlock(page);
+  await accountStep(page, true);
+  await page.getByRole("button", { name: "Add investment", exact: true }).click();
+  await page.getByLabel("Investment 1 name").fill("Synthetic equity");
+  await page.getByLabel("Investment 1 type").selectOption("equity");
+  await page.getByLabel("Investment 1 pricing currency").selectOption("GBP");
+  await page.getByLabel("Investment 1 smallest quantity step").fill("0.001");
+  await page.getByLabel("Investment 1 minimum purchase (GBP)").fill("1");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Add holding", exact: true }).click();
+  await page.getByLabel("Holding 1 account").selectOption({ label: "Synthetic savings" });
+  await page.getByLabel("Holding 1 investment").selectOption({ label: "Synthetic equity" });
+  await page.getByLabel("Holding 1 quantity", { exact: true }).fill("2.345");
+  await page.getByLabel("Holding 1 unit price (GBP, optional)").fill("12.34");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByLabel("Account 1 type").selectOption("deposit");
+  await expect.poll(() => page.evaluate(() => [...Object.values(localStorage)].some(value =>
+    value.includes('"kind":"deposit"') && value.includes('"quantity":"2.345"')))).toBe(true);
+  await page.reload();
+  await expect(page.getByLabel("Account 1 type")).toHaveValue("deposit");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByLabel("Holding 1 quantity", { exact: true })).toHaveValue("2.345");
+  await expect(page.getByLabel("Holding 1 unit price (GBP, optional)")).toHaveValue("12.34");
+  await expect(page.getByLabel("Holding 1 account")).toHaveValue(
+    await page.getByLabel("Holding 1 account").locator("option:disabled").getAttribute("value"));
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByLabel("Account 1 type").selectOption("broker");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByLabel("Holding 1 account")).toHaveValue(
+    await page.getByLabel("Holding 1 account").locator("option", { hasText: "Synthetic savings" }).getAttribute("value"));
+  await expect(page.getByLabel("Holding 1 quantity", { exact: true })).toHaveValue("2.345");
 });
 
 test("broker holdings preserve exact decimal strings and unknown unit prices", async ({ page }) => {
@@ -678,15 +689,6 @@ test("broker holdings preserve exact decimal strings and unknown unit prices", a
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByText(/Removing this investment will also remove its 1 linked holding row/)).toBeVisible();
-  let removalWarning = "";
-  page.once("dialog", async dialog => {
-    removalWarning = dialog.message();
-    await dialog.dismiss();
-  });
-  await page.getByRole("button", { name: "Remove investment 1", exact: true }).click();
-  expect(removalWarning).toContain("1 linked holding row");
-  await expect(page.getByLabel("Investment 1 name")).toHaveValue("Synthetic equity");
-  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Remove investment 1", exact: true }).click();
   await expect(page.getByLabel("Investment 1 name")).toHaveCount(0);
 });
@@ -785,7 +787,7 @@ test("revision-zero recovery prefills only the original locked profile and recon
   expect(api.calls.map(call => call.path)).toEqual(["preview", "confirm"]);
 });
 
-test("re-entered recovery evidence warns before unloading, including from guidance", async ({ page }) => {
+test("re-entered recovery evidence does not block unloading, including from guidance", async ({ page }) => {
   await setupRoutes(page, { state: "recoverable", recovery: recovery() });
   await page.goto("/setup");
   await page.getByRole("button", { name: "Re-enter original opening evidence" }).click();
@@ -795,9 +797,9 @@ test("re-entered recovery evidence warns before unloading, including from guidan
     window.dispatchEvent(event);
     return event.defaultPrevented;
   });
-  expect(await isUnloadBlocked()).toBe(true);
+  expect(await isUnloadBlocked()).toBe(false);
   await page.getByRole("button", { name: "Back to recovery guidance" }).click();
-  expect(await isUnloadBlocked()).toBe(true);
+  expect(await isUnloadBlocked()).toBe(false);
   await page.getByRole("button", { name: "Re-enter original opening evidence" }).click();
   await expect(page.getByLabel("Cash for Synthetic savings (GBP)")).toHaveValue("1234.56");
 });

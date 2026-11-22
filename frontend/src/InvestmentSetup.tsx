@@ -163,23 +163,6 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
     return () => { active = false; };
   }, []);
   useEffect(() => {
-    const unsavedRecovery = session?.state === "recoverable";
-    if (!dirty || receipt?.status === "completed" || (!draftStorageError && !unsavedRecovery)) return;
-    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    const abandon = (event: MouseEvent) => {
-      if (!(event.target instanceof Element)) return;
-      const link = event.target.closest("a[href]");
-      const message = unsavedRecovery
-        ? "Recovery figures are not saved in this browser. Leave and lose the re-entered progress?"
-        : "The draft could not be saved in this browser. Leave and lose the unsaved progress?";
-      if (link && !window.confirm(message))
-        event.preventDefault();
-    };
-    window.addEventListener("beforeunload", warn);
-    document.addEventListener("click", abandon, true);
-    return () => { window.removeEventListener("beforeunload", warn); document.removeEventListener("click", abandon, true); };
-  }, [dirty, draftStorageError, receipt, session?.state]);
-  useEffect(() => {
     if (!session) return;
     draftReady.current = false;
     if (session.state !== "empty") return;
@@ -265,14 +248,7 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
   };
   const changeAccount = (id: string, patch: Partial<Account>) => {
     const account = accounts.find(row => row.id === id);
-    const invalidatedHoldings = account?.kind === "broker" && patch.kind === "deposit"
-      ? holdings.filter(holding => holding.account === id) : [];
-    if (invalidatedHoldings.length > 0 && !window.confirm(
-      `Changing "${account?.name}" to a savings / deposit account will remove its ${invalidatedHoldings.length} holding ${invalidatedHoldings.length === 1 ? "row" : "rows"}. Continue?`,
-    )) return;
     changed(account && patch.kind && account.kind !== patch.kind ? [id] : []);
-    if (invalidatedHoldings.length > 0)
-      setHoldings(rows => rows.filter(holding => holding.account !== id));
     setAccounts(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
   };
   const changeProduct = (id: string, patch: Partial<Product>) => {
@@ -613,11 +589,10 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                   onChange={event => { const kind = event.target.value; if (kind === "broker" || kind === "deposit") changeAccount(a.id, { kind }); }}>
                   <option value="">Choose account type</option><option value="deposit">Savings / deposit account</option><option value="broker">Investment / broker account</option>
                 </select></label>
+                {holdings.some(holding => holding.account === a.id) &&
+                  <p className="field-help">Removing this account also removes its linked holding rows.
+                    Changing it to savings keeps those rows, but they must be reassigned or removed before saving.</p>}
                 <button type="button" disabled={accounts.length === 1} onClick={() => {
-                  const linkedHoldings = holdings.filter(holding => holding.account === a.id);
-                  if (linkedHoldings.length > 0 && !window.confirm(
-                    `Remove "${a.name}" and its ${linkedHoldings.length} linked holding ${linkedHoldings.length === 1 ? "row" : "rows"}? This cannot be undone in the draft.`,
-                  )) return;
                   changed([a.id]); setAccounts(rows => rows.filter(row => row.id !== a.id));
                   setHoldings(rows => rows.filter(row => row.account !== a.id));
                 }}>Remove account {index + 1}</button>
@@ -676,10 +651,6 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                 {holdings.some(holding => holding.product === p.id) &&
                   <p className="field-help">Removing this investment will also remove its {holdings.filter(holding => holding.product === p.id).length} linked holding row(s).</p>}
                 <button type="button" onClick={() => {
-                  const linkedHoldings = holdings.filter(holding => holding.product === p.id);
-                  if (linkedHoldings.length > 0 && !window.confirm(
-                    `Remove "${p.name}" and its ${linkedHoldings.length} linked holding ${linkedHoldings.length === 1 ? "row" : "rows"}? This cannot be undone in the draft.`,
-                  )) return;
                   changed(investmentAccounts.map(account => account.id));
                   setProducts(rows => rows.filter(row => row.id !== p.id));
                   setHoldings(rows => rows.filter(row => row.product !== p.id));
@@ -725,14 +696,17 @@ export function InvestmentSetup({ onComplete }: { onComplete: () => void }) {
                 onChange={event => { clearFieldError(`account-${a.id}-cash`); changeAccount(a.id, { cash: event.target.value }); }} />
                 {fieldErrors[`account-${a.id}-cash`] && <small id={`setup-error-account-${a.id}-cash`} className="field-error">{fieldErrors[`account-${a.id}-cash`]}</small>}
               </label>)}
-              {investmentAccounts.length === 0
+              {investmentAccounts.length === 0 && holdings.length === 0
                 ? <p>This setup contains only savings / deposit accounts; no investment holdings are needed.</p>
                 : <>
               <h3>Investments you own</h3>
               <p>List every holding. A unit price may be blank if unknown; it will not be treated as zero.</p>
               {holdings.map((h, index) => <div className="setup-row" key={h.id}>
                 <label>Holding {index + 1} account<select required value={h.account} onChange={event => changeHolding(h.id, { account: event.target.value })}>
-                  <option value="">Choose investment account</option>{investmentAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+                  <option value="">Choose investment account</option>
+                  {accounts.filter(a => a.id === h.account && a.kind !== "broker").map(a =>
+                    <option key={a.id} value={a.id} disabled>{a.name} (not an investment account)</option>)}
+                  {investmentAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
                 <label>Holding {index + 1} investment<select required value={h.product} onChange={event => changeHolding(h.id, { product: event.target.value })}>
                   <option value="">Choose investment</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
                 <label>Holding {index + 1} quantity<input required inputMode="decimal" maxLength={34}

@@ -6,7 +6,7 @@ async function recordedPortfolio(page) {
   return report;
 }
 
-test("local goals require review and confirmation and remain separate from portfolio records", async ({ page }) => {
+test("local goals save in one action and remain separate from portfolio records", async ({ page }) => {
   const hash = "a".repeat(64);
   let revision = 0;
   let goals = [];
@@ -50,7 +50,7 @@ test("local goals require review and confirmation and remain separate from portf
   const amount = page.getByLabel("Target amount (GBP, optional)");
   await amount.fill("0.00");
   expect(await amount.evaluate(input => input.checkValidity())).toBe(false);
-  await page.getByRole("button", { name: "Preview changes" }).click();
+  await page.getByRole("button", { name: "Save goals" }).click();
   expect(writes).toBe(0);
   await amount.fill("25000.00");
   await page.getByLabel("Target date (optional)").fill("2035-05-01");
@@ -63,19 +63,7 @@ test("local goals require review and confirmation and remain separate from portf
   await page.getByLabel("Notes (optional)").fill("Synthetic goal note");
   await expect(page.getByText("Simple contribution illustration")).toBeVisible();
   await expect(page.getByText(/assumes no investment growth/)).toBeVisible();
-  await page.getByRole("button", { name: "Preview changes" }).click();
-  await expect(page.getByRole("region", { name: "Review goals before saving" }))
-    .toContainText("This will replace the separate planning profile");
-  await expect(page.getByRole("region", { name: "Review goals before saving" }))
-    .toContainText("First home");
-  await expect(page.getByRole("region", { name: "Review goals before saving" }))
-    .toContainText("first home");
-  await expect(page.getByRole("region", { name: "Review goals before saving" }))
-    .toContainText("£250.00/month expected");
-  await expect(page.getByRole("button", { name: "Confirm and save locally" })).toBeVisible();
-  expect(writes).toBe(1);
-
-  await page.getByRole("button", { name: "Confirm and save locally" }).click();
+  await page.getByRole("button", { name: "Save goals" }).click();
   await expect(page.getByRole("status")).toContainText("Saved as local planning revision 1");
   expect(writes).toBe(2);
   await expect(page.getByRole("heading", { name: "First home" })).toBeVisible();
@@ -94,15 +82,81 @@ test("local goals require review and confirmation and remain separate from portf
   await page.getByLabel("Earliest access date (optional)").fill("");
   await page.getByLabel("Manual amount set aside (GBP, used only without linked accounts)").fill("");
   await page.getByLabel("Expected monthly contribution (GBP, optional)").fill("");
-  await page.getByRole("button", { name: "Preview changes" }).click();
-  await expect(page.getByRole("region", { name: "Review goals before saving" }))
-    .toContainText("Updated home goal");
+  await page.getByRole("button", { name: "Save goals" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved as local planning revision 2");
   expect(goals[0].access_date).toBeNull();
   expect(goals[0].current_amount_gbp).toBeNull();
   expect(goals[0].monthly_contribution_gbp).toBeNull();
-  await page.getByRole("button", { name: "Confirm and save locally" }).click();
-  await expect(page.getByRole("status")).toContainText("Saved as local planning revision 2");
   await expect(page.getByRole("heading", { name: "Updated home goal" })).toBeVisible();
+  await expect(page.getByLabel("Goal name")).toHaveCount(0);
+});
+
+test("an uncertain goal save retries the same pending request", async ({ page }) => {
+  let previewCalls = 0;
+  let confirmCalls = 0;
+  let revision = 0;
+  let goals = [];
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/planning/session", route => route.fulfill({
+    json: { enabled: true, csrf: "synthetic-csrf", revision,
+      profile_hash: "a".repeat(64), goals },
+  }));
+  await page.route("**/api/investment/v1/planning/preview", route => {
+    previewCalls++;
+    goals = route.request().postDataJSON().goals.map((goal, index) => ({
+      id: `${index}`.padStart(32, "0"), ...goal,
+    }));
+    return route.fulfill({ json: { preview_id: "same-request", revision: 1,
+      expires_at: "2030-01-01T00:05:00Z", goals } });
+  });
+  await page.route("**/api/investment/v1/planning/confirm", route => {
+    confirmCalls++;
+    expect(route.request().postDataJSON()).toEqual({ preview_id: "same-request" });
+    if (confirmCalls === 1) return route.abort("failed");
+    revision = 1;
+    return route.fulfill({ json: { status: "saved", revision } });
+  });
+
+  await page.goto("/planning");
+  await page.getByRole("button", { name: "Add a goal" }).click();
+  await page.getByLabel("Goal name").fill("Reserve");
+  await page.getByRole("button", { name: "Save goals" }).click();
+  await expect(page.getByRole("alert")).toContainText("The save may have completed");
+  await expect(page.getByLabel("Goal name")).toBeDisabled();
+  await page.getByRole("button", { name: "Retry save" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved as local planning revision 1");
+  expect(previewCalls).toBe(1);
+  expect(confirmCalls).toBe(2);
+});
+
+test("a conflicting goal save keeps the draft until explicitly discarded", async ({ page }) => {
+  let sessionCalls = 0;
+  let finishReload;
+  const reloadWait = new Promise(resolve => { finishReload = resolve; });
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/planning/session", async route => {
+    sessionCalls++;
+    if (sessionCalls > 1) await reloadWait;
+    await route.fulfill({ json: { enabled: true, csrf: "synthetic-csrf", revision: 1,
+      profile_hash: "a".repeat(64), goals: [] } });
+  });
+  await page.route("**/api/investment/v1/planning/preview", route => route.fulfill({
+    status: 409, json: { error: "profile_changed" },
+  }));
+
+  await page.goto("/planning");
+  await page.getByRole("button", { name: "Add a goal" }).click();
+  await page.getByLabel("Goal name").fill("Unsaved reserve");
+  await page.getByRole("button", { name: "Save goals" }).click();
+  await expect(page.getByRole("alert")).toContainText("profile changed");
+  await expect(page.getByLabel("Goal name")).toHaveValue("Unsaved reserve");
+  await page.getByRole("button", { name: "Discard draft and reload profile" }).click();
+  await expect(page.getByLabel("Goal name")).toBeDisabled();
+  finishReload();
   await expect(page.getByLabel("Goal name")).toHaveCount(0);
 });
 
@@ -160,13 +214,9 @@ test("saved goals start as dated summaries and edit independently without changi
   await expect(page.getByLabel("Goal name")).toHaveCount(1);
   await expect(page.getByLabel("Target amount (GBP, optional)")).toHaveValue("999999999999999.99");
   await page.getByLabel("Goal name").fill("Home updated");
-  await page.getByRole("button", { name: "Preview changes" }).click();
-  await expect(page.getByRole("region", { name: "Review goals before saving" })).toContainText("Home updated");
+  await page.getByRole("button", { name: "Save goals" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved as local planning revision 4");
   expect(savedGoals[1]).toEqual(originalLater);
-  await page.getByRole("button", { name: "Edit goals" }).click();
-  await expect(page.getByLabel("Goal name")).toHaveValue("Home updated");
-  await page.getByRole("button", { name: "Preview changes" }).click();
-  await page.getByRole("button", { name: "Confirm and save locally" }).click();
   await expect(page.getByRole("heading", { name: "Home updated" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Later" })).toBeVisible();
   await expect(page.getByLabel("Goal name")).toHaveCount(0);
@@ -210,11 +260,6 @@ test("saved linked summaries use exact recorded amounts and suppress duplicated 
   await expect(page.getByText("Linked account amount unavailable.")).toHaveCount(2);
   await expect(page.getByText(/Linked recorded amount:/)).toHaveCount(0);
   await expect(page.getByText("Simple contribution illustration")).toHaveCount(0);
-  await page.getByRole("button", { name: "Preview changes" }).click();
-  const preview = page.getByRole("region", { name: "Review goals before saving" });
-  await expect(preview.getByText(/recorded amount: unavailable/)).toHaveCount(2);
-  await expect(preview).not.toContainText("100,000.0000110000000001");
-  await page.getByRole("button", { name: "Edit goals" }).click();
   await page.getByRole("button", { name: "Edit First" }).click();
   await expect(page.getByText(/Linked account amount unavailable/)).toHaveCount(2);
   await expect(page.getByText("Simple contribution illustration")).toHaveCount(0);
@@ -229,10 +274,9 @@ test("saved linked summaries use exact recorded amounts and suppress duplicated 
   await expect(page.getByText(
     "Linked recorded amount: £100,000.0000110000000001 as of 2029-12-31T12:34:56.123456Z.",
   )).toBeVisible();
-  await page.getByRole("button", { name: "Preview changes" }).click();
-  await expect(preview).toContainText(
-    "recorded amount: £100,000.0000110000000001 as of 2029-12-31T12:34:56.123456Z",
-  );
+  await expect(page.getByText(
+    "Linked recorded amount: £100,000.0000110000000001 as of 2029-12-31T12:34:56.123456Z.",
+  )).toBeVisible();
 });
 
 test("saved goals with past targets or incomplete inputs do not show contribution illustrations", async ({ page }) => {
@@ -347,7 +391,8 @@ test("linked goals use a whole recorded account once and bind preview to its jou
     name: `${account.name} (${account.id})`,
   }).nth(1)).toBeDisabled();
 
-  await page.getByRole("button", { name: "Preview changes" }).click();
+  await page.getByRole("button", { name: "Save goals" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved as local planning revision 1");
   expect(previewBody.expected_portfolio_id).toBe(report.portfolio_id);
   expect(previewBody.expected_journal_revision).toBe(report.revision);
   expect(previewBody.goals[0]).toMatchObject({
@@ -356,16 +401,12 @@ test("linked goals use a whole recorded account once and bind preview to its jou
     linked_account_ids: [account.id],
   });
   expect(previewBody.goals[1].linked_account_ids).toEqual([]);
-  await expect(page.getByRole("region", { name: "Review goals before saving" }))
-    .toContainText(`${account.name}`);
-  await expect(page.getByRole("region", { name: "Review goals before saving" }))
-    .toContainText("recorded amount:");
-  await page.getByRole("button", { name: "Confirm and save locally" }).click();
   await expect(page.getByText(/Target date 2035-01-01 · 1 linked account/)).toBeVisible();
   await page.getByRole("button", { name: "Edit Emergency reserve" }).click();
   await expect(page.getByRole("checkbox", { name: `${account.name} (${account.id})` })).toBeChecked();
   await expect(page.getByLabel("Manual amount set aside (GBP, used only without linked accounts)")).toBeDisabled();
-  await page.getByRole("button", { name: "Preview changes" }).click();
+  await page.getByRole("button", { name: "Save goals" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved as local planning revision 2");
   expect(previewBody.expected_portfolio_id).toBe(report.portfolio_id);
   expect(previewBody.expected_journal_revision).toBe(report.revision);
   expect(previewBody.goals[0].linked_account_ids).toEqual([account.id]);
