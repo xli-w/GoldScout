@@ -297,7 +297,7 @@ profile hash and selected local account alias:
   "account_binding_verified": true,
   "supervised_read_approved": true,
   "credential_revision": 0,
-  "evidence": "Operator-verified eligibility, binding and retention; accepts trade-capable key risk for one supervised GET"
+  "evidence": "Operator-verified eligibility, binding and retention; accepts trade-capable key risk for supervised reads until expiry"
 }
 ```
 
@@ -308,7 +308,11 @@ and explicitly accept the broader-key risk instead. Approval files must include
 the `trade_capable_key_risk_accepted` and current `credential_revision` fields;
 older or mismatched approvals fail closed.
 Approval has a maximum one-day lifetime and is an operator attestation, not an
-authenticated approval service or proof of permissions. The operator supplies
+authenticated approval service or proof of permissions. It is reusable for
+explicit collection runs while valid, including the daily `--watch` loop; it is
+not consumed by a successful or failed run. Every run still requires
+`--allow-network`, rechecks the approval and credential revision, and records
+its own result. The operator supplies
 `GOLDSCOUT_ETORO_API_KEY` and `GOLDSCOUT_ETORO_USER_KEY` through the local
 Settings page, `.env`, or process environment, never command-line arguments or
 committed files. The Settings fields are write-only. See

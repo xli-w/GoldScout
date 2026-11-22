@@ -15,7 +15,11 @@ Implement requested features using [repository guidance](../copilot-instructions
 and the [development workflow](../../docs/development.md). Routine local source
 edits, tests, builds and synthetic previews are expected.
 
-Use the relevant scoped instructions and domain skills. Request independent
+Proceed without repeated confirmation for in-scope local work. Do not add
+operator-protection requirements or unrelated redesigns. Focus on transaction
+integrity and data truth, using only the relevant scoped instructions and
+domain checklists. Request independent
 Safety Reviewer review for accounting, persistence, causal-data or external
-authority changes, not ordinary copy/layout changes. Summarize actual changes,
+authority changes, not routine UI, documentation, tooling or refactoring that
+leaves those contracts unchanged. Summarize actual changes,
 checks and remaining limitations; do not claim independent review you did not get.

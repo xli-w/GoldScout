@@ -9,6 +9,10 @@ Use `backtest-integrity-review`, [invariants](../../docs/safety-invariants.md),
 [protocol](../../docs/backtesting-protocol.md). For investment also use
 `investment-system-development`.
 
+The feasibility gates below constrain real-data research and claims, not
+ordinary local implementation with synthetic fixtures. Do not block unrelated
+engineering or add operator-protection requirements beyond the requested scope.
+
 - Stop before product histories/comparative returns at unmet eligibility,
   persistent data-rights/vintage, cash-terms, actions/FX, costs/tax or frozen-spec
   gates. No data acquisition, account access or paid/authenticated feeds.

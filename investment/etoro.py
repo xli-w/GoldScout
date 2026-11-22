@@ -78,7 +78,7 @@ _TRANSPORT_CODES = frozenset({
     "permission_refused", "rate_limited", "http_unavailable", "encoding_refused",
     "content_refused", "framing_refused", "response_too_large",
     "response_incomplete", "transport_unavailable", "approval_interrupted",
-    "cancellation_unconfirmed",
+    "cancellation_unconfirmed", "connection_read_outcome_uncertain",
 })
 _LIMITATIONS = (
     "partial_source_snapshot_not_accounting_or_buying_power",
@@ -122,12 +122,15 @@ class EToroTransport:
     """
 
     def __init__(self, *, resolver=None, connection_factory=None, proxy_url=None,
-                 before_request=None):
+                 before_request=None, on_dispatch=None):
         self._resolver = resolver or resolve_host
         self._connection_factory = connection_factory or PinnedHTTPSConnection
         if before_request is not None and not callable(before_request):
             raise ValueError("The request approval check must be callable")
+        if on_dispatch is not None and not callable(on_dispatch):
+            raise ValueError("The dispatch notification must be callable")
         self._before_request = before_request
+        self._on_dispatch = on_dispatch
         try:
             self._proxy = parse_proxy_url(
                 configured_proxy_url() if proxy_url is None else proxy_url)
@@ -249,6 +252,9 @@ class EToroTransport:
             check_deadline()
             if self._before_request is not None:
                 self._before_request()
+                check_deadline()
+            if self._on_dispatch is not None:
+                self._on_dispatch()
                 check_deadline()
             connection.request("GET", path, headers={
                 **headers, "Host": HOST, "Accept": "application/json",

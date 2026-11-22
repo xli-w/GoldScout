@@ -53,7 +53,8 @@ test.describe("eToro within the portfolio", () => {
     await expect(etoro).toContainText("separate from your journal");
     await expect(etoro).toContainText("Jul 1, 2026, 10:00:00 AM UTC");
     await expect(etoro).not.toContainText("Jul 1, 2026, 10:02:00 AM UTC");
-    await expect(etoro).toContainText("balance coverage and source time are unverified");
+    await expect(etoro).toContainText("total account value, not spendable cash");
+    await expect(etoro).toContainText("no source timestamp");
     const direct = etoro.getByRole("region", { name: "Direct instrument aggregates" });
     await expect(direct.getByRole("columnheader", { name: "Exposure (asset currency)" })).toBeVisible();
     await expect(direct.getByRole("row").filter({ hasText: "101" })).toContainText("42 USD");
@@ -826,6 +827,41 @@ test.describe("eToro within the portfolio", () => {
     await expect(etoro).toContainText("The displayed source snapshot is not refreshed");
     await expect(etoro.getByRole("button", { name: "Refresh once now" })).toHaveCount(0);
     expect(writes.map(item => item.path)).toEqual(["connect", "confirm", "revoke"]);
+  });
+
+  test("uncertain connection read outcome blocks another read", async ({ page }) => {
+    let connectAttempts = 0;
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "GET") return route.fulfill({ json: path === "session" ? {
+        enabled: true, read_generation: 0, csrf: "synthetic-csrf",
+        state: "not_connected", last_status: "not_collected", snapshot_available: false,
+        connection: null,
+      } : { state: "not_connected", last_status: "not_collected",
+        snapshot: null, connection: null } });
+      if (path === "connect") {
+        connectAttempts += 1;
+        return route.fulfill({ status: 409, json: {
+          error: "etoro_read_failed", error_code: "connection_read_outcome_uncertain",
+        } });
+      }
+      return route.abort();
+    });
+
+    await page.goto("/investment?view=tools");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await etoro.getByText("Connect eToro", { exact: true }).click();
+    await etoro.getByLabel("eToro environment").selectOption("real");
+    await etoro.getByLabel("I verified this key has Read-only permission.").check();
+    await etoro.getByLabel("I verified my account is eligible for this API use.").check();
+    await etoro.getByLabel(/I verified rights for local display/).check();
+    const connect = etoro.getByRole("button", { name: "Connect and retrieve once" });
+    await connect.click();
+    await expect(etoro).toContainText("A provider request may have been sent");
+    await expect(etoro).toContainText("The connection read is still unverified");
+    await expect(connect).toBeDisabled();
+    expect(connectAttempts).toBe(1);
   });
 
   test("discarding a preview resets startup consent before using a broader key", async ({ page }) => {

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from investment import etoro
 from investment.etoro_portfolio import collect_portfolio, normalize_portfolio
@@ -161,6 +161,9 @@ class PortfolioProjectionTests(unittest.TestCase):
         self.assertEqual(result["gbp_balance"]["source_balance"], "105")
         self.assertIsNone(result["gbp_balance"]["source_as_of"])
         self.assertEqual(result["gbp_balance"]["received_at"], "2026-11-19T12:00:00.000000Z")
+        self.assertEqual(
+            result["gbp_balance"]["meaning"],
+            "provider_total_account_value_not_spendable_cash")
         self.assertEqual(result["account_totals"]["accountBalance"], "105")
         self.assertEqual(result["closed_trade_history"]["trades"], [])
         for call in transport.call_args_list:
@@ -250,6 +253,7 @@ class PortfolioProjectionTests(unittest.TestCase):
             with self.subTest(close_timestamp=close_timestamp):
                 trade = closed_trade()
                 trade["closeTimestamp"] = close_timestamp
+                trade["openTimestamp"] = "2024-01-01T00:00:00Z"
                 transport = Mock(side_effect=[
                     encoded(aggregate()), encoded(balance_document()), encoded([trade]),
                 ])
@@ -262,6 +266,129 @@ class PortfolioProjectionTests(unittest.TestCase):
                 self.assertEqual(
                     result["closed_trade_history"]["error_code"], "history_date_out_of_range")
                 self.assertEqual(result["closed_trade_history"]["trades"], [])
+
+    def test_history_rejects_future_timestamp_on_the_current_date(self):
+        trade = closed_trade()
+        trade["closeTimestamp"] = "2026-11-19T12:00:01Z"
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()), encoded([trade]),
+        ])
+        result = collect_portfolio(
+            transport, lambda: {
+                "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+            }, "real", now=lambda: NOW, include_closed_history=True)
+        self.assertEqual(result["closed_trade_history"]["status"], "unavailable")
+        self.assertEqual(
+            result["closed_trade_history"]["error_code"], "history_date_out_of_range")
+        self.assertEqual(result["closed_trade_history"]["trades"], [])
+
+    def test_history_rejects_opening_after_close_but_accepts_older_openings(self):
+        older_trade = closed_trade()
+        older_trade["openTimestamp"] = "2020-01-01T00:00:00Z"
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()), encoded([older_trade]),
+        ])
+        result = collect_portfolio(
+            transport, lambda: {
+                "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+            }, "real", now=lambda: NOW, include_closed_history=True)
+        history = result["closed_trade_history"]
+        self.assertEqual(history["status"], "available")
+        self.assertEqual(history["trades"][0]["openTimestamp"], "2020-01-01T00:00:00.000000Z")
+
+        impossible_trade = closed_trade()
+        impossible_trade["openTimestamp"] = "2026-11-18T15:04:06Z"
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()), encoded([impossible_trade]),
+        ])
+        result = collect_portfolio(
+            transport, lambda: {
+                "x-api-key": "synthetic-public", "x-user-key": "synthetic-user",
+            }, "real", now=lambda: NOW, include_closed_history=True)
+        history = result["closed_trade_history"]
+        self.assertEqual(history["status"], "unavailable")
+        self.assertEqual(history["error_code"], "schema_invalid")
+        self.assertEqual(history["trades"], [])
+
+    def test_history_accepts_trade_received_across_midnight(self):
+        current = [datetime(2026, 11, 19, 23, 59, 59, tzinfo=timezone.utc)]
+        trade = closed_trade()
+        trade["closeTimestamp"] = "2026-11-20T00:00:01Z"
+
+        def transport(path, headers):
+            if "aggregate-portfolio" in path:
+                return encoded(aggregate())
+            if "/balances/" in path:
+                return encoded(balance_document())
+            current[0] = datetime(2026, 11, 20, 0, 0, 2, tzinfo=timezone.utc)
+            return encoded([trade])
+
+        result = collect_portfolio(
+            transport,
+            lambda: {"x-api-key": "synthetic-public", "x-user-key": "synthetic-user"},
+            "real", now=lambda: current[0], include_closed_history=True)
+        history = result["closed_trade_history"]
+        self.assertEqual(history["status"], "available")
+        self.assertEqual(history["through_date"], "2026-11-20")
+        self.assertEqual(len(history["trades"]), 1)
+
+    def test_history_uses_receipt_clock_before_parsing_response(self):
+        current = [NOW]
+        trade = closed_trade()
+        trade["closeTimestamp"] = "2026-11-19T12:00:05Z"
+        transport = Mock(side_effect=[
+            encoded(aggregate()), encoded(balance_document()), encoded([trade]),
+        ])
+        from investment.etoro_portfolio import normalize_closed_trade_page
+
+        def delayed_parse(payload):
+            current[0] += timedelta(seconds=10)
+            return normalize_closed_trade_page(payload)
+
+        with patch("investment.etoro_portfolio.normalize_closed_trade_page",
+                   side_effect=delayed_parse):
+            result = collect_portfolio(
+                transport,
+                lambda: {"x-api-key": "synthetic-public", "x-user-key": "synthetic-user"},
+                "real", now=lambda: current[0], include_closed_history=True)
+        history = result["closed_trade_history"]
+        self.assertEqual(history["status"], "unavailable")
+        self.assertEqual(history["error_code"], "history_date_out_of_range")
+        self.assertEqual(history["received_at"], "2026-11-19T12:00:00.000000Z")
+        self.assertEqual(history["trades"], [])
+
+    def test_history_rejects_sub_microsecond_timestamps(self):
+        from investment.etoro_portfolio import normalize_closed_trade_page
+
+        for field in ("closeTimestamp", "openTimestamp"):
+            for value in ("2026-11-19T12:00:00.1234567Z",
+                          "2026-11-19T12:00:00,0000009Z",
+                          "2026-11-19T12:00:00.123456+0000",
+                          "2026-11-19T12:00:00+00"):
+                trade = closed_trade()
+                trade[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(etoro.EToroError):
+                    normalize_closed_trade_page(encoded([trade]))
+
+    def test_history_with_backward_receipt_clock_has_no_receipt_timestamp(self):
+        current = [NOW]
+
+        def transport(path, headers):
+            if "aggregate-portfolio" in path:
+                return encoded(aggregate())
+            if "/balances/" in path:
+                return encoded(balance_document())
+            current[0] = NOW - timedelta(seconds=1)
+            return encoded([closed_trade()])
+
+        result = collect_portfolio(
+            transport,
+            lambda: {"x-api-key": "synthetic-public", "x-user-key": "synthetic-user"},
+            "real", now=lambda: current[0], include_closed_history=True)
+        history = result["closed_trade_history"]
+        self.assertEqual(history["status"], "unavailable")
+        self.assertEqual(history["error_code"], "clock_unavailable")
+        self.assertIsNone(history["received_at"])
 
     def test_gbp_balance_identity_or_currency_mismatch_is_unavailable(self):
         balance = {"balances": [{

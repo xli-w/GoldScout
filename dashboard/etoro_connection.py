@@ -187,9 +187,21 @@ class EToroConnection:
                 "x-user-key": values["GOLDSCOUT_ETORO_USER_KEY"]}
 
     def _collect(self, environment, approval_check=None, expected_account_id=None,
-                 include_closed_history=False):
-        transport = (self.transport_factory() if self.transport_factory is not None
-                     else etoro.EToroTransport(before_request=approval_check))
+                 include_closed_history=False, on_dispatch=None):
+        if self.transport_factory is None:
+            transport = etoro.EToroTransport(
+                before_request=approval_check, on_dispatch=on_dispatch)
+        else:
+            selected_transport = self.transport_factory()
+
+            def guarded_transport(path, headers):
+                if approval_check is not None:
+                    approval_check()
+                if on_dispatch is not None:
+                    on_dispatch()
+                return selected_transport(path, headers)
+
+            transport = guarded_transport
         return collect_portfolio(
             transport, self._credentials, environment, now=self.clock_fn,
             expected_account_id=expected_account_id, before_balance=approval_check,
@@ -221,16 +233,32 @@ class EToroConnection:
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             raise InvestmentError("eToro request identifier is invalid")
         now = clock(now)
+        expires = now + PREVIEW_TTL
         credential_revision = self._current_credential_revision()
         if generation is None:
             generation = self.begin_generation()
+        request_dispatched = False
+
+        def mark_dispatched():
+            nonlocal request_dispatched
+            request_dispatched = True
+
+        def interrupt_code():
+            return ("connection_read_outcome_uncertain" if request_dispatched
+                    else "approval_interrupted")
 
         def verify():
             with self.lock:
                 if generation != self._revocation_generation:
-                    raise etoro.EToroError("approval_interrupted")
+                    raise etoro.EToroError(interrupt_code())
+                try:
+                    checked = clock(self.clock_fn())
+                except (InvestmentError, OSError, RuntimeError):
+                    raise etoro.EToroError(interrupt_code()) from None
+                if checked >= expires:
+                    raise etoro.EToroError(interrupt_code())
                 if self._current_credential_revision() != credential_revision:
-                    raise etoro.EToroError("approval_interrupted")
+                    raise etoro.EToroError(interrupt_code())
 
         with self.collection_lock:
             with self.lock:
@@ -246,19 +274,25 @@ class EToroConnection:
                 if len(self.pending) >= 32:
                     raise InvestmentError("Too many pending eToro previews; restart the local dashboard")
             with self._claim_startup():
-                snapshot = self._collect(value["environment"], approval_check=verify)
+                verify()
+                snapshot = self._collect(
+                    value["environment"], approval_check=verify,
+                    on_dispatch=mark_dispatched)
             preview_id = secrets.token_urlsafe(32)
-            response = {"preview_id": preview_id, "expires_at": iso(now + PREVIEW_TTL),
+            response = {"preview_id": preview_id, "expires_at": iso(expires),
                         "snapshot": snapshot}
-            timer = threading.Timer(
-                PREVIEW_TTL.total_seconds(), self._expire_pending,
-                args=(request_id, token, preview_id))
-            timer.daemon = True
             with self.lock:
                 verify()
+                completed_at = clock(self.clock_fn())
+                if completed_at >= expires:
+                    raise InvestmentError("eToro portfolio preview expired; request a fresh read")
+                timer = threading.Timer(
+                    (expires - completed_at).total_seconds(), self._expire_pending,
+                    args=(request_id, token, preview_id))
+                timer.daemon = True
                 pending = {
                     "token": token, "request": deepcopy(value), "response": response,
-                    "snapshot": snapshot, "expires": now + PREVIEW_TTL, "timer": timer,
+                    "snapshot": snapshot, "expires": expires, "timer": timer,
                     "credential_revision": credential_revision,
                 }
                 self.pending[request_id] = pending

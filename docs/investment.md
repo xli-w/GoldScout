@@ -127,9 +127,12 @@ never from browser fields.
 The panel shows provider account totals in their account currency, direct
 instrument aggregates with each asset's currency, and separate copy groups.
 Provider timestamps are displayed in UTC. It also shows a separate
-provider-reported GBP balance when usable; its coverage and source time are
-unverified, and it is not synchronized to the portfolio snapshot. A missing,
-zero or negative exchange rate makes that balance unavailable in the view.
+provider-reported GBP display balance when usable. eToro documents a Trading
+account's balance as total account value, not spendable cash; the balance read
+has no source timestamp and is not synchronized to the portfolio snapshot.
+A missing, zero or negative exchange rate makes that balance unavailable in the view.
+See eToro's
+[balance endpoint documentation](https://api-portal.etoro.com/api-reference/balances/get-balance-for-a-specific-account).
 The documented
 portfolio response does not identify every instrument class or individual
 position leg, and pending-order details are unavailable beyond the provider's

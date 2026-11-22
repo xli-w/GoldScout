@@ -5,9 +5,13 @@ description: "Validate portfolio evidence changes offline; historical skill name
 # Change validation
 
 Follow the [development validation procedure](../../../docs/development.md#inspect-reproduce-change-verify):
-verify the interpreter, run the focused offline slice, then adjacent checks.
-Shared accounting/data/tooling changes require full regression; copy/layout
-changes do not require accounting review.
+verify the interpreter and run the smallest offline slice covering the change.
+Add adjacent checks for affected callers. Shared transaction/accounting/data
+contracts and offline-isolation changes require full regression, not every
+tooling or UI edit. Independent review applies to accounting, persistence,
+causal data or external authority, not unrelated local development.
+Documentation-only changes need no Python regression unless they affect a
+tested customization/documentation contract.
 
 Use temporary synthetic evidence and fixed clocks. Apply
 [invariants](../../../docs/safety-invariants.md) for the affected contract.

@@ -10,6 +10,12 @@ from . import etoro
 
 
 _CURRENCY = re.compile(r"[A-Z]{3}")
+_UTC_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?Z")
+_HISTORY_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})")
 _MONEY_FIELDS = (
     "accountAvailableCash", "accountFrozenCash", "accountCurrentPnl",
     "accountTotalValue", "accountTotalUsedMargin", "accountBalance",
@@ -75,7 +81,7 @@ def _currency(value):
 
 
 def _timestamp(value):
-    if type(value) is not str or not value.endswith("Z"):
+    if type(value) is not str or _UTC_TIMESTAMP.fullmatch(value) is None:
         _invalid()
     try:
         result = datetime.fromisoformat(value[:-1] + "+00:00")
@@ -120,7 +126,7 @@ def _decode(payload):
 
 
 def _history_timestamp(value):
-    if type(value) is not str:
+    if type(value) is not str or _HISTORY_TIMESTAMP.fullmatch(value) is None:
         _invalid()
     try:
         source = datetime.fromisoformat(
@@ -154,6 +160,9 @@ def _closed_trade(value):
             if type(item[field]) is not bool:
                 _invalid()
             result[field] = item[field]
+    if ("openTimestamp" in result
+            and result["openTimestamp"] > result["closeTimestamp"]):
+        _invalid()
     return result
 
 
@@ -176,13 +185,14 @@ def _history_clock(now):
     return value.astimezone(timezone.utc)
 
 
-def _history_result(status, *, from_date, through_date, now, trades=(), error_code=None):
+def _history_result(status, *, from_date, through_date, received_at,
+                    trades=(), error_code=None):
     result = {
         "status": status,
         "from_date": from_date,
         "through_date": through_date,
-        "received_at": _history_clock(now).isoformat(
-            timespec="microseconds").replace("+00:00", "Z"),
+        "received_at": (None if received_at is None else received_at.isoformat(
+            timespec="microseconds").replace("+00:00", "Z")),
         "trades": list(trades),
     }
     if error_code is not None:
@@ -194,10 +204,14 @@ def _collect_closed_trade_history(transport, credentials, environment, now, befo
     requested_at = _history_clock(now)
     from_date = (requested_at.date() - timedelta(days=364)).isoformat()
     through_date = requested_at.date().isoformat()
+    first_date = datetime.combine(
+        datetime.fromisoformat(from_date).date(), datetime.min.time(), timezone.utc)
     path_prefix = etoro.CLOSED_TRADE_HISTORY_PATHS[environment]
     trades = []
+    last_received_at = None
 
     def request_page(page):
+        nonlocal through_date, last_received_at
         if before_request is not None:
             before_request()
         path = (f"{path_prefix}?minDate={from_date}&page={page}"
@@ -215,8 +229,16 @@ def _collect_closed_trade_history(transport, credentials, environment, now, befo
             raise etoro.EToroError("collection_unavailable") from None
         except Exception:
             raise etoro.EToroError("collection_unavailable") from None
+        received_at = _history_clock(now)
+        if received_at < requested_at or (
+                last_received_at is not None and received_at < last_received_at):
+            last_received_at = None
+            raise etoro.EToroError("clock_unavailable")
+        last_received_at = received_at
         page_trades = normalize_closed_trade_page(payload)
-        if any(not from_date <= trade["closeTimestamp"][:10] <= through_date
+        through_date = max(through_date, received_at.date().isoformat())
+        if any(not first_date <= datetime.fromisoformat(
+                    trade["closeTimestamp"].replace("Z", "+00:00")) <= received_at
                for trade in page_trades):
             raise etoro.EToroError("history_date_out_of_range")
         return page_trades
@@ -229,13 +251,13 @@ def _collect_closed_trade_history(transport, credentials, environment, now, befo
                 raise
             return _history_result(
                 "unavailable", from_date=from_date, through_date=through_date,
-                now=now, error_code=exc.code)
+                received_at=last_received_at, error_code=exc.code)
         trades.extend(page_trades)
         if len(page_trades) < _CLOSED_HISTORY_PAGE_SIZE:
             trades.sort(key=lambda item: item["closeTimestamp"], reverse=True)
             return _history_result(
                 "available", from_date=from_date, through_date=through_date,
-                now=now, trades=trades)
+                received_at=last_received_at, trades=trades)
 
     try:
         final_page = request_page(_CLOSED_HISTORY_MAX_PAGES + 1)
@@ -244,15 +266,15 @@ def _collect_closed_trade_history(transport, credentials, environment, now, befo
             raise
         return _history_result(
             "unavailable", from_date=from_date, through_date=through_date,
-            now=now, error_code=exc.code)
+            received_at=last_received_at, error_code=exc.code)
     if final_page:
         return _history_result(
             "unavailable", from_date=from_date, through_date=through_date,
-            now=now, error_code="history_limit_exceeded")
+            received_at=last_received_at, error_code="history_limit_exceeded")
     trades.sort(key=lambda item: item["closeTimestamp"], reverse=True)
     return _history_result(
         "available", from_date=from_date, through_date=through_date,
-        now=now, trades=trades)
+        received_at=last_received_at, trades=trades)
 
 
 def _instrument(value):

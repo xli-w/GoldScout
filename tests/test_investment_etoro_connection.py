@@ -132,7 +132,8 @@ class EToroConnectionTests(unittest.TestCase):
                 second.join(5)
         self.assertFalse(first.is_alive())
         self.assertFalse(second.is_alive())
-        self.assertCountEqual(errors, ["approval_interrupted", "approval_interrupted"])
+        self.assertCountEqual(
+            errors, ["approval_interrupted", "connection_read_outcome_uncertain"])
         self.assertEqual(len(paths), 1)
         self.assertEqual(manager.pending, {})
 
@@ -165,6 +166,124 @@ class EToroConnectionTests(unittest.TestCase):
         current[0] = NOW + timedelta(minutes=6)
         manager.begin("synthetic-session", "after-expiry", consent, current[0])
         self.assertEqual(set(manager.pending), {"after-expiry"})
+
+    def test_preview_expiry_includes_collection_time_and_rejects_late_results(self):
+        for delay, expected_error in (
+                (timedelta(minutes=4), None),
+                (timedelta(minutes=6), "connection_read_outcome_uncertain")):
+            with self.subTest(delay=delay):
+                current = [NOW]
+                fixture_transport = FixtureTransport()
+
+                class DelayedTransport:
+                    def __call__(self, path, headers):
+                        if "/balances/" in path:
+                            current[0] += delay
+                        return fixture_transport(path, headers)
+
+                manager = EToroConnection(
+                    self.path, lambda: current[0], transport_factory=DelayedTransport,
+                    credential_accessor=lambda: KEYS)
+                self.managers.append(manager)
+                if expected_error is not None:
+                    with self.assertRaisesRegex(etoro.EToroError, expected_error):
+                        manager.begin(
+                            "synthetic-session", f"delayed-{delay}", self.consent(), NOW)
+                    self.assertEqual(manager.pending, {})
+                else:
+                    manager.begin(
+                        "synthetic-session", f"delayed-{delay}", self.consent(), NOW)
+                    pending = manager.pending[f"delayed-{delay}"]
+                    self.assertAlmostEqual(pending["timer"].interval, 60, delta=0.1)
+
+    def test_preview_expired_in_queue_does_not_dispatch_a_read(self):
+        current = [NOW]
+        transport = FixtureTransport()
+        manager = EToroConnection(
+            self.path, lambda: current[0], transport_factory=lambda: transport,
+            credential_accessor=lambda: KEYS)
+        self.managers.append(manager)
+        blocked = threading.Lock()
+        blocked.acquire()
+        queued = threading.Event()
+        errors = []
+
+        class QueueingLock:
+            def __enter__(self):
+                queued.set()
+                blocked.acquire()
+
+            def __exit__(self, *args):
+                blocked.release()
+
+        manager.collection_lock = QueueingLock()
+
+        def begin():
+            try:
+                self.connect(manager, request_id="queued")
+            except etoro.EToroError as exc:
+                errors.append(exc.code)
+
+        worker = threading.Thread(target=begin)
+        worker.start()
+        try:
+            self.assertTrue(queued.wait(2))
+            current[0] = NOW + timedelta(minutes=5)
+        finally:
+            blocked.release()
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, ["approval_interrupted"])
+        self.assertEqual(transport.paths, [])
+        self.assertEqual(manager.pending, {})
+
+    def test_preview_expiry_between_reads_stops_remaining_collection(self):
+        current = [NOW]
+        paths = []
+
+        class ExpiringTransport:
+            def __call__(self, path, headers):
+                paths.append(path)
+                if path == etoro.AGGREGATE_PORTFOLIO_PATHS["real"]:
+                    current[0] = NOW + timedelta(minutes=5)
+                    return encoded(aggregate())
+                return balance()
+
+        manager = EToroConnection(
+            self.path, lambda: current[0], transport_factory=ExpiringTransport,
+            credential_accessor=lambda: KEYS)
+        self.managers.append(manager)
+        with self.assertRaisesRegex(
+                etoro.EToroError, "^connection_read_outcome_uncertain$"):
+            self.connect(manager, request_id="between-reads")
+        self.assertEqual(paths, [etoro.AGGREGATE_PORTFOLIO_PATHS["real"]])
+        self.assertEqual(manager.pending, {})
+
+    def test_preview_clock_failure_after_dispatch_is_reported_as_uncertain(self):
+        for error_type in (OSError, RuntimeError):
+            with self.subTest(error_type=error_type):
+                paths = []
+
+                def clock():
+                    if paths:
+                        raise error_type("synthetic clock failure")
+                    return NOW
+
+                def transport(path, headers):
+                    paths.append(path)
+                    return encoded(aggregate())
+
+                manager = EToroConnection(
+                    self.path, clock, transport_factory=lambda: transport,
+                    credential_accessor=lambda: KEYS)
+                self.managers.append(manager)
+                with self.assertRaisesRegex(
+                        etoro.EToroError, "^connection_read_outcome_uncertain$"):
+                    manager.begin(
+                        "synthetic-session", f"clock-{error_type.__name__}",
+                        self.consent(), NOW)
+                self.assertEqual(paths, [etoro.AGGREGATE_PORTFOLIO_PATHS["real"]])
+                self.assertEqual(manager.pending, {})
 
     def test_preview_is_process_local_and_confirmation_saves_only_account_consent(self):
         transport = FixtureTransport()
@@ -449,7 +568,7 @@ class EToroConnectionTests(unittest.TestCase):
                 calls = [0]
                 def clock():
                     calls[0] += 1
-                    if calls[0] == 5:
+                    if calls[0] == 7:
                         raise error_type("synthetic clock failure")
                     return NOW
                 changed = aggregate()

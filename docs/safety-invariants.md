@@ -3,6 +3,19 @@
 These are development contracts, not certification of custody, suitability,
 profitability or live readiness. [README](../README.md) defines current scope.
 
+## How to apply these contracts
+
+For development, focus on transaction integrity and data truth: atomic writes,
+exact conservation, preserved evidence, causal timing and explicit uncertainty.
+Apply the relevant contracts to the behavior being changed, not every item to
+every task. Do not invent additional operator-protection policies, warnings or
+approval steps. Product limitations below describe current behavior; they do
+not prohibit explicitly requested local feature development.
+
+Credential/privacy protections and authorization for external account actions
+still apply. This guidance does not remove existing application controls or
+change hooks, CI, offline isolation or host permissions.
+
 ## Authority and privacy
 
 - There is no order-submission runtime, trading scheduler, execution broker

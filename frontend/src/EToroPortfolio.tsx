@@ -300,9 +300,9 @@ function SnapshotView({ snapshot, now }: { snapshot: EToroSnapshot; now: number 
       <h4>Provider-reported GBP balance</h4>
       <p><strong>GBP {gbp.amount_gbp}</strong> · Source balance {gbp.source_balance} {gbp.source_currency}
         {" · "}Provider rate {gbp.exchange_rate} {gbp.display_currency} per {gbp.source_currency}</p>
-      <p className="position-note">This is a separate account-balance read; balance coverage and source time are unverified.
-        It is not synchronized to the portfolio snapshot and is not used to value individual holdings
-        or populate the GBP journal.</p>
+      <p className="position-note">eToro documents a Trading account balance as total account value, not spendable cash.
+        This separate read has no source timestamp, is not synchronized to the portfolio snapshot,
+        and is not used to value individual holdings or populate the GBP journal.</p>
     </section> : <section className="etoro-section" aria-label="GBP balance unavailable">
       <h4>GBP balance unavailable</h4>
       <p>The provider did not return a usable GBP account balance. No conversion was estimated.
@@ -462,8 +462,16 @@ export function EToroPortfolioPanel({ revokeOnly = false, journal, now: journalN
     setBusy(true); setError("");
     try { await action(); }
     catch (failure) {
-      if (generation === statusGeneration)
-        setError(failure instanceof Error ? failure.message : "eToro request was unavailable.");
+      if (generation === statusGeneration) {
+        if (failure instanceof EToroRequestError &&
+            failure.code === "connection_read_outcome_uncertain") {
+          uncertainOutcome = "connection";
+          setReconciliationRequired(true);
+          setError("A provider request may have been sent; the connection read outcome is uncertain.");
+        } else {
+          setError(failure instanceof Error ? failure.message : "eToro request was unavailable.");
+        }
+      }
     }
     finally { busyRef.current = false; setBusy(false); }
   };

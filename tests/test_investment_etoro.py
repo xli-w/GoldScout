@@ -214,6 +214,18 @@ class TransportTests(unittest.TestCase):
         self.assertTrue(self.response.closed)
         self.connection.close.assert_called_once()
 
+    def test_dispatch_callback_runs_immediately_before_request(self):
+        self.setup_transport()
+        events = []
+        self.connection.connect.side_effect = lambda: events.append("connect")
+        self.connection.request.side_effect = lambda *args, **kwargs: events.append("request")
+        transport = etoro.EToroTransport(
+            resolver=self.resolver, connection_factory=self.factory, proxy_url="",
+            on_dispatch=lambda: events.append("dispatch"))
+
+        self.assertEqual(transport(etoro.PORTFOLIO_PATH, headers()), encoded())
+        self.assertEqual(events, ["connect", "dispatch", "request"])
+
     def test_other_paths_and_extra_headers_refused_before_dns(self):
         transport = self.setup_transport()
         for path in ("/", etoro.PORTFOLIO_URL, etoro.PORTFOLIO_PATH + "?x=y",

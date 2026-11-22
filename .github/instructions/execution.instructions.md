@@ -9,6 +9,11 @@ The application records GBP portfolio evidence; proposals are blocked and it
 has no execution adapter, scheduler or order path. Do not revive removed runtime
 code, add compatibility aliases or infer authority from a profile/report/AI brief.
 
+This describes current runtime behavior, not a prohibition on requested local
+design or implementation work. Do not add operator-protection gates to unrelated
+features. A local development request alone does not authorize external calls
+or account actions.
+
 Any future execution needs separate explicit scope/approval and venue-specific
 evidence. Use `order-recovery-review` prospectively: durable intent before submit,
 unique ownership, cumulative-fill conservation, ambiguous-outcome quarantine,

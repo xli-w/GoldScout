@@ -257,12 +257,15 @@ class EToroDashboardAPITests(unittest.TestCase):
         results = {}
 
         class ControlledTransport:
-            def __init__(self, *, before_request=None):
+            def __init__(self, *, before_request=None, on_dispatch=None):
                 self.before_request = before_request
+                self.on_dispatch = on_dispatch
 
             def __call__(self, path, headers):
                 if self.before_request is not None:
                     self.before_request()
+                if self.on_dispatch is not None:
+                    self.on_dispatch()
                 paths.append(path)
                 if pause.is_set() and "aggregate-portfolio" in path:
                     started.set()
@@ -384,7 +387,9 @@ class EToroDashboardAPITests(unittest.TestCase):
                 self.assertTrue(revoked_before_release, "connection read blocked revocation")
                 self.assertEqual(results["revoke"].status_code, 200)
                 self.assertEqual(results["connect"].status_code, 409)
-                self.assertEqual(results["connect"].json()["error_code"], "approval_interrupted")
+                self.assertEqual(
+                    results["connect"].json()["error_code"],
+                    "connection_read_outcome_uncertain")
                 self.assertNotIn("preview_id", results["connect"].json())
                 self.assertEqual(len(paths), 1, "a second provider request followed revocation")
 

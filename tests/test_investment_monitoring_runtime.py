@@ -412,6 +412,16 @@ class MonitoringRuntimeTests(unittest.TestCase):
         self.assertEqual(self.database.read_bytes(), before)
         self.assertEqual(len(read_cache(self.cache, self.profile, NOW)["attempts"]), 2)
 
+    def test_approval_allows_repeated_collections_until_expiry(self):
+        collector = Mock(return_value={
+            "account_currency": "USD", "raw": {"credit": "42", "positions": []}})
+        for _ in range(2):
+            result = self.collect(
+                allow_network=True, transport=Mock(), collector=collector)
+            self.assertEqual(result["status"], "partial_observation")
+        self.assertEqual(collector.call_count, 2)
+        self.assertEqual(len(read_cache(self.cache, self.profile, NOW)["attempts"]), 2)
+
     def test_native_precision_is_preserved_and_expired_completion_records_failure(self):
         collector = Mock(return_value={
             "account_currency": "USD", "raw": {"credit": "0.123456789012345678", "positions": []}})

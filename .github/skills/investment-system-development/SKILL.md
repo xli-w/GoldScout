@@ -11,6 +11,12 @@ Use [investment](../../../docs/investment.md) for user workflows,
 [mandate](../../../docs/investment-research-context.md) and
 [protocol](../../../docs/backtesting-protocol.md). Stop at unmet feasibility gates.
 
+Use the checklist for affected behavior, not as a prerequisite to every local
+change. Implement requested features without adding operator-protection gates
+or unrelated requirements. Research feasibility gates limit real-data runs and
+claims, not development with synthetic fixtures. Existing runtime controls and
+external-action permissions remain unchanged unless separately in scope.
+
 ## Journal checklist
 
 - One operator-recorded GBP opening-evidence journal, wire `schema_version=2`.
@@ -66,6 +72,8 @@ Use [investment](../../../docs/investment.md) for user workflows,
 3. Cover exact/missing/future/late evidence, cash/quantity/role boundaries,
    repeat/conflicting IDs, rollback/restart and post-commit reporting failures.
    Never suggest a committed action rolled back because a status read failed.
-4. Run focused and adjacent offline checks. Shared accounting/data contracts
+4. Run focused offline checks and adjacent checks for affected callers.
+   Shared transaction/accounting/data contracts
    require full regression and independent read-only Safety Reviewer review.
-   Copy/layout changes do not.
+   Routine UI, documentation, tooling and behavior-preserving refactoring do not
+   require those escalations unless they affect the listed contracts.

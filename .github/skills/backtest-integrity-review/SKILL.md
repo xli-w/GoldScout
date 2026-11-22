@@ -9,6 +9,11 @@ Read [invariants](../../../docs/safety-invariants.md),
 [protocol](../../../docs/backtesting-protocol.md). Anchor at source/availability,
 valuation/fill or selection owner, not a reporting wrapper.
 
+Apply feasibility gates to real-data research and performance claims, not to
+local implementation or synthetic engineering checks. Do not introduce extra
+operator-protection policies or repeat approvals for already scoped local work.
+Keep causal evidence, trial history and holdout integrity intact.
+
 1. Stop before product histories/comparative returns at missing product/account
    eligibility, persistent rights/vintage, cash terms, actions/FX, costs/tax or
    frozen-policy/specification gates. Public documentation and synthetic fixtures

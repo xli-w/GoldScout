@@ -7,9 +7,25 @@ development work. Implement requested local features without treating every
 change as an external account action. "No execution runtime" describes the
 product: it does not prohibit running development tools.
 
+## Working defaults
+
+Proceed with requested local changes without repeated confirmation. Make
+reasonable, reversible implementation choices and ask only when a material
+ambiguity affects the requested outcome or an action needs authorization.
+Do not add warnings, acknowledgement screens, policy restrictions or approval
+steps merely to protect the sole operator from an intentional choice.
+
+Prioritize atomic transactions, exact accounting, preserved source evidence,
+causal availability and honest reporting of missing or uncertain data. Apply
+domain checklists only where the change affects those contracts. Existing
+application controls remain implemented behavior, not a blanket prohibition
+on changing the product when requested. A development request does not
+authorize external account actions, credential access or operational maintenance.
+
 **Developer** implements. **Safety Reviewer** independently reviews changes to
 accounting, persistence, causal data or external authority with read/search
-tools only; ordinary copy/layout changes do not require that review.
+tools only. Routine UI, documentation, refactoring and tooling changes that
+leave those contracts unchanged do not require that review.
 
 ## Current owners
 
@@ -39,12 +55,19 @@ tools only; ordinary copy/layout changes do not require that review.
    preserve documented Python 3.10 support. Do not hardcode a local interpreter.
 3. Use controlled UTC clocks, exact decimals and temporary synthetic storage.
    Never access operational databases, receipts, snapshots, logs or credentials.
-4. Make the smallest justified change, run the focused offline slice immediately,
-   then adjacent checks. Shared accounting/data/configuration/tooling contracts
-   require full offline regression. Changes to accounting, persistence, causal
+4. Make the smallest justified change and run the focused offline slice.
+   Add adjacent checks where callers or shared behavior are affected. Shared
+   transaction/accounting/data contracts and offline-isolation changes require
+   full offline regression; unrelated tooling, documentation and UI changes do
+   not require it merely because they share the repository.
+   Changes to accounting, persistence, causal
    data or external authority also require independent read-only Safety Reviewer.
 5. Update related docs, validate customization and inspect the diff. Report exact
    checks/results, assumptions, review status and absent broker validation.
+
+The commands below are a menu, not a checklist to run for every change.
+Documentation-only changes need no Python regression unless they change
+customization metadata or another tested documentation contract.
 
 ```powershell
 python scripts/offline_tests.py --pattern test_campaign*.py
