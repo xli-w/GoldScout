@@ -1,7 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.mjs";
 
-const mockedFrontendURL=process.env.TRADER_INTELLIGENCE_TEST_URL||"http://127.0.0.1:8766";
-test.use({baseURL:mockedFrontendURL});
 test("synthetic intelligence controls and briefs work without account data",async({page},testInfo)=>{
   test.skip(testInfo.project.name!=="desktop","The synthetic demo has one mutable workspace");
   const errors=[];page.on("pageerror",error=>errors.push(error.message));
@@ -81,14 +79,14 @@ test("intelligence header uses its own source instead of cached account status",
 
 test("direct intelligence visit identifies synthetic source",async({page})=>{
   await mockIntelligence(page,["demo"]);
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   await expect(page.locator(".topbar-status")).toContainText("SYNTHETIC DEMO");
   await expect(page.locator(".topbar-status")).not.toContainText("Runtime");
 });
 
 test("intelligence empty states distinguish disabled collection from missing evidence",async({page})=>{
   const {snapshot}=await mockIntelligence(page,["demo"]);
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   const calendar=page.getByRole("heading",{name:"No calendar events recorded"}).locator("..");
   const briefs=page.getByRole("heading",{name:"No AI briefs recorded"}).locator("..");
   const news=page.getByRole("heading",{name:"No news evidence recorded"}).locator("..");
@@ -120,7 +118,7 @@ test("service observations distinguish recorded failures from current connectivi
   snapshot.calendar_sources=[{source:"bls",checked_at:"2026-03-08T09:28:00Z"}];
   snapshot.source_status={status:"unavailable",available_at:"2026-03-08T09:30:00Z",error_code:"source_unavailable"};
   snapshot.news_last_success_at="2026-03-08T09:20:00Z";
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   const service=page.getByRole("region",{name:"Source status"});
   await expect(service).toContainText("A recent service observation is recorded");
   await expect(service).toContainText("AI summaries: Provider Unavailable");
@@ -153,7 +151,7 @@ test("intelligence dates include the year and are explicitly UTC",async({page})=
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.calendar=[{event_id:"event-1",title:"Synthetic event",scheduled_at:"2026-03-08T09:30:00Z",symbols:["SPY"]}];
   snapshot.news=[{evidence_id:"news-1",title:"Synthetic source",snippet:"Synthetic evidence",source_url:"https://example.test/source",published_at:"2026-03-08T09:30:00Z"}];
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   await expect(page.getByRole("columnheader",{name:"Scheduled (UTC)"})).toBeVisible();
   await expect(page.getByRole("cell",{name:/Mar 8, 2026/})).toBeVisible();
   await expect(page.locator(".intelligence-news time")).toContainText("Published Mar 8, 2026");
@@ -165,7 +163,7 @@ test("intelligence briefs link only loaded evidence and show their validity wind
   snapshot.source_status={status:"available",available_at:"2026-03-08T09:30:00Z",error_code:null};
   snapshot.news=[{evidence_id:"evidence-1",title:"Synthetic cited source",snippet:"Synthetic evidence",source_url:"https://example.test/source",published_at:"2026-03-08T09:00:00Z"}];
   snapshot.briefs=[{brief_id:"brief-1",available_at:"2026-03-08T09:31:00Z",expires_at:"2026-03-08T10:00:00Z",claims:[{text:"A cited synthetic claim.",evidence_ids:["evidence-1","missing-evidence"]}],interpretation:"Synthetic interpretation.",uncertainties:["Synthetic uncertainty."],recommendation:"review",verification:"unverified",provider:"synthetic",model:"test"}];
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
 
   await expect(page.locator(".page-description")).toHaveCount(0);
   await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("Optional public information");
@@ -188,7 +186,7 @@ test("intelligence briefs link only loaded evidence and show their validity wind
 
 test("intelligence retains its last source during refresh and shows unknown after failure",async({page})=>{
   await mockIntelligence(page,["demo"]);
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   await expect(page.locator(".topbar-status")).toContainText("SYNTHETIC DEMO");
 
   let markStarted;
@@ -213,7 +211,7 @@ test("intelligence leads with evidence and separates request from application",a
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.settings.revision=7;
   snapshot.controls=[{request_id:"request-7",status:"applied",reason:"Settings applied",effective_revision:7}];
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
 
   await expect(page.getByRole("region",{name:"Advisory-only boundary"})).toContainText("cannot change records or make trades");
   expect(await page.evaluate(()=>Array.from(document.querySelectorAll(".intelligence-advisory, .position-section, .intelligence-controls")).map(section=>
@@ -235,14 +233,14 @@ test("intelligence leads with evidence and separates request from application",a
 test("disabled analysis controls explain the configuration lock",async({page})=>{
   const {snapshot}=await mockIntelligence(page,["demo"]);
   snapshot.controls_enabled=false;
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   await expect(page.locator(".control-lock-reason")).toContainText("Analysis controls are disabled by the dashboard configuration.");
   await expect(page.getByRole("checkbox",{name:"Market intelligence",exact:true})).toBeDisabled();
 });
 
 test("checked collection preferences are inactive until the master switch is applied",async({page})=>{
   const {snapshot}=await mockIntelligence(page,["demo"]);
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   await expect(page.getByRole("checkbox",{name:"Calendar collection"})).toBeChecked();
   await expect(page.getByRole("checkbox",{name:"News collection"})).toBeChecked();
   await expect(page.getByText("Calendar and news selections are inactive while Market intelligence is off in applied settings.")).toBeVisible();
@@ -257,7 +255,7 @@ test("checked collection preferences are inactive until the master switch is app
 
 test("configured AI profile is used without a provider dropdown",async({page})=>{
   const {requests}=await mockIntelligence(page,["demo"]);
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   await expect(page.getByRole("combobox",{name:"AI provider"})).toHaveCount(0);
   const master=page.getByRole("checkbox",{name:"Market intelligence",exact:true});
   const ai=page.getByRole("checkbox",{name:"AI summaries",exact:true});
@@ -271,7 +269,7 @@ test("configured AI profile is used without a provider dropdown",async({page})=>
 
 test("configured AI profile must be unambiguous and can be safely disabled",async({page})=>{
   const {snapshot,requests}=await mockIntelligence(page,[]);
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   const ai=page.getByRole("checkbox",{name:"AI summaries",exact:true});
   await expect(ai).toBeDisabled();
   await expect(page.getByText("AI summaries are unavailable.",{exact:false})).toBeVisible();
@@ -308,7 +306,7 @@ for(const {scenario,label,profiles,masterEnabled} of [
   test(`safe shutdown: ${scenario}`,async({page})=>{
     const {snapshot,requests}=await mockIntelligence(page,profiles,[]);
     snapshot.settings={...snapshot.settings,enabled:true,ai_enabled:true,ai_profile:"demo",revision:1};
-    await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+    await page.goto("/intelligence");
     const control=page.getByRole("checkbox",{name:label,exact:true});
     await expect(control).toBeChecked();
     await control.uncheck();
@@ -321,7 +319,7 @@ for(const {scenario,label,profiles,masterEnabled} of [
 test("safe recovery clears a rejected profile while both controls are off",async({page})=>{
   const {snapshot,requests}=await mockIntelligence(page,["demo"],[]);
   snapshot.settings={...snapshot.settings,enabled:false,ai_enabled:false,ai_profile:"demo",revision:1};
-  await page.goto(new URL("/intelligence",mockedFrontendURL).href);
+  await page.goto("/intelligence");
   const master=page.getByRole("checkbox",{name:"Market intelligence",exact:true});
   await master.click();
   await expect(page.getByText("Rejected / AI profile is not registered",{exact:true})).toBeVisible();

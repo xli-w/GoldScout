@@ -61,17 +61,11 @@ class DashboardLaunchTests(unittest.TestCase):
         self.save_manifest()
         with patch("dashboard.assets.__file__", str(module)):
             self.assertEqual(verify_frontend(self.static), self.static)
-            investment_schema.write_text('{"changed":true}')
-            with self.assertRaises(FrontendBuildError):
-                verify_frontend(self.static)
-            investment_schema.write_text("{}")
-            awareness_schema.write_text('{"changed":true}')
-            with self.assertRaises(FrontendBuildError):
-                verify_frontend(self.static)
-            awareness_schema.write_text("{}")
-            monitoring_schema.write_text('{"changed":true}')
-            with self.assertRaises(FrontendBuildError):
-                verify_frontend(self.static)
+            for schema in (investment_schema, setup_schema, awareness_schema, monitoring_schema):
+                schema.write_text('{"changed":true}')
+                with self.subTest(schema=schema.name), self.assertRaises(FrontendBuildError):
+                    verify_frontend(self.static)
+                schema.write_text("{}")
 
     def test_unlisted_assets_and_removed_manifest_entries_are_rejected(self):
         extra = self.static / "assets" / "unlisted.js"

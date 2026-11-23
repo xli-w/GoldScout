@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
+import { reviewTimestamp } from "../src/api.ts";
 
 async function loadTypeScript(path) {
   const source = readFileSync(new URL(path, import.meta.url), "utf8");
@@ -10,7 +11,6 @@ async function loadTypeScript(path) {
   });
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 }
-const { reviewTimestamp } = await loadTypeScript("../src/api.ts");
 const { confirmRecording, localClock, pendingRecording, recordingClocks, recordingVersion, RecordingPreviewExpiredError,
   RecordingRequestError, RecordingSavedStorageError, standardRecord } =
   await loadTypeScript("../src/recording.ts");

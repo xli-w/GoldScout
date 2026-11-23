@@ -20,6 +20,7 @@ class InvestmentSetup:
         self.security = (MonitoringWorkflowSessions()
                          if enabled and initial["state"] in ("empty", "recoverable") else None)
         self.completed = initial["state"] == "ready"
+        self.completed_binding = None
         self.confirm_lock = threading.Lock()
 
     def status(self, now):
@@ -60,6 +61,8 @@ class InvestmentSetup:
             return str(resolved), info.st_dev, info.st_ino
 
         bound = identity()
+        if self.completed_binding is None or bound != self.completed_binding:
+            raise InvestmentError("Completed setup journal changed")
         if self.status(now)["state"] != "ready":
             raise InvestmentError("Workspace completion is unavailable")
         spec, events, _, _ = _read(database, now)
@@ -108,8 +111,17 @@ class InvestmentSetup:
                 return pending["receipt"]
             if self.completed:
                 raise InvestmentError("This workspace is already established")
-            receipt = confirm_setup(self.workspace, pending["value"], now)
-            self.security.set_receipt(token, preview_id, receipt, now)
+            completed_binding = []
+            receipt = confirm_setup(self.workspace, pending["value"], now,
+                                    on_completed=completed_binding.append)
+            try:
+                self.security.set_receipt(token, preview_id, receipt, now)
+            except WorkflowError:
+                suffix = (" The setup receipt could not be cached; preserve the workspace "
+                          "and restart or explicitly recover.")
+                return {**receipt, "status": "partial",
+                        "message": receipt["message"][:2000 - len(suffix)] + suffix}
             if receipt["status"] == "completed":
                 self.completed = True
+                self.completed_binding = completed_binding[0] if len(completed_binding) == 1 else None
             return receipt

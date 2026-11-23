@@ -349,6 +349,40 @@ class CampaignDatasetTests(unittest.TestCase):
                 with self.assertRaises(CampaignDatasetError):
                     import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
 
+    def test_malformed_utc_offsets_fail_import_and_legacy_reopen_without_mutation(self):
+        malformed = GBP_BARS.replace(
+            "2025-01-01T00:00:00Z", "2025-01-01T01:00:00+00:60", 1)
+        cases = [
+            ("retrieval", _manifest(provenance=dict(
+                _manifest()["provenance"], retrieved_at="2025-01-10T13:00:00+00:60")), None),
+            ("action", _manifest(corporate_actions=[
+                _action(effective_at="2025-01-08T01:00:00+00:60")]), None),
+            ("product", None, {"gbp_daily.csv": malformed}),
+            ("cash", None, {"cash.csv": CASH_RATES.replace(
+                "2025-01-01T09:00:00Z", "2025-01-01T08:00:00-00:60", 1)}),
+        ]
+        for label, manifest, overrides in cases:
+            with self.subTest(field=label):
+                self.write_fixture(manifest, overrides)
+                with self.assertRaisesRegex(CampaignDatasetError, "offset"):
+                    import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+
+        self.write_fixture(csv_overrides={"gbp_daily.csv": malformed})
+        current_timestamp = dataset_module._timestamp
+
+        def legacy_timestamp(value, where):
+            if value.endswith("+00:60"):
+                value = value[:-6] + "+01:00"
+            return current_timestamp(value, where)
+
+        with patch.object(dataset_module, "_timestamp", side_effect=legacy_timestamp):
+            identifier = import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+        source = self.dataset_dir / "datasets" / identifier / "source" / "gbp_daily.csv"
+        before = source.read_bytes()
+        with self.assertRaisesRegex(CampaignDatasetError, "offset"):
+            CampaignDataset.open(self.dataset_dir, identifier)
+        self.assertEqual(source.read_bytes(), before)
+
     def test_invalid_ohlcv_is_rejected(self):
         invalid = GBP_BARS.replace(",100,103,99,102,", ",100,101,99,102,")
         self.write_fixture(csv_overrides={"gbp_daily.csv": invalid})
@@ -364,6 +398,78 @@ class CampaignDatasetTests(unittest.TestCase):
         self.write_fixture(csv_overrides={"gbp_daily.csv": early})
         with self.assertRaisesRegex(CampaignDatasetError, "available_at must not precede"):
             import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+
+    def test_submicrosecond_import_checks_use_exact_causal_order(self):
+        early = GBP_BARS.replace(
+            "2025-01-01T00:00:00Z,2025-01-02T00:00:00Z",
+            "2025-01-01T00:00:00.0000002Z,2025-01-01T00:00:00.0000001Z",
+            1,
+        )
+        self.write_fixture(csv_overrides={"gbp_daily.csv": early})
+        with self.assertRaisesRegex(CampaignDatasetError, "available_at must not precede"):
+            import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+
+        manifest = _manifest()
+        manifest["provenance"]["retrieved_at"] = "2025-01-10T12:00:00.0000001Z"
+        manifest["corporate_actions"][0]["available_at"] = "2025-01-10T12:00:00.0000002Z"
+        self.write_fixture(manifest)
+        with self.assertRaisesRegex(CampaignDatasetError, "available_at exceeds source retrieved_at"):
+            import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+
+        product = USD_BARS.replace("2025-01-01T00:00:00Z", "2025-01-01T00:00:00.0000001Z", 1)
+        fx = USD_FX.replace("2025-01-01T00:00:00Z", "2025-01-01T00:00:00.0000002Z", 1)
+        self.write_fixture(csv_overrides={"usd_weekly.csv": product, "usd_fx.csv": fx})
+        with self.assertRaisesRegex(CampaignDatasetError, "do not span product history"):
+            import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+
+    def test_distinct_submicrosecond_rows_preserve_source_and_reopen(self):
+        cash = (
+            "timestamp,available_at,annual_rate\n"
+            "2025-01-01T00:00:00.0000001Z,2025-01-01T09:00:00Z,0.04\n"
+            "2025-01-01T00:00:00.0000002Z,2025-01-01T09:00:00Z,0.041\n"
+        )
+        self.write_fixture(csv_overrides={"cash.csv": cash})
+        identifier = import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+        dataset = CampaignDataset.open(self.dataset_dir, identifier)
+        self.assertEqual(dataset.source_file("cash.csv"), cash.encode("utf-8"))
+        self.assertEqual(dataset.manifest["series"]["cash_rates"]["gbp-cash"]["rows"], 2)
+
+        duplicate = cash.replace(".0000002Z", ".00000010Z")
+        self.write_fixture(csv_overrides={"cash.csv": duplicate})
+        with self.assertRaisesRegex(CampaignDatasetError, "sorted and unique"):
+            import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+
+    def test_submicrosecond_action_order_and_legacy_reopen_are_checked(self):
+        earlier = _action(id="earlier", effective_at="2025-01-08T00:00:00.0000001Z")
+        later = _action(id="later", effective_at="2025-01-08T00:00:00.0000002Z")
+        manifest = _manifest(corporate_actions=[earlier, later])
+        self.write_fixture(manifest)
+        identifier = import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+        self.assertEqual(CampaignDataset.open(self.dataset_dir, identifier).source_manifest, manifest)
+
+        manifest = _manifest(corporate_actions=[
+            _action(id="a-later", effective_at="2025-01-08T00:00:00.0000002Z"),
+            _action(id="b-earlier", type="distribution", terms={"amount": 1},
+                    effective_at="2025-01-08T00:00:00.0000001Z"),
+        ])
+        self.write_fixture(manifest)
+        with self.assertRaisesRegex(CampaignDatasetError, "already be ordered"):
+            import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+
+        early = GBP_BARS.replace(
+            "2025-01-01T00:00:00Z,2025-01-02T00:00:00Z",
+            "2025-01-01T00:00:00.0000002Z,2025-01-01T00:00:00.0000001Z",
+            1,
+        )
+        self.write_fixture(csv_overrides={"gbp_daily.csv": early})
+        with patch.object(dataset_module, "_timestamp_key",
+                          side_effect=lambda value, where: (dataset_module._timestamp(value, where), "")):
+            identifier = import_campaign_dataset(self.input_dir / "manifest.json", self.dataset_dir)
+        source = self.dataset_dir / "datasets" / identifier / "source" / "gbp_daily.csv"
+        before = source.read_bytes()
+        with self.assertRaisesRegex(CampaignDatasetError, "available_at must not precede"):
+            CampaignDataset.open(self.dataset_dir, identifier)
+        self.assertEqual(source.read_bytes(), before)
 
     def test_series_availability_must_not_exceed_source_retrieval_time(self):
         manifest = _manifest(provenance=dict(

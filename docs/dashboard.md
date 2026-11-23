@@ -233,10 +233,15 @@ authority. Private account evidence must never enter hosted AI.
 python scripts/offline_tests.py --pattern test_investment_dashboard.py
 python scripts/offline_tests.py --pattern test_dashboard_planning.py
 python scripts/offline_tests.py --pattern test_dashboard_api.py
-npm --prefix frontend test
+npm --prefix frontend run test:unit
+npm --prefix frontend run test:browser
 ```
 
-Tests use temporary stores and in-process transport. Browser/build/packaging
-checks do not establish provider behavior, custody or profitability.
+The Node tests require Node 24. Browser tests require a current packaged
+frontend and task-specific approval; they start their own synthetic
+intelligence/demo server on an OS-selected loopback port and do not reuse an
+existing dashboard. Python tests use temporary stores and in-process transport.
+Browser/build/packaging checks do not establish provider behavior, custody or
+profitability.
 See [development](development.md), [monitoring](monitoring.md) and
 [journal lifecycle](investment-journal.md).

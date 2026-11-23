@@ -3,6 +3,7 @@
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -125,6 +126,63 @@ class InvestmentSetupTests(unittest.TestCase):
             self.assert_recording_blocked(client)
             self.assertEqual(read(self.database, self.now).revision, 1)
 
+    def test_receipt_cache_failure_reports_published_setup_without_enabling_recording(self):
+        from dashboard.monitoring_workflow import MonitoringWorkflowSessions, WorkflowError
+
+        def evict_preview(security, token, preview_id, receipt, now):
+            _, session = security.session(token, now)
+            with security.lock:
+                session["previews"].pop(preview_id)
+            raise WorkflowError("preview_unavailable")
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch.object(MonitoringWorkflowSessions, "set_receipt",
+                              autospec=True, side_effect=evict_preview):
+                response = client.post(
+                    "/api/investment/v1/setup/confirm", headers=headers,
+                    json={"preview_id": preview["preview_id"]})
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()
+            self.assertEqual(result["status"], "partial")
+            self.assertTrue(result["committed"])
+            self.assertEqual(result["revision"], 1)
+            self.assertIn("receipt", result["message"].lower())
+            self.assertEqual(read(self.database, self.now).revision, 1)
+            self.assert_recording_blocked(client)
+            retry = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                json={"preview_id": preview["preview_id"]})
+            self.assertEqual(retry.status_code, 409, retry.text)
+            self.assertEqual(retry.json()["error"], "preview_unavailable")
+            self.assertEqual(read(self.database, self.now).revision, 1)
+
+    def test_oversized_setup_error_preserves_committed_partial_receipt(self):
+        original_write = bootstrap._write_new
+
+        def fail_receipt(path, value):
+            if path.name == bootstrap.RECEIPT:
+                raise OSError("synthetic receipt error " + "x" * 3000)
+            return original_write(path, value)
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            confirmation = {"preview_id": preview["preview_id"]}
+            with patch("investment.bootstrap._write_new", side_effect=fail_receipt):
+                response = client.post("/api/investment/v1/setup/confirm",
+                                       headers=headers, json=confirmation)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "partial")
+            self.assertTrue(response.json()["committed"])
+            self.assertLessEqual(len(response.json()["message"]), 2000)
+            self.assertIn("synthetic receipt error", response.json()["message"])
+            self.assertEqual(read(self.database, self.now).revision, 1)
+            self.assert_recording_blocked(client)
+            retry = client.post("/api/investment/v1/setup/confirm",
+                                headers=headers, json=confirmation)
+            self.assertEqual(retry.json(), response.json())
+
     def test_partial_setup_stays_blocked_until_same_process_confirmed_recovery(self):
         original_write = bootstrap._write_new
 
@@ -166,8 +224,8 @@ class InvestmentSetupTests(unittest.TestCase):
     def test_reads_cannot_enable_recording_after_partial_result_even_if_workspace_is_ready(self):
         original_confirm = bootstrap.confirm_setup
 
-        def uncertain_completion(*args):
-            result = original_confirm(*args)
+        def uncertain_completion(*args, **kwargs):
+            result = original_confirm(*args, **kwargs)
             self.assertEqual(result["status"], "completed")
             return {**result, "status": "partial", "receipt": None,
                     "message": "Synthetic uncertain completion"}
@@ -251,8 +309,8 @@ class InvestmentSetupTests(unittest.TestCase):
         initialize(replacement, changed_profile, self.now)
         import_events(replacement, [opening()], self.now)
 
-        def replaced_completion(*args):
-            result = original_confirm(*args)
+        def replaced_completion(*args, **kwargs):
+            result = original_confirm(*args, **kwargs)
             self.assertEqual(result["status"], "completed")
             self.database.rename(Path(self.temporary.name) / "preserved.sqlite3")
             replacement.rename(self.database)
@@ -270,6 +328,67 @@ class InvestmentSetupTests(unittest.TestCase):
             self.assertIn("recording is unavailable", response.json()["message"])
             self.assert_recording_blocked(client)
 
+    def test_completed_setup_rejects_replacement_before_first_handoff_check(self):
+        from investment.store import initialize, import_events
+
+        original_confirm = bootstrap.confirm_setup
+        replacement = Path(self.temporary.name) / "replacement.sqlite3"
+        preserved = Path(self.temporary.name) / "preserved.sqlite3"
+        initialize(replacement, profile(), self.now)
+        import_events(replacement, [opening(),
+                                   event("other-history", "interest", NOW, "bank", amount_gbp="1")],
+                      self.now)
+        original_replacement = replacement.read_bytes()
+
+        def replace_after_completion(*args, **kwargs):
+            result = original_confirm(*args, **kwargs)
+            self.assertEqual(result["status"], "completed")
+            self.database.rename(preserved)
+            replacement.rename(self.database)
+            return result
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch("dashboard.investment_setup.confirm_setup",
+                       side_effect=replace_after_completion):
+                response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                       json={"preview_id": preview["preview_id"]})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "completed")
+            self.assertTrue(response.json()["committed"])
+            self.assertIn("recording is unavailable", response.json()["message"])
+            self.assert_recording_blocked(client)
+        self.assertEqual(self.database.read_bytes(), original_replacement)
+        self.assertEqual(read(preserved, self.now).revision, 1)
+
+    def test_uncertain_publication_result_blocks_recording_and_surfaces_error(self):
+        original_link = os.link
+        original_read = bootstrap._read
+
+        def lose_link_result(source, destination):
+            original_link(source, destination)
+            raise OSError("synthetic lost publication result")
+
+        def fail_published_read(path, now):
+            if Path(path) == self.database and self.database.exists():
+                raise InvestmentError("synthetic published journal read failure")
+            return original_read(path, now)
+
+        with self.client(investment_recording_enabled=True) as client:
+            headers = self.session_headers(client)
+            preview = self.preview(client, headers)
+            with patch.object(os, "link", side_effect=lose_link_result), \
+                    patch.object(bootstrap, "_read", side_effect=fail_published_read), \
+                    patch.object(os.path, "samefile", side_effect=OSError("identity unavailable")):
+                response = client.post("/api/investment/v1/setup/confirm", headers=headers,
+                                       json={"preview_id": preview["preview_id"]})
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertIn("uncertain", response.json()["message"])
+            self.assert_recording_blocked(client)
+        self.assertTrue(self.database.exists())
+        self.assertEqual(read(self.database, self.now).revision, 1)
+
     def test_completed_setup_rejects_same_profile_journal_replacement_during_handoff(self):
         from dashboard.investment_recording import RecordingSessions
         from investment.store import initialize, import_events
@@ -283,8 +402,8 @@ class InvestmentSetupTests(unittest.TestCase):
         import_events(replacement, [changed_opening], self.now)
         completed = {}
 
-        def remember_completion(*args):
-            result = original_confirm(*args)
+        def remember_completion(*args, **kwargs):
+            result = original_confirm(*args, **kwargs)
             self.assertEqual(result["status"], "completed")
             completed.update(copy.deepcopy(result))
             return result

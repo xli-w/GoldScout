@@ -169,6 +169,72 @@ class InvestmentDashboardTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
 
+    def test_snapshot_pins_the_journal_before_capturing_default_or_injected_clock(self):
+        initialize(self.path, profile(), OPENING_NOW)
+        import_events(self.path, [opening()], OPENING_NOW)
+        pinned_reads = []
+
+        def after_snapshot(*args):
+            pinned_reads.append(True)
+            writer = sqlite3.connect(self.path, timeout=0)
+            try:
+                with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                    writer.execute("BEGIN EXCLUSIVE")
+            finally:
+                writer.rollback()
+                writer.close()
+            return self.now
+
+        for injected in (False, True):
+            app = create_app(serve_frontend=False, investment_database=self.path,
+                             clock=after_snapshot if injected else None)
+            with self.subTest(injected=injected), patch("dashboard.app.datetime") as datetime_mock:
+                datetime_mock.now.side_effect = after_snapshot
+                with TestClient(app, base_url="http://127.0.0.1",
+                                backend_options={"loop_factory": MemoryEventLoop}) as client:
+                    response = client.get("/api/investment/v1/snapshot")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["generated_at"], iso(self.now))
+        self.assertEqual(pinned_reads, [True, True])
+
+    def test_monitoring_awareness_and_reviews_pin_the_journal_before_the_clock(self):
+        from market_intelligence.store import initialize as initialize_intelligence
+        from test_investment_awareness import awareness_profile
+
+        profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores()
+        intelligence_path = self.path.with_name("intelligence.sqlite3")
+        intelligence = initialize_intelligence(intelligence_path, OPENING_NOW)
+        awareness_path = self.path.with_name("awareness.json")
+        awareness_path.write_text(
+            json.dumps(awareness_profile(intelligence.database_id)), encoding="utf-8")
+        pinned_reads = []
+
+        def after_snapshot():
+            pinned_reads.append(True)
+            writer = sqlite3.connect(self.path, timeout=0)
+            try:
+                with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                    writer.execute("BEGIN EXCLUSIVE")
+            finally:
+                writer.rollback()
+                writer.close()
+            return self.now
+
+        app = create_app(
+            serve_frontend=False, clock=after_snapshot, investment_database=self.path,
+            monitoring_profile=profile_path, monitoring_cache=cache_path,
+            monitoring_reviews=reviews_path, intelligence_database=intelligence_path,
+            awareness_profile=awareness_path)
+        routes = ("/api/investment/v1/monitoring", "/api/investment/v1/monitoring/reviews",
+                  "/api/investment/v1/awareness", "/api/investment/v2/awareness")
+        with TestClient(app, base_url="http://127.0.0.1",
+                        backend_options={"loop_factory": MemoryEventLoop}) as client:
+            for route in routes:
+                with self.subTest(route=route):
+                    response = client.get(route)
+                    self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(pinned_reads, [True] * len(routes))
+
     def test_recorded_value_comparison_evidence_matches_real_replay(self):
         later = OPENING_NOW + timedelta(days=1)
         self.now = later
@@ -419,6 +485,123 @@ class InvestmentDashboardTests(unittest.TestCase):
                 json={"preview_id": next_preview.json()["preview_id"]}, headers=headers)
             self.assertEqual(receipt.status_code, 200, receipt.text)
             self.assertEqual(receipt.json()["revision"], 3)
+
+    def test_profile_confirmation_after_commit_failures_can_be_retried(self):
+        from test_investment_opening import CommitResultFailure, ConnectionCloseFailure
+
+        self.now = OPENING_NOW + timedelta(hours=1)
+        for failure in (ConnectionCloseFailure, CommitResultFailure):
+            with self.subTest(failure=failure.__name__):
+                self.path = Path(self.directory.name) / f"{failure.__name__}.sqlite3"
+                initialize(self.path, profile(), OPENING_NOW)
+                import_events(self.path, [opening()], OPENING_NOW)
+                with self.client(investment_database=self.path,
+                                 investment_recording_enabled=True) as client:
+                    session = client.get("/api/investment/v1/recording/session").json()
+                    headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+                    rename = {
+                        "id": "rename-close", "type": "profile_change",
+                        "timestamp": iso(self.now), "available_at": iso(self.now),
+                        "evidence": "synthetic product documentation", "action": "rename",
+                        "target": "product", "entity_id": "equity", "name": "Renamed equity",
+                    }
+                    preview = client.post(
+                        "/api/investment/v1/recording/preview",
+                        json={"request_id": "rename-close", "event": rename}, headers=headers)
+                    self.assertEqual(preview.status_code, 200, preview.text)
+                    connect = investment_store._connect
+
+                    def fail_commit(database, readonly):
+                        connection = connect(database, readonly)
+                        return connection if readonly else failure(connection)
+
+                    with patch.object(investment_store, "_connect", side_effect=fail_commit):
+                        response = client.post(
+                            "/api/investment/v1/recording/confirm",
+                            json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                    self.assertEqual(response.status_code, 503, response.text)
+                    self.assertTrue(response.json()["retryable"])
+                    self.assertEqual(investment_store.read(self.path, self.now).revision, 2)
+                    retry = client.post(
+                        "/api/investment/v1/recording/confirm",
+                        json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                    self.assertEqual(retry.status_code, 200, retry.text)
+                    self.assertEqual(retry.json(), {"id": "rename-close", "revision": 2})
+                    session = client.get("/api/investment/v1/recording/session")
+                    self.assertEqual(session.status_code, 200, session.text)
+                    self.assertEqual(session.json()["products"][0]["name"], "Renamed equity")
+
+    def test_profile_confirmation_recovers_only_exact_uncertain_commit(self):
+        from test_investment_opening import ConnectionCloseFailure
+
+        self.now = OPENING_NOW + timedelta(hours=1)
+        for committed, intervening_change in ((True, False), (True, True), (False, False)):
+            with self.subTest(committed=committed, intervening_change=intervening_change):
+                self.path = Path(self.directory.name) / f"uncertain-{committed}-{intervening_change}.sqlite3"
+                initialize(self.path, profile(), OPENING_NOW)
+                import_events(self.path, [opening()], OPENING_NOW)
+                with self.client(investment_database=self.path,
+                                 investment_recording_enabled=True) as client:
+                    session = client.get("/api/investment/v1/recording/session").json()
+                    headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+                    rename = {
+                        "id": "uncertain-rename", "type": "profile_change",
+                        "timestamp": iso(self.now), "available_at": iso(self.now),
+                        "evidence": "synthetic product documentation", "action": "rename",
+                        "target": "product", "entity_id": "equity", "name": "Renamed equity",
+                    }
+                    preview = client.post(
+                        "/api/investment/v1/recording/preview",
+                        json={"request_id": "uncertain-rename", "event": rename}, headers=headers)
+                    self.assertEqual(preview.status_code, 200, preview.text)
+                    connect = investment_store._connect
+                    commit_attempted = False
+
+                    class LostResult(ConnectionCloseFailure):
+                        def commit(self):
+                            nonlocal commit_attempted
+                            commit_attempted = True
+                            if committed:
+                                self.connection.commit()
+                            raise sqlite3.OperationalError("synthetic uncertain commit")
+
+                        def close(self):
+                            self.connection.close()
+
+                    def fail_commit_verification(database, readonly):
+                        if readonly and commit_attempted:
+                            raise InvestmentError("synthetic verification unavailable")
+                        connection = connect(database, readonly)
+                        return connection if readonly else LostResult(connection)
+
+                    with patch.object(investment_store, "_connect",
+                                      side_effect=fail_commit_verification):
+                        failed = client.post(
+                            "/api/investment/v1/recording/confirm",
+                            json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                    self.assertEqual(failed.status_code, 503, failed.text)
+                    self.assertTrue(failed.json()["retryable"])
+                    self.assertEqual(investment_store.read(self.path, self.now).revision,
+                                     2 if committed else 1)
+                    session = client.get("/api/investment/v1/recording/session")
+                    self.assertEqual(session.status_code, 409 if committed else 200, session.text)
+                    if intervening_change:
+                        other = {**rename, "id": "intervening-rename", "entity_id": "bond",
+                                 "name": "Different bond name"}
+                        import_events(self.path, [other], self.now)
+                    retry = client.post(
+                        "/api/investment/v1/recording/confirm",
+                        json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                    if intervening_change:
+                        self.assertEqual(retry.status_code, 409, retry.text)
+                        self.assertEqual(retry.json()["error"], "investment_store_changed")
+                        self.assertEqual(investment_store.read(self.path, self.now).revision, 3)
+                    else:
+                        self.assertEqual(retry.status_code, 200, retry.text)
+                        self.assertEqual(retry.json(), {"id": "uncertain-rename", "revision": 2})
+                        session = client.get("/api/investment/v1/recording/session")
+                        self.assertEqual(session.status_code, 200, session.text)
+                        self.assertEqual(session.json()["products"][0]["name"], "Renamed equity")
 
     def test_confirmation_does_not_adopt_an_intervening_profile_change(self):
         self.now = OPENING_NOW + timedelta(hours=1)
@@ -1080,7 +1263,7 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertGreater(read_journal(self.path, self.now).revision, 1)
 
     def test_manual_observation_requires_preview_and_stages_only_monitoring_cache(self):
-        from investment.monitoring_store import read_cache
+        from investment.monitoring_store import append_attempt, read_cache
 
         profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
         original_journal = self.path.read_bytes()
@@ -1134,13 +1317,160 @@ class InvestmentDashboardTests(unittest.TestCase):
                 json=request_payload, headers=headers)
             self.assertEqual(retry_preview.status_code, 200, retry_preview.text)
             self.assertTrue(retry_preview.json()["already_staged"])
+            later = {
+                "id": "later-manual-attempt", "account_id": "broker", "provider": "etoro",
+                "attempted_at": iso(self.now), "status": "success", "error_code": None,
+                "observation": {**observation, "id": "later-manual-observation"},
+            }
+            self.assertEqual(append_attempt(cache_path, monitoring, later, self.now), 2)
             retry_confirmation = restarted.post(
                 "/api/investment/v1/monitoring-workflow/observation/confirm",
                 json={"preview_id": retry_preview.json()["preview_id"]}, headers=headers)
             self.assertEqual(retry_confirmation.status_code, 200, retry_confirmation.text)
             self.assertEqual(retry_confirmation.json()["cache_revision"], 1)
-            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 1)
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 2)
         self.assertEqual(self.path.read_bytes(), original_journal)
+
+    def test_manual_observation_commit_failures_allow_only_exact_bound_retries(self):
+        from contextlib import closing
+        from investment.monitoring_store import append_attempt, initialize_cache, read_cache
+        from test_investment_opening import CommitResultFailure, ConnectionCloseFailure
+
+        cases = ((ConnectionCloseFailure, "advance"), (CommitResultFailure, "advance"),
+                 (ConnectionCloseFailure, "journal"), (ConnectionCloseFailure, "cache"),
+                 (ConnectionCloseFailure, "conflict"))
+        for index, (failure, change) in enumerate(cases):
+            with self.subTest(failure=failure.__name__, change=change):
+                directory = Path(self.directory.name) / f"monitoring-{index}"
+                directory.mkdir()
+                self.path = directory / "investment.sqlite3"
+                profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+                original_journal = self.path.read_bytes()
+                observation = {
+                    "id": "failure-observation", "account_id": "broker", "provider": "etoro",
+                    "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+                    "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+                    "currency": "GBP", "cash": "50", "holdings": [],
+                    "coverage": "partial", "evidence": "synthetic local evidence",
+                }
+                with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                                 monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                                 monitoring_workflow_enabled=True) as client:
+                    session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+                    headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+                    preview = client.post(
+                        "/api/investment/v1/monitoring-workflow/observation/preview",
+                        json={"request_id": "failure-attempt",
+                              "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                        headers=headers)
+                    self.assertEqual(preview.status_code, 200, preview.text)
+                    connect = sqlite3.connect
+                    writable_cache = cache_path.absolute().as_uri() + "?mode=rw"
+
+                    def fail_cache_write(*args, **kwargs):
+                        connection = connect(*args, **kwargs)
+                        return failure(connection) if args[0] == writable_cache else connection
+
+                    with patch("investment.monitoring_store.sqlite3.connect",
+                               side_effect=fail_cache_write):
+                        response = client.post(
+                            "/api/investment/v1/monitoring-workflow/observation/confirm",
+                            json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                    self.assertEqual(response.status_code, 503, response.text)
+                    self.assertTrue(response.json()["retryable"])
+                    self.assertFalse(response.json()["investment_journal_changed"])
+                    if failure is ConnectionCloseFailure:
+                        self.assertTrue(response.json()["committed"])
+                        self.assertEqual(response.json()["cache_revision"], 1)
+                    else:
+                        self.assertIsNone(response.json()["committed"])
+                    self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 1)
+
+                    if change == "advance":
+                        later = {
+                            "id": "intervening-attempt", "account_id": "broker",
+                            "provider": "etoro", "attempted_at": iso(self.now),
+                            "status": "success", "error_code": None,
+                            "observation": {**observation, "id": "intervening-observation"},
+                        }
+                        self.assertEqual(append_attempt(cache_path, monitoring, later, self.now), 2)
+                    elif change == "journal":
+                        import_events(self.path, [cash_observation(
+                            timestamp=self.now, identifier="intervening-journal")], self.now)
+                    elif change == "cache":
+                        replacement = directory / "replacement.sqlite3"
+                        initialize_cache(replacement, monitoring, 86400)
+                        replacement.replace(cache_path)
+                    else:
+                        with closing(sqlite3.connect(cache_path)) as connection, connection:
+                            row = connection.execute(
+                                "SELECT payload FROM monitor_attempts WHERE id=?",
+                                ("failure-attempt",)).fetchone()
+                            changed = json.loads(row[0])
+                            changed["observation"]["cash"] = "51"
+                            connection.execute(
+                                "UPDATE monitor_attempts SET payload=? WHERE id=?",
+                                (investment_store.canonical(changed), "failure-attempt"))
+
+                    retried = client.post(
+                        "/api/investment/v1/monitoring-workflow/observation/confirm",
+                        json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                    if change == "advance":
+                        self.assertEqual(retried.status_code, 200, retried.text)
+                        self.assertEqual(retried.json()["cache_revision"], 1)
+                        self.assertEqual(len(read_cache(cache_path, monitoring, self.now)["attempts"]), 2)
+                    else:
+                        self.assertEqual(retried.status_code, 409, retried.text)
+                    if change != "journal":
+                        self.assertEqual(self.path.read_bytes(), original_journal)
+
+    def test_manual_observation_evicted_receipt_reports_saved_attempt(self):
+        from dashboard.monitoring_workflow import MonitoringWorkflowSessions, WorkflowError
+        from investment.monitoring_store import read_cache
+
+        profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+        original_journal = self.path.read_bytes()
+        observation = {
+            "id": "evicted-observation", "account_id": "broker", "provider": "etoro",
+            "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+            "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+            "currency": "GBP", "cash": "50", "holdings": [],
+            "coverage": "partial", "evidence": "synthetic local evidence",
+        }
+
+        def evict_preview(security, token, preview_id, receipt, now):
+            _, session = security.session(token, now)
+            with security.lock:
+                session["previews"].pop(preview_id)
+            raise WorkflowError("preview_unavailable")
+
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_enabled=True) as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "evicted-attempt",
+                      "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            with patch.object(MonitoringWorkflowSessions, "set_receipt",
+                              autospec=True, side_effect=evict_preview):
+                response = client.post(
+                    "/api/investment/v1/monitoring-workflow/observation/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(response.status_code, 503, response.text)
+            self.assertTrue(response.json()["committed"])
+            self.assertFalse(response.json()["retryable"])
+            self.assertEqual(response.json()["cache_revision"], 1)
+            retry = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(retry.status_code, 409, retry.text)
+            self.assertEqual(retry.json()["error"], "preview_unavailable")
+            self.assertEqual(len(read_cache(cache_path, monitoring, self.now)["attempts"]), 1)
+            self.assertEqual(self.path.read_bytes(), original_journal)
 
     def test_manual_observation_preview_does_not_backdate_profile_mapping(self):
         profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores(
@@ -1205,6 +1535,303 @@ class InvestmentDashboardTests(unittest.TestCase):
             self.assertEqual(rejected.status_code, 409)
             self.assertEqual(rejected.json()["error"], "stale_observation_preview")
             self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 0)
+
+    def test_manual_observation_rejects_same_revision_journal_replacement(self):
+        from investment.monitoring_store import read_cache
+
+        profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+        replacement = self.path.with_name("replacement.sqlite3")
+        changed_opening = opening()
+        changed_opening["balances_gbp"]["broker"] = "200"
+        initialize(replacement, profile(), OPENING_NOW)
+        import_events(replacement, [changed_opening], OPENING_NOW)
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_enabled=True) as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            observation = {
+                "id": "replacement-observation", "account_id": "broker", "provider": "etoro",
+                "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+                "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+                "currency": "GBP", "cash": "50", "holdings": [],
+                "coverage": "partial", "evidence": "synthetic local evidence",
+            }
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "replacement-attempt",
+                      "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            replacement.replace(self.path)
+            journal = self.path.read_bytes()
+            rejected = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(rejected.status_code, 409, rejected.text)
+            self.assertEqual(rejected.json()["error"], "stale_observation_preview")
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 0)
+            self.assertEqual(self.path.read_bytes(), journal)
+
+    def test_manual_observation_comparison_uses_the_pinned_journal_snapshot(self):
+        from investment.monitoring import validate_profile
+
+        profile_path, cache_path, reviews_path, _ = self.monitoring_workflow_stores()
+        replacement = self.path.with_name("comparison-replacement.sqlite3")
+        changed_opening = opening()
+        changed_opening["balances_gbp"]["broker"] = "200"
+        initialize(replacement, profile(), OPENING_NOW)
+        import_events(replacement, [changed_opening], OPENING_NOW)
+
+        def replace_after_snapshot(value, ledger, now):
+            result = validate_profile(value, ledger, now)
+            if replacement.exists():
+                replacement.replace(self.path)
+            return result
+
+        observation = {
+            "id": "snapshot-observation", "account_id": "broker", "provider": "etoro",
+            "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+            "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+            "currency": "GBP", "cash": "50", "holdings": [],
+            "coverage": "partial", "evidence": "synthetic local evidence",
+        }
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_enabled=True) as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            with patch("investment.monitoring.validate_profile", side_effect=replace_after_snapshot):
+                preview = client.post(
+                    "/api/investment/v1/monitoring-workflow/observation/preview",
+                    json={"request_id": "snapshot-attempt",
+                          "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                    headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["reconciliation"]["accounts"][0]["cash"]["recorded"], "100")
+            rejected = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(rejected.status_code, 409, rejected.text)
+            self.assertEqual(rejected.json()["error"], "stale_observation_preview")
+
+    def test_manual_observation_does_not_adopt_attempt_after_intervening_cache_write(self):
+        from investment.monitoring_store import append_attempt, read_cache
+
+        profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+        original_journal = self.path.read_bytes()
+        observation = {
+            "id": "late-observation", "account_id": "broker", "provider": "etoro",
+            "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+            "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+            "currency": "GBP", "cash": "50", "holdings": [],
+            "coverage": "partial", "evidence": "synthetic local evidence",
+        }
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_enabled=True) as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "late-attempt",
+                      "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            attempt = {"id": "late-attempt", "account_id": "broker", "provider": "etoro",
+                       "attempted_at": iso(self.now), "status": "success",
+                       "error_code": None, "observation": observation}
+            other = {**attempt, "id": "intervening-attempt",
+                     "observation": {**observation, "id": "intervening-observation"}}
+            self.assertEqual(append_attempt(cache_path, monitoring, other, self.now), 1)
+            self.assertEqual(append_attempt(cache_path, monitoring, attempt, self.now), 2)
+            rejected = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(rejected.status_code, 409, rejected.text)
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 2)
+            self.assertEqual(self.path.read_bytes(), original_journal)
+
+    def test_manual_observation_rejects_divergent_cache_with_same_identity_and_revision(self):
+        from investment.monitoring_store import append_attempt, read_cache
+
+        for already_staged in (False, True):
+            with self.subTest(already_staged=already_staged):
+                directory = Path(self.directory.name) / f"divergent-{already_staged}"
+                directory.mkdir()
+                self.path = directory / "investment.sqlite3"
+                profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+                other_cache = directory / "other-cache.sqlite3"
+                other_cache.write_bytes(cache_path.read_bytes())
+                original_journal = self.path.read_bytes()
+                observation = {
+                    "id": "divergent-observation", "account_id": "broker", "provider": "etoro",
+                    "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+                    "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+                    "currency": "GBP", "cash": "50", "holdings": [],
+                    "coverage": "partial", "evidence": "synthetic local evidence",
+                }
+                attempt = {"id": "divergent-attempt", "account_id": "broker", "provider": "etoro",
+                           "attempted_at": iso(self.now), "status": "success", "error_code": None,
+                           "observation": observation}
+                first = {**attempt, "id": "branch-a",
+                         "observation": {**observation, "id": "branch-a-observation"}}
+                second = {**attempt, "id": "branch-b",
+                          "observation": {**observation, "id": "branch-b-observation"}}
+                self.assertEqual(append_attempt(cache_path, monitoring, first, self.now), 1)
+                self.assertEqual(append_attempt(other_cache, monitoring, second, self.now), 1)
+                if already_staged:
+                    self.assertEqual(append_attempt(cache_path, monitoring, attempt, self.now), 2)
+                    self.assertEqual(append_attempt(other_cache, monitoring, attempt, self.now), 2)
+                before = read_cache(cache_path, monitoring, self.now)
+                other = read_cache(other_cache, monitoring, self.now)
+                self.assertEqual(before["instance_id"], other["instance_id"])
+                self.assertEqual(before["revision"], other["revision"])
+                with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                                 monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                                 monitoring_workflow_enabled=True) as client:
+                    session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+                    headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+                    preview = client.post(
+                        "/api/investment/v1/monitoring-workflow/observation/preview",
+                        json={"request_id": "divergent-attempt",
+                              "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                        headers=headers)
+                    self.assertEqual(preview.status_code, 200, preview.text)
+                    self.assertEqual(preview.json()["already_staged"], already_staged)
+                    other_cache.replace(cache_path)
+                    unchanged = cache_path.read_bytes()
+                    rejected = client.post(
+                        "/api/investment/v1/monitoring-workflow/observation/confirm",
+                        json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+                    self.assertEqual(rejected.status_code, 409, rejected.text)
+                    self.assertEqual(rejected.json()["error"], "stale_observation_preview")
+                    self.assertEqual(cache_path.read_bytes(), unchanged)
+                    self.assertEqual(self.path.read_bytes(), original_journal)
+
+    def test_manual_observation_retries_uncertain_unapplied_commit(self):
+        from investment.monitoring_store import read_cache
+        from test_investment_opening import ConnectionCloseFailure
+
+        class UnappliedCommit(ConnectionCloseFailure):
+            def commit(self):
+                raise sqlite3.OperationalError("synthetic unavailable commit result")
+
+            def close(self):
+                self.connection.close()
+
+        profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+        observation = {
+            "id": "unapplied-observation", "account_id": "broker", "provider": "etoro",
+            "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+            "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+            "currency": "GBP", "cash": "50", "holdings": [],
+            "coverage": "partial", "evidence": "synthetic local evidence",
+        }
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_enabled=True) as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "unapplied-attempt",
+                      "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            connect = sqlite3.connect
+            writable = cache_path.absolute().as_uri() + "?mode=rw"
+
+            def fail_write(*args, **kwargs):
+                connection = connect(*args, **kwargs)
+                return UnappliedCommit(connection) if args[0] == writable else connection
+
+            with patch("investment.monitoring_store.sqlite3.connect", side_effect=fail_write):
+                uncertain = client.post(
+                    "/api/investment/v1/monitoring-workflow/observation/confirm",
+                    json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(uncertain.status_code, 503, uncertain.text)
+            self.assertIsNone(uncertain.json()["committed"])
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 0)
+            retried = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(retried.status_code, 200, retried.text)
+            self.assertEqual(retried.json()["cache_revision"], 1)
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 1)
+
+    def test_manual_observation_respects_sparse_cache_sequence(self):
+        from contextlib import closing
+        from investment.monitoring_store import read_cache
+
+        profile_path, cache_path, reviews_path, monitoring = self.monitoring_workflow_stores()
+        with closing(sqlite3.connect(cache_path)) as connection, connection:
+            connection.execute(
+                "INSERT INTO sqlite_sequence(name,seq) VALUES ('monitor_attempts',99)")
+        observation = {
+            "id": "sparse-observation", "account_id": "broker", "provider": "etoro",
+            "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+            "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+            "currency": "GBP", "cash": "50", "holdings": [],
+            "coverage": "partial", "evidence": "synthetic local evidence",
+        }
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_enabled=True) as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "sparse-attempt",
+                      "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            confirmed = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(confirmed.status_code, 200, confirmed.text)
+            self.assertEqual(confirmed.json()["cache_revision"], 100)
+            self.assertEqual(read_cache(cache_path, monitoring, self.now)["revision"], 100)
+
+    def test_manual_observation_does_not_restore_purged_attempt(self):
+        from investment.monitoring_store import append_attempt, initialize_cache, purge_expired, read_cache
+
+        profile_path, _, reviews_path, monitoring = self.monitoring_workflow_stores()
+        cache_path = self.path.with_name("short-retention.sqlite3")
+        initialize_cache(cache_path, monitoring, 1)
+        observation = {
+            "id": "purged-observation", "account_id": "broker", "provider": "etoro",
+            "observed_at": iso(OPENING_NOW + timedelta(minutes=1)),
+            "available_at": iso(OPENING_NOW + timedelta(minutes=2)),
+            "currency": "GBP", "cash": "50", "holdings": [],
+            "coverage": "partial", "evidence": "synthetic local evidence",
+        }
+        attempt = {"id": "purged-attempt", "account_id": "broker", "provider": "etoro",
+                   "attempted_at": iso(self.now), "status": "success", "error_code": None,
+                   "observation": observation}
+        self.assertEqual(append_attempt(cache_path, monitoring, attempt, self.now), 1)
+        with self.client(investment_database=self.path, monitoring_profile=profile_path,
+                         monitoring_cache=cache_path, monitoring_reviews=reviews_path,
+                         monitoring_workflow_enabled=True) as client:
+            session = client.get("/api/investment/v1/monitoring-workflow/session").json()
+            headers = {"Origin": "http://127.0.0.1", "X-CSRF-Token": session["csrf"]}
+            preview = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/preview",
+                json={"request_id": "purged-attempt",
+                      "mapping_observed_at": iso(OPENING_NOW), "observation": observation},
+                headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertTrue(preview.json()["already_staged"])
+            self.now += timedelta(seconds=2)
+            self.assertEqual(purge_expired(cache_path, monitoring, self.now), {"deleted_attempts": 1})
+            rejected = client.post(
+                "/api/investment/v1/monitoring-workflow/observation/confirm",
+                json={"preview_id": preview.json()["preview_id"]}, headers=headers)
+            self.assertEqual(rejected.status_code, 409, rejected.text)
+            self.assertEqual(rejected.json()["error"], "stale_observation_preview")
+            cache = read_cache(cache_path, monitoring, self.now)
+            self.assertEqual(cache["revision"], 1)
+            self.assertEqual(cache["attempts"], [])
 
     def test_invalid_report_is_not_a_success_response(self):
         report = copy.deepcopy(demo_opening_snapshot(self.now))

@@ -26,6 +26,23 @@ export and setup receipts are separate filesystem operations, not one atomic
 transaction. A failure after journal publication must be reported as committed
 or partially completed, never rolled back, and must not delete that journal.
 
+The CLI's `init` and `import` likewise commit before producing a report. If
+the subsequent report or output fails, it reports the completed operation and
+revision on stderr where available. Preserve and inspect the journal before
+retrying; identical event IDs can be retried without a second append.
+Implicit current-time reports pin their SQLite read snapshot before sampling
+the clock, including the dashboard's injected clock for monitoring, awareness
+and review reads. Identical confirmed records remain retryable after profile
+changes only against their original committed predecessor. A correction's
+nested replacement ID is reserved for that evidence and cannot also be
+imported as a source event. If connection cleanup fails after a known commit,
+the journal is preserved and the store/CLI report the committed revision; a
+dashboard confirmation remains retryable with the same preview.
+Correction evidence cannot predate the availability of the event it replaces;
+existing journals that violate this causal requirement are refused, not rewritten.
+If a commit itself fails without a verifiable outcome, preserve the journal and
+inspect it before retrying; the system does not claim that it rolled back.
+
 Recovery requires exact setup provenance and validated artifact identities.
 Arbitrary empty databases are not proof of interrupted setup. A matching
 completed creation is recognized without a second opening; a verifiably

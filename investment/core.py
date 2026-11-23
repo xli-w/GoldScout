@@ -24,6 +24,8 @@ def clock(value=None):
     if isinstance(value, str):
         if len(value) > 40:
             raise InvestmentError("Invalid UTC timestamp")
+        if re.search(r"[.,][0-9]{6}[0-9]*[1-9]", value):
+            raise InvestmentError("Non-zero sub-microsecond timestamp precision is unsupported")
         try:
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as exc:
@@ -31,6 +33,14 @@ def clock(value=None):
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise InvestmentError("An aware UTC timestamp is required")
     return value.astimezone(timezone.utc)
+
+
+def evidence_clock(value):
+    if value is None:
+        raise InvestmentError("An explicit UTC evidence timestamp is required")
+    if isinstance(value, datetime) and type(value) is not datetime:
+        raise InvestmentError("Datetime subclasses are not supported for evidence clocks")
+    return clock(value)
 
 
 def explicit_clock(value):
@@ -76,7 +86,8 @@ def validate_savings_terms(terms, available_by):
                     if terms["maturity_date"] is not None else None)
     except (TypeError, ValueError) as exc:
         raise InvestmentError("Invalid savings-terms date") from exc
-    observed, available = clock(terms["observed_at"]), clock(terms["available_at"])
+    observed = evidence_clock(terms["observed_at"])
+    available = evidence_clock(terms["available_at"])
     if (effective.isoformat() != terms["effective_from"] or
             maturity is not None and maturity.isoformat() != terms["maturity_date"] or
             maturity is not None and maturity < effective or
@@ -108,7 +119,7 @@ def profile(value):
     if value["currency"] != "GBP":
         raise InvestmentError("FX and other currencies are unsupported")
     text(value["portfolio_id"])
-    clock(value["created_at"])
+    created_at = evidence_clock(value["created_at"])
     if not isinstance(value["accounts"], list) or not 1 <= len(value["accounts"]) <= 50:
         raise InvestmentError("Between 1 and 50 accounts are required")
     if not isinstance(value["products"], list) or len(value["products"]) > 100:
@@ -128,7 +139,7 @@ def profile(value):
         if account.get("terms") is not None:
             if account["kind"] != "deposit":
                 raise InvestmentError("Savings terms require a deposit account")
-            validate_savings_terms(account["terms"], clock(value["created_at"]))
+            validate_savings_terms(account["terms"], created_at)
         ids.add(account["id"])
         bindings.add(account["binding"])
     ids = set()
@@ -173,7 +184,7 @@ def event(value, spec, now):
                        "account_id", "product_id", "role", "amount"))
         for key in ("id", "evidence", "account_id"):
             text(value[key])
-        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
         if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
             raise InvestmentError("Role attribution requires contemporaneous evidence")
         if value["role"] not in ("core", "dynamic"):
@@ -197,7 +208,7 @@ def event(value, spec, now):
                        "original_event_id", "replacement_event"))
         for key in ("id", "evidence", "original_event_id"):
             text(value[key])
-        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
         if (timestamp < clock(spec["created_at"]) or available < timestamp or
                 available > now):
             raise InvestmentError("Invalid correction evidence clock")
@@ -206,8 +217,8 @@ def event(value, spec, now):
                 replacement.get("type") not in CORRECTABLE_EVENTS):
             raise InvestmentError("This event type is not eligible for correction")
         event(replacement, spec, now)
-        if (replacement["timestamp"] > value["timestamp"] or
-                replacement["available_at"] != value["available_at"] or
+        if (evidence_clock(replacement["timestamp"]) > timestamp or
+                evidence_clock(replacement["available_at"]) != available or
                 replacement["evidence"] != value["evidence"] or
                 replacement["id"] == value["original_event_id"] or
                 replacement["id"] == value["id"]):
@@ -219,7 +230,7 @@ def event(value, spec, now):
                        "balances_gbp", "holdings"))
         text(value["id"])
         text(value["evidence"])
-        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
         if timestamp < clock(spec["created_at"]) or available < timestamp or available > now:
             raise InvestmentError("Invalid opening evidence clock")
         accounts = {a["id"]: a for a in spec["accounts"]}
@@ -250,7 +261,8 @@ def event(value, spec, now):
         common = ("id", "type", "timestamp", "available_at", "evidence", "action")
         text(value.get("id"))
         text(value.get("evidence"))
-        timestamp, available = clock(value.get("timestamp")), clock(value.get("available_at"))
+        timestamp = evidence_clock(value.get("timestamp"))
+        available = evidence_clock(value.get("available_at"))
         if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
             raise InvestmentError("Profile amendments require a contemporaneous evidence clock")
         action = value.get("action")
@@ -292,7 +304,7 @@ def event(value, spec, now):
                        "account", "balances_gbp", "holdings"))
         for key in ("id", "evidence"):
             text(value[key])
-        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
         if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
             raise InvestmentError("Scope additions require complete contemporaneous evidence")
         candidate = deepcopy(spec)
@@ -334,7 +346,7 @@ def event(value, spec, now):
                        "source", "account_id", "balance_gbp"))
         for key in ("id", "evidence", "source", "account_id"):
             text(value[key])
-        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
         if timestamp < clock(spec["created_at"]) or available < timestamp or available > now:
             raise InvestmentError("Invalid cash observation evidence clock")
         if value["account_id"] not in {account["id"] for account in spec["accounts"]}:
@@ -350,7 +362,7 @@ def event(value, spec, now):
                        "source", "maturity_date", "notice_days"))
         for key in ("id", "evidence", "account_id"):
             text(value[key])
-        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
         if timestamp < clock(spec["created_at"]) or available < timestamp or available > now:
             raise InvestmentError("Invalid savings-terms update evidence clock")
         accounts = {account["id"]: account for account in spec["accounts"]}
@@ -373,7 +385,7 @@ def event(value, spec, now):
         fields(value, ("id", "type", "timestamp", "available_at", "evidence", "balances_gbp"))
         text(value["id"])
         text(value["evidence"])
-        timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+        timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
         if timestamp < clock(spec["created_at"]) or available != timestamp or available > now:
             raise InvestmentError("Cash confirmation requires a contemporaneous evidence clock")
         balances = value["balances_gbp"]
@@ -404,7 +416,7 @@ def event(value, spec, now):
         text(value[key])
     if value["currency"] != "GBP":
         raise InvestmentError("FX and other currencies are unsupported")
-    timestamp, available = clock(value["timestamp"]), clock(value["available_at"])
+    timestamp, available = evidence_clock(value["timestamp"]), evidence_clock(value["available_at"])
     if timestamp < clock(spec["created_at"]) or available < timestamp or available > now:
         raise InvestmentError("Invalid inception or future source availability")
     accounts = {a["id"]: a for a in spec["accounts"]}
@@ -986,7 +998,7 @@ def _replay_corrected_prefix(spec, prefix, correction, ledger, now):
     by_id = {}
     replacements = {}
     superseded = set()
-    corrections = []
+    source_ids = {source["id"] for source in prefix}
     for source in prefix[:-1]:
         if source.get("type") != "correction":
             by_id[source["id"]] = source
@@ -996,25 +1008,29 @@ def _replay_corrected_prefix(spec, prefix, correction, ledger, now):
         if (prior is None or prior["id"] in superseded or
                 prior.get("type") not in CORRECTABLE_EVENTS or
                 replacement["type"] != prior["type"] or
-                replacement["timestamp"] != prior["timestamp"] or
+                evidence_clock(replacement["timestamp"]) != evidence_clock(prior["timestamp"]) or
+                replacement["id"] in source_ids or
                 replacement["id"] in by_id or replacement["id"] in replacements):
             raise InvestmentError("Correction target or replacement is not eligible")
+        if evidence_clock(source["available_at"]) < evidence_clock(prior["available_at"]):
+            raise InvestmentError("Correction evidence predates the original availability")
         replacements[prior["id"]] = replacement
         superseded.add(prior["id"])
         by_id[replacement["id"]] = replacement
-        corrections.append(source)
 
     original = by_id.get(correction["original_event_id"])
     replacement = correction["replacement_event"]
     if (original is None or original["id"] in superseded or
             original.get("type") not in CORRECTABLE_EVENTS or
             replacement["type"] != original["type"] or
-            replacement["timestamp"] != original["timestamp"] or
+            evidence_clock(replacement["timestamp"]) != evidence_clock(original["timestamp"]) or
+            replacement["id"] in source_ids or
             replacement["id"] in by_id or replacement["id"] in replacements):
         raise InvestmentError("Correction target or replacement is not eligible")
+    if evidence_clock(correction["available_at"]) < evidence_clock(original["available_at"]):
+        raise InvestmentError("Correction evidence predates the original availability")
     replacements[original["id"]] = replacement
     superseded.add(original["id"])
-    corrections.append(correction)
 
     effective = []
     for source in prefix:
@@ -1047,8 +1063,9 @@ def _replay_corrected_prefix(spec, prefix, correction, ledger, now):
     rebuilt.ids = {}
     for source in prefix:
         rebuilt.ids[source["id"]] = source.copy()
-    for item in corrections:
-        rebuilt.ids[item["replacement_event"]["id"]] = item["replacement_event"].copy()
+        if source.get("type") == "correction":
+            replacement = source["replacement_event"]
+            rebuilt.ids[replacement["id"]] = replacement.copy()
     for point in rebuilt.valuation_history:
         point["gain_since_baseline_gbp"] = None
         point["twr_pct"] = None
@@ -1075,8 +1092,12 @@ def replay(spec, events, now=None, on_revision=None):
             group_timestamp = None
             same_clock_income = False
             unpriced_flow_holdings = set()
-            for index, value in enumerate(events):
+            source_ids = set()
+            prefix = []
+            for value in events:
                 if isinstance(value, dict) and value.get("id") in ledger.ids:
+                    if value["id"] not in source_ids:
+                        raise InvestmentError("Correction replacement ID cannot be a source event")
                     event(value, ledger.spec, now)
                     if json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) != json.dumps(
                             ledger.ids[value["id"]], sort_keys=True, separators=(",", ":"), allow_nan=False):
@@ -1096,9 +1117,11 @@ def replay(spec, events, now=None, on_revision=None):
                     ledger.checkpoint(previous)
                     if history_relevant:
                         ledger.record_valuation(previous)
+                prefix.append(value)
                 if kind == "correction":
                     ledger = _replay_corrected_prefix(
-                        spec, events[:index + 1], value, ledger, now)
+                        spec, prefix, value, ledger, now)
+                    source_ids.add(value["id"])
                     if on_revision is not None:
                         on_revision(ledger, previous)
                     previous = ledger.last_time
@@ -1114,6 +1137,7 @@ def replay(spec, events, now=None, on_revision=None):
                             key for key, quantity in ledger.holdings.items() if quantity > 0)
                 baseline_before = ledger.baseline_at
                 ledger.apply(value, now)
+                source_ids.add(value["id"])
                 if (kind == "mark" and
                         (value["account_id"], value["product_id"]) in unpriced_flow_holdings):
                     raise InvestmentError(

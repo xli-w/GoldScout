@@ -300,9 +300,10 @@ def project_awareness(ledger, profile, evidence, now, version=1):
     return result
 
 
-def awareness_snapshot(database, intelligence_database, profile_path, now=None, version=1):
+def awareness_snapshot(database, intelligence_database, profile_path, now=None, version=1, *,
+                       clock_source=None):
     try:
-        ledger, now = read_with_clock(database, now)
+        ledger, now = read_with_clock(database, now, clock_source=clock_source)
         profile = load_json(profile_path)
         evidence = IntelligenceStore(intelligence_database).portfolio_evidence()
         return project_awareness(ledger, profile, evidence, now, version)

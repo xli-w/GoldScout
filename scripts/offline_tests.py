@@ -37,6 +37,14 @@ def offline_environment():
     })
     with tempfile.TemporaryDirectory(prefix="trader-offline-") as directory, ExitStack() as stack:
         stack.enter_context(patch.dict(os.environ, environment))
+        temporary_root = Path(directory)
+        checkout = temporary_root / "checkout"
+        (checkout / "dashboard").mkdir(parents=True)
+        (checkout / ".git").mkdir()
+        (checkout / "investment").mkdir()
+        (checkout / "pyproject.toml").touch()
+        stack.enter_context(patch("dashboard.workspace.__file__",
+                                  str(checkout / "dashboard" / "workspace.py")))
         targets = [f"socket.{name}" for name in (
             "create_connection", "getaddrinfo", "gethostbyname", "gethostbyname_ex",
             "gethostbyaddr", "getnameinfo",
@@ -50,7 +58,6 @@ def offline_environment():
         stack.enter_context(patch("dotenv.load_dotenv", return_value=False))
         stack.enter_context(patch("dotenv.dotenv_values", return_value={}))
         stack.enter_context(patch("proxy_config._read_proxy_dotenv", return_value=""))
-        temporary_root = Path(directory)
         yield temporary_root
 
 

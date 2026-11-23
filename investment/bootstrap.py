@@ -157,6 +157,7 @@ def inspect_workspace(path, now=None):
         result = {"state": "ready", "revision": ledger.revision, "issues": issues,
                   "reason": "Opened journal is authoritative"}
         if claim is not None:
+            result["setup_claim_hash"] = store.digest(store.canonical(claim))
             if (operation / STAGE).exists():
                 issues.append("Published setup staging link requires confirmed cleanup")
             if not (operation / RECEIPT).exists():
@@ -318,7 +319,15 @@ def _cleanup_stage(stage, database):
         stage.unlink()
 
 
-def confirm_setup(path, preview, now=None):
+def _partial_setup(exc, committed):
+    message = f"Setup incomplete; preserve artifacts and explicitly recover: {exc}"
+    if len(message) > 2000:
+        message = message[:1997] + "..."
+    return {"status": "partial", "committed": committed, "receipt": None,
+            "revision": 1 if committed else None, "message": message}
+
+
+def confirm_setup(path, preview, now=None, *, on_completed=None):
     """Explicitly create/recover the trusted preview, with truthful partial results.
 
     Complete and partial results both revoke ordinary creation authority at the
@@ -348,34 +357,65 @@ def confirm_setup(path, preview, now=None):
     status = workspace_status(path, now)
     if status["state"] not in ("empty", "recoverable", "ready"):
         raise InvestmentError(status["reason"])
-    existing = (operation / CLAIM).exists()
-    if existing:
-        if _claim(operation / CLAIM) != claim:
-            raise InvestmentError("Conflicting setup operation")
-        for name, device, inode, _, _ in preview["binding"]["entries"]:
-            artifact = path / name
-            if not artifact.exists():
-                # The staged hard link is removed after successful publication.
-                if name == operation.name + "/" + STAGE and database.exists():
-                    continue
-                raise InvestmentError("Bound workspace artifact disappeared")
-            info = artifact.lstat()
-            if [info.st_dev, info.st_ino] != [device, inode]:
-                raise InvestmentError("Bound workspace artifact was replaced")
-    elif status["state"] != "empty":
-        raise InvestmentError("Existing workspace cannot be adopted")
+    verified_commit = (status.get("revision") is not None
+                       and status.get("setup_claim_hash") == store.digest(store.canonical(claim)))
+    try:
+        existing = (operation / CLAIM).exists()
+        if existing:
+            if _claim(operation / CLAIM) != claim:
+                raise InvestmentError("Conflicting setup operation")
+            for name, device, inode, _, _ in preview["binding"]["entries"]:
+                artifact = path / name
+                if not artifact.exists():
+                    # The staged hard link is removed after successful publication.
+                    if name == operation.name + "/" + STAGE and database.exists():
+                        continue
+                    raise InvestmentError("Bound workspace artifact disappeared")
+                info = artifact.lstat()
+                if [info.st_dev, info.st_ino] != [device, inode]:
+                    raise InvestmentError("Bound workspace artifact was replaced")
+        elif status["state"] != "empty":
+            raise InvestmentError("Existing workspace cannot be adopted")
+    except (OSError, InvestmentError, UnicodeError) as exc:
+        if not verified_commit:
+            raise
+        return _partial_setup(exc, True)
     if clock(preview["expires_at"]) < now:
         # A completed identical retry is receipt-only, never an expired write.
-        if (existing and status["state"] == "ready" and database.exists()
-                and (operation / RECEIPT).exists()):
-            _verify_receipt(_json(operation / RECEIPT), claim)
+        if existing and status["state"] == "ready":
+            try:
+                if not database.exists() or not (operation / RECEIPT).exists():
+                    raise InvestmentError("Previously verified workspace changed")
+                _verify_receipt(_json(operation / RECEIPT), claim)
+            except (OSError, InvestmentError, UnicodeError) as exc:
+                if not verified_commit:
+                    raise
+                return _partial_setup(exc, True)
             return {"status": "completed", "committed": True, "receipt": _receipt(claim),
                     "revision": 1, "message": "Previously completed operation"}
         raise InvestmentError("Setup preview expired")
     if not existing and _binding(path) != preview["binding"]:
         raise InvestmentError("Workspace changed since preview")
-    committed = False
+    committed = status.get("revision") is not None
+    published_identity = None
+    stage_identity = None
+    stage = operation / STAGE
+    publication_attempted = False
+    bound_database_identity = next(
+        (entry[1:3] for entry in preview["binding"]["entries"] if entry[0] == database.name),
+        None)
+
+    def require_published_identity():
+        if (not published_identity or published_identity[-1][0] != str(database)
+                or (bound_database_identity is not None
+                    and published_identity[-1][1:] != bound_database_identity)
+                or path_identity(database) != published_identity):
+            raise InvestmentError("Published journal disappeared or changed; preserve artifacts")
+
     try:
+        if committed:
+            published_identity = path_identity(database)
+            require_published_identity()
         if not existing:
             if not path.exists():
                 path.mkdir()  # No implicit creation of missing parent directories.
@@ -391,8 +431,14 @@ def confirm_setup(path, preview, now=None):
             status = workspace_status(path, now)
             if status["state"] not in ("recoverable", "ready"):
                 raise InvestmentError(status["reason"])
-            stage = operation / STAGE
-            if not database.exists():
+            if status.get("revision") is not None and not committed:
+                committed = True
+                published_identity = path_identity(database)
+            if committed:
+                require_published_identity()
+            else:
+                if database.exists():
+                    raise InvestmentError("Workspace changed before publication")
                 if not stage.exists():
                     store.initialize(stage, preview["profile"], now)
                 stage_identity = path_identity(stage)
@@ -413,37 +459,64 @@ def confirm_setup(path, preview, now=None):
                 if (operation_identity != path_identity(operation / CLAIM)
                         or stage_identity != path_identity(stage)):
                     raise InvestmentError("Setup operation path identity changed")
+                publication_attempted = True
                 os.link(stage, database)
                 # The closed stage was already validated. Publication is a fact
                 # even if every subsequent read is temporarily unavailable.
                 committed = True
+                published_identity = path_identity(database)
+                require_published_identity()
+                if published_identity[-1][1:] != stage_identity[-1][1:]:
+                    raise InvestmentError("Published journal identity changed")
             spec, events, _, _ = _read(database, now)
+            require_published_identity()
             _matches(spec, events, claim)
             committed = True
             if workspace_status(path, now)["state"] not in ("ready", "recoverable"):
                 raise InvestmentError("Journal published but workspace validation failed")
+            require_published_identity()
             _cleanup_stage(stage, database)
             if not exported.exists():
                 _write_new(exported, spec)
             elif store.canonical(_json(exported)) != store.canonical(spec):
                 raise InvestmentError("Journal committed; conflicting profile export preserved")
             receipt = _receipt(claim)
+            require_published_identity()
             if not (operation / RECEIPT).exists():
                 _write_new(operation / RECEIPT, receipt)
             _verify_receipt(_json(operation / RECEIPT), claim)
             if workspace_status(path, now)["state"] != "ready":
                 raise InvestmentError("Journal committed; setup completion validation failed")
+            require_published_identity()
+            if on_completed is not None:
+                resolved = str(database.resolve(strict=True))
+                require_published_identity()
+                on_completed((resolved, *published_identity[-1][1:]))
             return {"status": "completed", "committed": True, "receipt": receipt,
                     "revision": 1,
                     "message": "Opened journal published; recording remains disabled"}
     except (OSError, InvestmentError, ValueError, TypeError) as exc:
         # Publication may have succeeded before validation/export/receipt failed.
+        if publication_attempted and not committed:
+            try:
+                if path_identity(stage) != stage_identity:
+                    raise InvestmentError("Staged journal identity changed")
+                if not os.path.samefile(stage, database):
+                    raise InvestmentError("Published journal identity is uncertain")
+                committed = True
+            except FileNotFoundError:
+                if database.exists() or not stage.exists():
+                    raise InvestmentError(
+                        "Setup publication outcome uncertain; preserve artifacts and inspect the workspace"
+                    ) from exc
+            except (OSError, InvestmentError):
+                raise InvestmentError(
+                    "Setup publication outcome uncertain; preserve artifacts and inspect the workspace"
+                ) from exc
         try:
             spec, events, _, _ = _read(database, now)
             _matches(spec, events, claim)
             committed = True
         except (OSError, InvestmentError, ValueError, TypeError):
             pass
-        return {"status": "partial", "committed": committed, "receipt": None,
-                "revision": 1 if committed else None,
-                "message": f"Setup incomplete; preserve artifacts and explicitly recover: {exc}"}
+        return _partial_setup(exc, committed)

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from research_data import CampaignDataset, CampaignDatasetError, import_campaign_dataset
+from research_data import dataset as dataset_module
 from research_data.__main__ import main as campaign_cli
 from research_data import readiness as readiness_module
 from research_data.readiness import audit_readiness, normalized_product_view
@@ -154,23 +155,31 @@ class CampaignReadinessTests(unittest.TestCase):
         self.assertEqual(self.check(report, "session_grid")["status"], "fail")
         self.assertEqual(self.check(report, "session_completeness")["issues"], 2)
 
-    def test_late_bar_fails_deadline_and_next_open_availability(self):
-        self.rows[0] = ("2025-03-27T16:30:00Z", "2025-03-28T09:00:00Z")
+    def test_next_open_availability_is_inclusive_independently_of_publication_delay(self):
+        self.profile["products"][0]["max_availability_delay_seconds"] = 20 * 3600
+        self.rows[0] = ("2025-03-27T16:30:00Z", "2025-03-28T08:00:00Z")
+        self.assertEqual(self.check(self.audit(), "bar_availability")["status"], "pass")
+        self.rows[0] = ("2025-03-27T16:30:00Z", "2025-03-28T08:00:01Z")
         report = self.audit()
         self.assertEqual(self.check(report, "bar_availability")["status"], "fail")
         self.assertIn("next session open", self.check(report, "bar_availability")["examples"][0])
+        self.assertNotIn("publication delay", self.check(report, "bar_availability")["examples"][0])
 
-    def test_publication_and_effective_rate_age_limits_are_inclusive(self):
-        self.rows[0] = ("2025-03-27T16:30:00Z", "2025-03-28T08:00:00Z")
-        self.profile["products"][0]["max_availability_delay_seconds"] = 15 * 3600 + 1800
+    def test_publication_delay_is_inclusive_before_next_open(self):
+        self.rows[0] = ("2025-03-27T16:30:00Z", "2025-03-27T17:30:00Z")
+        self.assertEqual(self.check(self.audit(), "bar_availability")["status"], "pass")
+        self.rows[0] = ("2025-03-27T16:30:00Z", "2025-03-27T17:30:01Z")
+        check = self.check(self.audit(), "bar_availability")
+        self.assertEqual(check["issues"], 1)
+        self.assertIn("publication delay", check["examples"][0])
+        self.assertNotIn("next session open", check["examples"][0])
+
+    def test_effective_rate_age_limit_is_inclusive(self):
         self.profile["cash"]["max_rate_age_seconds"] = 5 * 86400 + 7 * 3600
         report = self.audit()
-        self.assertEqual(self.check(report, "bar_availability")["status"], "pass")
         self.assertEqual(self.check(report, "rate_availability", "cash")["status"], "pass")
-        self.rows[0] = ("2025-03-27T16:30:00Z", "2025-03-28T08:00:01Z")
         self.profile["cash"]["max_rate_age_seconds"] -= 1
         report = self.audit()
-        self.assertEqual(self.check(report, "bar_availability")["issues"], 1)
         self.assertEqual(self.check(report, "rate_availability", "cash")["issues"], 1)
 
     def test_future_effective_and_unavailable_latest_cash_rates_do_not_fall_back(self):
@@ -506,7 +515,15 @@ class CampaignReadinessTests(unittest.TestCase):
             ("2025-04-01T07:15:00Z", "2025-03-26T12:00:00Z", "0.05"),
             ("2025-04-01T06:30:00-00:60", "2025-03-26T12:00:00Z", "0.06"),
         ])
-        dataset_id = self.import_fixture()
+        current_timestamp = dataset_module._timestamp
+
+        def legacy_timestamp(value, where):
+            if value.endswith("-00:60"):
+                value = value[:-6] + "-01:00"
+            return current_timestamp(value, where)
+
+        with patch.object(dataset_module, "_timestamp", side_effect=legacy_timestamp):
+            dataset_id = self.import_fixture()
         with self.assertRaisesRegex(CampaignDatasetError, "offset"):
             self.normalized(dataset_id)
         args = ["normalize", dataset_id, "gbp-product", "--dataset-dir", str(self.dataset_dir),

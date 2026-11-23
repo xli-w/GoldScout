@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.mjs";
 
 test("settings persist preferences and keep entered credentials write-only", async ({ page }) => {
   let session = {

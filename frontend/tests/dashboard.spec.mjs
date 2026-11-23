@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.mjs";
 
 const etoroSnapshot = {
   schema_version: 1, environment: "demo", account_id: 12345,
@@ -119,36 +119,34 @@ test.describe("eToro within the portfolio", () => {
     expect(writes).toEqual([]);
   });
 
-  for (const reason of ["legacy", "changed credentials"]) {
-    test(`disable is available when ${reason} require reauthorization`, async ({ page }) => {
-      let revoked = false;
-      const writes = [];
-      await page.route("**/api/investment/v1/etoro/**", route => {
-        const request = route.request();
-        const path = new URL(request.url()).pathname.split("/").at(-1);
-        if (request.method() === "POST") {
-          writes.push({ path, body: request.postDataJSON() });
-          revoked = true;
-          return route.fulfill({ json: { state: "revoked" } });
-        }
-        const connection = { ...etoroConnection(revoked, revoked ? 2 : 1),
-          reauthorization_required: !revoked };
-        const common = { state: revoked ? "revoked" : "reauthorization_required",
-          last_status: revoked ? "startup_refresh_revoked" : "not_collected", connection };
-        return route.fulfill({ json: path === "session"
-          ? { ...common, enabled: true, csrf: "synthetic-csrf", read_generation: 0,
-            connection_revision: connection.revision, snapshot_available: false }
-          : { ...common, snapshot: null } });
-      });
-      await page.goto("/investment?view=tools");
-      const etoro = page.getByRole("region", { name: "eToro portfolio" });
-      await expect(etoro.getByRole("button", { name: "Disable eToro" })).toBeEnabled();
-      await etoro.getByRole("button", { name: "Disable eToro" }).click();
-      await expect(etoro).toContainText("eToro connection is disabled");
-      await expect(etoro).not.toContainText("Revocation could not be verified");
-      expect(writes).toEqual([{ path: "revoke", body: {} }]);
+  test("disable is available when a connection requires reauthorization", async ({ page }) => {
+    let revoked = false;
+    const writes = [];
+    await page.route("**/api/investment/v1/etoro/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.split("/").at(-1);
+      if (request.method() === "POST") {
+        writes.push({ path, body: request.postDataJSON() });
+        revoked = true;
+        return route.fulfill({ json: { state: "revoked" } });
+      }
+      const connection = { ...etoroConnection(revoked, revoked ? 2 : 1),
+        reauthorization_required: !revoked };
+      const common = { state: revoked ? "revoked" : "reauthorization_required",
+        last_status: revoked ? "startup_refresh_revoked" : "not_collected", connection };
+      return route.fulfill({ json: path === "session"
+        ? { ...common, enabled: true, csrf: "synthetic-csrf", read_generation: 0,
+          connection_revision: connection.revision, snapshot_available: false }
+        : { ...common, snapshot: null } });
     });
-  }
+    await page.goto("/investment?view=tools");
+    const etoro = page.getByRole("region", { name: "eToro portfolio" });
+    await expect(etoro.getByRole("button", { name: "Disable eToro" })).toBeEnabled();
+    await etoro.getByRole("button", { name: "Disable eToro" }).click();
+    await expect(etoro).toContainText("eToro connection is disabled");
+    await expect(etoro).not.toContainText("Revocation could not be verified");
+    expect(writes).toEqual([{ path: "revoke", body: {} }]);
+  });
 
   test("uncertain refresh response blocks another read but allows disable", async ({ page }) => {
     const writes = [];

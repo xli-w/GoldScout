@@ -29,6 +29,7 @@ CURRENCY = re.compile(r"^[A-Z]{3}$")
 RFC3339 = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
+UTC_OFFSET = re.compile(r"[+-](\d{2}):(\d{2})$")
 DATASET_ID = re.compile(r"^[0-9a-f]{64}$")
 PRODUCT_COLUMNS = ("timestamp", "available_at", "open", "high", "low", "close", "volume")
 FX_COLUMNS = ("timestamp", "available_at", "gbp_per_unit")
@@ -192,6 +193,9 @@ def _currency(value, where):
 def _timestamp(value, where):
     if not isinstance(value, str) or not RFC3339.fullmatch(value):
         raise CampaignDatasetError(f"{where} must be an RFC3339 timestamp with an explicit UTC offset")
+    offset = UTC_OFFSET.search(value)
+    if offset and (int(offset.group(1)) > 23 or int(offset.group(2)) > 59):
+        raise CampaignDatasetError(f"{where} has an invalid UTC offset")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
@@ -202,6 +206,13 @@ def _timestamp(value, where):
         return parsed.astimezone(timezone.utc)
     except OverflowError as exc:
         raise CampaignDatasetError(f"{where} is outside the supported UTC range") from exc
+
+
+def _timestamp_key(value, where):
+    parsed = _timestamp(value, where)
+    fractional = re.search(r"T\d{2}:\d{2}:\d{2}\.(\d+)", value)
+    remainder = fractional.group(1)[6:].rstrip("0") if fractional else ""
+    return parsed, remainder
 
 
 def _metadata(value, where):
@@ -224,7 +235,7 @@ def _validate_provenance(value, where):
 
 
 def _source_retrieved_at(item, default_provenance, where):
-    return _timestamp(
+    return _timestamp_key(
         item.get("provenance", default_provenance)["retrieved_at"],
         where + ".provenance.retrieved_at",
     )
@@ -421,8 +432,8 @@ def _validate_manifest(manifest):
             _metadata(action["source_metadata"], where + ".source_metadata")
         if "provenance" in action:
             _validate_provenance(action["provenance"], where + ".provenance")
-        effective = _timestamp(action["effective_at"], where + ".effective_at")
-        available = _timestamp(action["available_at"], where + ".available_at")
+        effective = _timestamp_key(action["effective_at"], where + ".effective_at")
+        available = _timestamp_key(action["available_at"], where + ".available_at")
         if available > _source_retrieved_at(action, provenance, where):
             raise CampaignDatasetError(f"{where}.available_at exceeds source retrieved_at")
         ordering_key = (effective, available, product_id, action_id)
@@ -456,8 +467,8 @@ def _parse_csv_checked(payload, filename, columns, kind, retrieved_at):
     for line_number, row in enumerate(reader, start=2):
         if None in row or any(value is None for value in row.values()):
             raise CampaignDatasetError(f"{filename}:{line_number}: malformed CSV row")
-        stamp = _timestamp(row["timestamp"], f"{filename}:{line_number}.timestamp")
-        available = _timestamp(row["available_at"], f"{filename}:{line_number}.available_at")
+        stamp = _timestamp_key(row["timestamp"], f"{filename}:{line_number}.timestamp")
+        available = _timestamp_key(row["available_at"], f"{filename}:{line_number}.available_at")
         if available > retrieved_at:
             raise CampaignDatasetError(f"{filename}:{line_number}: available_at exceeds source retrieved_at")
         if kind in ("product", "fx") and available < stamp:
@@ -496,8 +507,10 @@ def _parse_csv_checked(payload, filename, columns, kind, retrieved_at):
         raise CampaignDatasetError(f"{filename}: series must contain at least one observation")
     return {
         "rows": rows,
-        "first_timestamp": first.isoformat().replace("+00:00", "Z"),
-        "last_timestamp": last.isoformat().replace("+00:00", "Z"),
+        "first_timestamp": first[0].isoformat().replace("+00:00", "Z"),
+        "last_timestamp": last[0].isoformat().replace("+00:00", "Z"),
+        "_first_key": first,
+        "_last_key": last,
         "sha256": _sha256(payload),
         "bytes": len(payload),
     }
@@ -523,8 +536,8 @@ def _validate_payloads(source_manifest, payloads):
         )
         stats[product["file"]] = info
         product_spans[product["id"]] = (
-            _timestamp(info["first_timestamp"], "product first timestamp"),
-            _timestamp(info["last_timestamp"], "product last timestamp"),
+            info["_first_key"],
+            info["_last_key"],
             product["currency"],
         )
     fx_spans = {}
@@ -533,8 +546,8 @@ def _validate_payloads(source_manifest, payloads):
         info = _parse_csv(payloads[fx["file"]], fx["file"], FX_COLUMNS, "fx", retrieved_at)
         stats[fx["file"]] = info
         fx_spans[fx["currency"]] = (
-            _timestamp(info["first_timestamp"], "FX first timestamp"),
-            _timestamp(info["last_timestamp"], "FX last timestamp"),
+            info["_first_key"],
+            info["_last_key"],
         )
     for cash in source_manifest["cash_rates"]:
         retrieved_at = _source_retrieved_at(cash, source_manifest["provenance"], cash["id"])
@@ -552,7 +565,7 @@ def _validate_payloads(source_manifest, payloads):
         if fx_first > first or fx_last < last:
             raise CampaignDatasetError(
                 f"{product['id']}: FX {currency} observation timestamps do not span product history "
-                f"{first.isoformat()} through {last.isoformat()}"
+                f"{first[0].isoformat()} through {last[0].isoformat()}"
             )
     return stats
 

@@ -3,7 +3,7 @@
 from decimal import Decimal, localcontext
 
 from .core import ROLES, ZERO, clock, fmt, iso, number, replay
-from .store import read
+from .store import read_with_clock
 
 
 def _reported_timestamps(value, fields):
@@ -282,9 +282,9 @@ def report(ledger, now, source_mode="recorded"):
         }
 
 
-def snapshot(database, now=None):
-    now = clock(now)
-    return report(read(database, now), now)
+def snapshot(database, now=None, *, clock_source=None):
+    ledger, observed = read_with_clock(database, now, clock_source=clock_source)
+    return report(ledger, observed)
 
 
 def demo_profile(now):

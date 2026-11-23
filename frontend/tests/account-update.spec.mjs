@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.mjs";
 
 async function fixture(page) {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
@@ -327,11 +327,23 @@ test("a failed refresh after a save keeps the committed outcome visible", async 
     history.replaceState({ ...history.state, usr: { recordSaved: true,
       reviewNotice: "Review progress could not be updated." } }, "");
   });
+  let releaseRefresh;
+  let signalStarted;
+  const refreshStarted = new Promise(resolve => { signalStarted = resolve; });
+  const refreshAllowed = new Promise(resolve => { releaseRefresh = resolve; });
   await page.route("**/api/investment/v1/snapshot", async route => {
-    await new Promise(resolve => setTimeout(resolve, 500));
+    signalStarted();
+    await refreshAllowed;
     await route.fulfill({ status: 503, json: { error: "synthetic_unavailable" } });
   });
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  try {
+    await refreshStarted;
+    await expect(page.getByText("Your record was saved.", { exact: false })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Account evidence to review" })).toHaveCount(0);
+  } finally {
+    releaseRefresh();
+  }
   await expect(page.getByText("Your record was saved.", { exact: false })).toBeVisible();
   await expect(page.getByRole("region", { name: "Account evidence to review" })).toHaveCount(0);
   await expect(page.getByRole("alert")).toContainText("latest account evidence could not be refreshed");

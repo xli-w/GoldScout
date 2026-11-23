@@ -1,6 +1,6 @@
 """Separate explicit investment SQLite store. Readers never initialize or repair."""
 
-from contextlib import closing
+from contextlib import ExitStack, closing
 from copy import copy
 import hashlib
 import json
@@ -22,6 +22,18 @@ TABLE_SQL = {
     "commits": "CREATE TABLE commits (revision INTEGER PRIMARY KEY, "
                "state_hash TEXT NOT NULL)",
 }
+
+
+class CommittedInvestmentError(InvestmentError):
+    def __init__(self, action, revision, event_id=None, problem="connection cleanup failed"):
+        super().__init__(f"Investment {action} at revision {revision}; "
+                         f"{problem}. Preserve the journal before retrying.")
+        self.revision = revision
+        self.event_id = event_id
+
+
+class UncertainInvestmentError(InvestmentError):
+    pass
 
 
 def trigger_sql(table, operation):
@@ -134,14 +146,16 @@ def _connect(database, readonly):
     try:
         if path.stat().st_size > MAX_DATABASE_BYTES:
             raise InvestmentError("Investment database exceeds size bound")
-        connection = sqlite3.connect(path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"),
-                                     uri=True, timeout=1)
-        if readonly:
-            connection.execute("PRAGMA query_only=ON")
-        if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
-            connection.close()
-            raise InvestmentError("Unsupported store journal mode")
-        return connection
+        with ExitStack() as stack:
+            connection = sqlite3.connect(path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"),
+                                         uri=True, timeout=1)
+            stack.callback(connection.close)
+            if readonly:
+                connection.execute("PRAGMA query_only=ON")
+            if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+                raise InvestmentError("Unsupported store journal mode")
+            stack.pop_all()
+            return connection
     except (sqlite3.Error, OSError) as exc:
         raise InvestmentError("Cannot open investment store") from exc
 
@@ -156,6 +170,8 @@ def initialize(database, spec, now=None):
         os.close(fd)
     except OSError as exc:
         raise InvestmentError("Init requires a new explicit database path") from exc
+    committed = False
+    commit_attempted = False
     try:
         with closing(sqlite3.connect(path)) as connection:
             with connection:
@@ -168,7 +184,16 @@ def initialize(database, spec, now=None):
                 encoded = canonical(spec)
                 connection.execute("INSERT INTO identity VALUES (1,?,?)", (encoded, digest(encoded)))
                 connection.execute("INSERT INTO commits VALUES (0,?)", (state_digest(ledger),))
+                commit_attempted = True
+                connection.commit()
+                committed = True
     except (sqlite3.Error, OSError) as exc:
+        if committed:
+            raise CommittedInvestmentError("initialized", 0) from exc
+        if commit_attempted:
+            raise UncertainInvestmentError(
+                "Investment initialization commit outcome uncertain; preserve the journal and inspect before retrying"
+            ) from exc
         path.unlink(missing_ok=True)
         raise InvestmentError("Investment initialization failed") from exc
 
@@ -240,7 +265,9 @@ def _read(connection, now):
     return spec, events, ledger, previous
 
 
-def read_with_clock(database, now=None):
+def read_snapshot_with_clock(database, now=None, *, clock_source=None):
+    if now is not None and clock_source is not None:
+        raise InvestmentError("Supply either an observation time or a clock source")
     if now is not None:
         now = clock(now)
     try:
@@ -249,10 +276,22 @@ def read_with_clock(database, now=None):
             if now is None:
                 # Pin the snapshot without executing an unvalidated store object.
                 connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
-                now = clock()
-            return _read(connection, now)[2], now
+                if clock_source is None:
+                    now = clock()
+                else:
+                    observed = clock_source()
+                    if observed is None:
+                        raise InvestmentError("Clock source must return an observation time")
+                    now = clock(observed)
+            _, _, ledger, head = _read(connection, now)
+            return ledger, now, head
     except (sqlite3.Error, TypeError, AttributeError) as exc:
         raise InvestmentError("Invalid or unreadable investment store") from exc
+
+
+def read_with_clock(database, now=None, *, clock_source=None):
+    ledger, observed, _ = read_snapshot_with_clock(database, now, clock_source=clock_source)
+    return ledger, observed
 
 
 def read(database, now=None):
@@ -285,6 +324,8 @@ def _append_events(connection, spec, existing, old, previous, values, now):
             ids[value["id"]] = value
             additions.append(value)
     ledger = replay(spec, existing + additions, now)
+    if ledger.revision != old.revision + len(additions):
+        raise InvestmentError("Investment event and replay revisions disagree")
     _check_evidence_size(spec, existing + additions)
     for offset, value in enumerate(additions, old.revision + 1):
         payload = canonical(value)
@@ -305,13 +346,25 @@ def import_events(database, values, now=None):
     values = parse_json(canonical(values))
     if not isinstance(values, list) or len(values) > MAX_EVENTS:
         raise InvestmentError("Explicit bounded event array required")
+    committed = False
+    commit_attempted = False
     try:
         with closing(_connect(database, False)) as connection:
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
                 spec, existing, old, previous = _read(connection, now)
-                return _append_events(connection, spec, existing, old, previous, values, now)
-    except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
+                revision = _append_events(connection, spec, existing, old, previous, values, now)
+                commit_attempted = True
+                connection.commit()
+                committed = True
+        return revision
+    except (sqlite3.Error, OSError, TypeError, AttributeError, RecursionError) as exc:
+        if committed:
+            raise CommittedInvestmentError("import completed", revision) from exc
+        if commit_attempted:
+            raise UncertainInvestmentError(
+                "Investment import commit outcome uncertain; preserve the journal and inspect before retrying"
+            ) from exc
         raise InvestmentError("Investment import failed; transaction rolled back") from exc
 
 
@@ -349,6 +402,27 @@ def preview_record(database, value, now=None):
         raise InvestmentError("Investment preview failed") from exc
 
 
+def _committed_record_receipt(connection, spec, existing, ledger, preview, now):
+    value = preview["event"]
+    expected = preview["revision"]
+    if value["id"] not in ledger.ids:
+        return None
+    if (expected >= len(existing) or
+            canonical(existing[expected]) != canonical(value) or
+            connection.execute("SELECT 1 FROM commits WHERE revision=?",
+                               (expected,)).fetchone() is None or
+            connection.execute("SELECT 1 FROM commits WHERE revision=?",
+                               (expected + 1,)).fetchone() is None or
+            (digest(canonical(spec)) if expected == 0 else
+             connection.execute("SELECT hash FROM events WHERE revision=?",
+                                (expected,)).fetchone()[0]) != preview["previous_hash"]):
+        raise InvestmentError("Conflicting duplicate event or revision")
+    predecessor = replay(spec, existing[:expected], now)
+    if digest(canonical(predecessor.spec)) != preview["profile_hash"]:
+        raise InvestmentError("Investment profile changed")
+    return {"id": value["id"], "revision": expected + 1}
+
+
 def commit_record(database, preview, now=None):
     """Append a previewed event only against its exact journal predecessor.
 
@@ -365,29 +439,49 @@ def commit_record(database, preview, now=None):
             not isinstance(preview["event"].get("id"), str) or
             preview["event_hash"] != digest(canonical(preview["event"]))):
         raise InvestmentError("Invalid preview binding")
+    committed = False
+    commit_attempted = False
     try:
         with closing(_connect(database, False)) as connection:
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
                 now = clock(now)
                 spec, existing, ledger, previous = _read(connection, now)
-                if digest(canonical(ledger.spec)) != preview["profile_hash"]:
-                    raise InvestmentError("Investment profile changed")
                 expected = preview["revision"]
                 value = preview["event"]
-                if value["id"] in ledger.ids:
-                    if (expected >= len(existing) or
-                            canonical(existing[expected]) != canonical(value) or
-                            connection.execute("SELECT 1 FROM commits WHERE revision=?",
-                                               (expected + 1,)).fetchone() is None or
-                            (digest(canonical(spec)) if expected == 0 else
-                             connection.execute("SELECT hash FROM events WHERE revision=?",
-                                                (expected,)).fetchone()[0]) != preview["previous_hash"]):
-                        raise InvestmentError("Conflicting duplicate event or revision")
-                    return {"id": value["id"], "revision": expected + 1}
-                if ledger.revision != expected or previous != preview["previous_hash"]:
-                    raise InvestmentError("Investment revision changed; preview again")
-                revision = _append_events(connection, spec, existing, ledger, previous, [value], now)
-                return {"id": value["id"], "revision": revision}
-    except (sqlite3.Error, TypeError, AttributeError, RecursionError) as exc:
+                receipt = _committed_record_receipt(
+                    connection, spec, existing, ledger, preview, now)
+                if receipt is None:
+                    if digest(canonical(ledger.spec)) != preview["profile_hash"]:
+                        raise InvestmentError("Investment profile changed")
+                    if ledger.revision != expected or previous != preview["previous_hash"]:
+                        raise InvestmentError("Investment revision changed; preview again")
+                    revision = _append_events(connection, spec, existing, ledger, previous, [value], now)
+                    receipt = {"id": value["id"], "revision": revision}
+                commit_attempted = True
+                connection.commit()
+                committed = True
+        return receipt
+    except (sqlite3.Error, OSError, TypeError, AttributeError, RecursionError) as exc:
+        if committed:
+            raise CommittedInvestmentError(
+                "record committed", receipt["revision"], receipt["id"]) from exc
+        if commit_attempted:
+            try:
+                with closing(_connect(database, True)) as connection:
+                    connection.execute("BEGIN")
+                    spec, existing, ledger, _ = _read(connection, now)
+                    receipt = _committed_record_receipt(
+                        connection, spec, existing, ledger, preview, now)
+            except (InvestmentError, sqlite3.Error, OSError, TypeError, AttributeError) as verification:
+                raise UncertainInvestmentError(
+                    "Investment commit outcome uncertain; exact verification failed; preserve the journal"
+                ) from verification
+            if receipt is not None:
+                raise CommittedInvestmentError(
+                    "record committed", receipt["revision"], receipt["id"],
+                    "commit result failed but the exact record was verified") from exc
+            raise UncertainInvestmentError(
+                "Investment commit outcome uncertain; preserve the journal and inspect before retrying"
+            ) from exc
         raise InvestmentError("Investment commit failed; transaction rolled back") from exc

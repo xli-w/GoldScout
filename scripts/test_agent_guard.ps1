@@ -73,16 +73,16 @@ foreach ($case in $cases) {
     if ($response.hookSpecificOutput.permissionDecision -ne $case.Expected) {
         throw "Unexpected decision for $($case.Tool): expected $($case.Expected)"
     }
-    $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-    foreach ($directory in @($root, [IO.Path]::GetTempPath())) {
-        $hostCommand = @{ cwd = $directory; toolCalls = @(
-            @{ name = 'functions.powershell'; args = @{ command = 'python scripts/offline_tests.py' } }
-        ) }
-        $response = & $guard -InputJson ($hostCommand | ConvertTo-Json -Depth 8 -Compress) | ConvertFrom-Json
-        $expected = if ($directory -eq $root) { 'allow' } else { 'ask' }
-        if ($response.hookSpecificOutput.permissionDecision -ne $expected) {
-            throw 'Development command was not bound to the host checkout.'
-        }
+}
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+foreach ($directory in @($root, [IO.Path]::GetTempPath())) {
+    $hostCommand = @{ cwd = $directory; toolCalls = @(
+        @{ name = 'functions.powershell'; args = @{ command = 'python scripts/offline_tests.py' } }
+    ) }
+    $response = & $guard -InputJson ($hostCommand | ConvertTo-Json -Depth 8 -Compress) | ConvertFrom-Json
+    $expected = if ($directory -eq $root) { 'allow' } else { 'ask' }
+    if ($response.hookSpecificOutput.permissionDecision -ne $expected) {
+        throw 'Development command was not bound to the host checkout.'
     }
 }
 $hostSafePatch = "*** Begin Patch`n*** Add File: docs\research-note.md`n+safe`n*** End Patch"

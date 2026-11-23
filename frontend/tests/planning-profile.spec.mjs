@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.mjs";
 
 async function recordedPortfolio(page) {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();

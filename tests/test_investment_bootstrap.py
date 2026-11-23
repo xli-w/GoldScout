@@ -4,12 +4,14 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 import unittest
 from unittest.mock import patch
 
+from dashboard import workspace
 from dashboard.workspace import resolve_workspace, workspace_status
 from investment import InvestmentError, bootstrap, store
 from investment.core import iso
@@ -59,9 +61,8 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(list(self.path.iterdir()), [])
 
     def test_default_is_checkout_anchored_and_explicit_is_not_relocated(self):
-        # Resolution only; never inspect the real default workspace.
-        self.assertEqual(resolve_workspace().parent,
-                         Path(__file__).absolute().parent.parent)
+        self.assertEqual(resolve_workspace(),
+                         Path(workspace.__file__).absolute().parent.parent / "local-investment")
         self.assertEqual(resolve_workspace(self.path), self.path)
         with patch("dashboard.workspace.Path.is_file", return_value=False):
             with self.assertRaisesRegex(InvestmentError, "--workspace"):
@@ -97,6 +98,11 @@ class BootstrapTests(unittest.TestCase):
         recovered = bootstrap.recovery_preview(self.path, NOW)
         self.assertEqual(self.confirm(recovered)["receipt"], result["receipt"])
         self.assertFalse((self.path / ".investment-setup" / "journal.sqlite3").exists())
+        bindings = []
+        expired = bootstrap.confirm_setup(
+            self.path, preview, NOW + timedelta(hours=1), on_completed=bindings.append)
+        self.assertEqual(expired["receipt"], result["receipt"])
+        self.assertEqual(bindings, [])
 
     def test_manual_unopened_and_opened_missing_profile_remain_authoritative(self):
         self.path.mkdir()
@@ -224,6 +230,47 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(self.confirm(self.preview())["status"], "completed")
         self.assertEqual(store.read(self.database, NOW).revision, 1)
 
+    def test_post_commit_close_failures_preserve_staged_setup_evidence(self):
+        from test_investment_opening import ConnectionCloseFailure
+
+        initialize = store.initialize
+        connect = sqlite3.connect
+        store_connect = store._connect
+
+        def fail_initialization_close(database, spec, now):
+            with patch.object(store.sqlite3, "connect",
+                              side_effect=lambda *args, **kwargs: ConnectionCloseFailure(
+                                  connect(*args, **kwargs))):
+                return initialize(database, spec, now)
+
+        def fail_import_close(database, readonly):
+            connection = store_connect(database, readonly)
+            return connection if readonly else ConnectionCloseFailure(connection)
+
+        for operation, revision in (("initialize", 0), ("import", 1)):
+            with self.subTest(operation=operation):
+                self.path = self.root / operation
+                self.database = self.path / "investment.sqlite3"
+                if operation == "initialize":
+                    failure = patch.object(store, "initialize", side_effect=fail_initialization_close)
+                else:
+                    failure = patch.object(store, "_connect", side_effect=fail_import_close)
+                with failure:
+                    result = self.confirm()
+                stage = self.path / ".investment-setup" / "journal.sqlite3"
+                self.assertEqual(result["status"], "partial")
+                self.assertFalse(result["committed"])
+                self.assertIn(f"revision {revision}", result["message"])
+                self.assertFalse(self.database.exists())
+                self.assertEqual(store.read(stage, NOW).revision, revision)
+                status = workspace_status(self.path, NOW)
+                self.assertEqual(status["state"], "recoverable")
+                self.assertEqual(status["recovery"]["can_preview"], revision == 1)
+                preview = bootstrap.recovery_preview(self.path, NOW) if revision else self.preview()
+                self.assertEqual(self.confirm(preview)["status"], "completed")
+                self.assertEqual(store.read(self.database, NOW).revision, 1)
+                self.assertEqual(workspace_status(self.path, NOW)["state"], "ready")
+
     def test_publication_failure_preserves_opened_stage_and_recovery(self):
         with patch.object(os, "link", side_effect=OSError("no primitive")):
             result = self.confirm()
@@ -259,6 +306,209 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(self.database.read_bytes(), original)
         self.assertEqual(store.read(self.database, NOW).revision, 1)
         self.assertEqual(workspace_status(self.path, NOW)["state"], "ready")
+
+    def test_lost_publication_result_uses_stage_identity_when_reads_fail(self):
+        original_link = os.link
+        original_read = bootstrap._read
+        stage = self.path / ".investment-setup" / "journal.sqlite3"
+
+        def lose_link_result(source, destination):
+            original_link(source, destination)
+            raise OSError("synthetic lost publication result")
+
+        def fail_published_read(path, now):
+            if Path(path) == self.database and self.database.exists():
+                raise InvestmentError("synthetic published journal read failure")
+            return original_read(path, now)
+
+        with patch.object(os, "link", side_effect=lose_link_result), \
+                patch.object(bootstrap, "_read", side_effect=fail_published_read):
+            result = self.confirm()
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["committed"])
+        self.assertEqual(result["revision"], 1)
+        self.assertTrue(os.path.samefile(stage, self.database))
+        self.assertEqual(store.read(self.database, NOW).revision, 1)
+
+    def test_unverifiable_lost_publication_result_is_not_reported_uncommitted(self):
+        original_link = os.link
+        original_read = bootstrap._read
+
+        def lose_link_result(source, destination):
+            original_link(source, destination)
+            raise OSError("synthetic lost publication result")
+
+        def fail_published_read(path, now):
+            if Path(path) == self.database and self.database.exists():
+                raise InvestmentError("synthetic published journal read failure")
+            return original_read(path, now)
+
+        with patch.object(os, "link", side_effect=lose_link_result), \
+                patch.object(bootstrap, "_read", side_effect=fail_published_read), \
+                patch.object(os.path, "samefile", side_effect=OSError("identity unavailable")):
+            with self.assertRaisesRegex(InvestmentError, "uncertain"):
+                self.confirm()
+        self.assertTrue(self.database.exists())
+        self.assertEqual(store.read(self.database, NOW).revision, 1)
+
+    def test_recovery_preserves_known_published_journal_when_later_reads_fail(self):
+        original_write = bootstrap._write_new
+
+        def fail_receipt(path, value):
+            if path.name == bootstrap.RECEIPT:
+                raise OSError("synthetic receipt failure")
+            return original_write(path, value)
+
+        with patch("investment.bootstrap._write_new", side_effect=fail_receipt):
+            partial = self.confirm()
+        self.assertTrue(partial["committed"])
+        recovery = bootstrap.recovery_preview(self.path, NOW)
+        original = self.database.read_bytes()
+        original_read = bootstrap._read
+        reads = []
+
+        def fail_after_initial(path, now):
+            if Path(path) == self.database:
+                reads.append(path)
+                if len(reads) > 1:
+                    raise InvestmentError("synthetic later read failure")
+            return original_read(path, now)
+
+        with patch("investment.bootstrap._read", side_effect=fail_after_initial):
+            result = self.confirm(recovery)
+        self.assertGreater(len(reads), 1)
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["committed"])
+        self.assertEqual(result["revision"], 1)
+        self.assertEqual(self.database.read_bytes(), original)
+        self.assertEqual(workspace_status(self.path, NOW)["state"], "recoverable")
+        self.assertEqual(self.confirm(bootstrap.recovery_preview(self.path, NOW))["status"],
+                         "completed")
+
+    def test_recovery_preserves_verified_commit_when_claim_reread_fails(self):
+        for recoverable in (False, True):
+            with self.subTest(recoverable=recoverable):
+                self.path = self.root / f"claim-reread-{recoverable}"
+                self.database = self.path / "investment.sqlite3"
+                if recoverable:
+                    original_write = bootstrap._write_new
+
+                    def fail_receipt(path, value):
+                        if path.name == bootstrap.RECEIPT:
+                            raise OSError("synthetic receipt failure")
+                        return original_write(path, value)
+
+                    with patch.object(bootstrap, "_write_new", side_effect=fail_receipt):
+                        result = self.confirm()
+                    self.assertTrue(result["committed"])
+                else:
+                    self.assertEqual(self.confirm()["status"], "completed")
+                preview = bootstrap.recovery_preview(self.path, NOW)
+                original = self.database.read_bytes()
+                original_claim = bootstrap._claim
+                reads = []
+
+                def fail_second_claim(path):
+                    reads.append(path)
+                    if len(reads) == 2:
+                        raise InvestmentError("synthetic claim read failure")
+                    return original_claim(path)
+
+                with patch.object(bootstrap, "_claim", side_effect=fail_second_claim):
+                    result = self.confirm(preview)
+                self.assertEqual(result["status"], "partial")
+                self.assertTrue(result["committed"])
+                self.assertEqual(result["revision"], 1)
+                self.assertEqual(self.database.read_bytes(), original)
+
+    def test_recovery_preserves_verified_commit_when_claim_reread_is_undecodable(self):
+        self.assertEqual(self.confirm()["status"], "completed")
+        preview = bootstrap.recovery_preview(self.path, NOW)
+        original = self.database.read_bytes()
+        original_claim = bootstrap._claim
+        reads = []
+
+        def undecodable_second_claim(path):
+            reads.append(path)
+            if len(reads) == 2:
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic invalid byte")
+            return original_claim(path)
+
+        with patch.object(bootstrap, "_claim", side_effect=undecodable_second_claim):
+            result = self.confirm(preview)
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["committed"])
+        self.assertEqual(result["revision"], 1)
+        self.assertEqual(self.database.read_bytes(), original)
+
+    def test_recovery_never_replaces_disappeared_or_substituted_published_journal(self):
+        from test_investment_opening import event
+
+        for change in ("missing", "replace-after-status", "replace-before-identity",
+                       "missing-after-first-status"):
+            with self.subTest(change=change):
+                substitute = change.startswith("replace")
+                self.path = self.root / f"recovery-{change}"
+                self.database = self.path / "investment.sqlite3"
+                original_write = bootstrap._write_new
+
+                def fail_export(path, value):
+                    if path.name == "profile.json":
+                        raise OSError("synthetic export failure")
+                    return original_write(path, value)
+
+                with patch.object(bootstrap, "_write_new", side_effect=fail_export):
+                    partial = self.confirm()
+                self.assertTrue(partial["committed"])
+                store.import_events(
+                    self.database, [event("later-interest", "interest", NOW, "bank", amount_gbp="1")],
+                    NOW)
+                preview = bootstrap.recovery_preview(self.path, NOW)
+                original = self.database.read_bytes()
+                moved = self.root / f"preserved-{change}.sqlite3"
+                replacement = self.root / f"replacement-{change}.sqlite3"
+                if substitute:
+                    store.initialize(replacement, profile(), NOW)
+                    store.import_events(replacement, [opening()], NOW)
+                    replacement_bytes = replacement.read_bytes()
+                original_status = workspace_status
+                original_identity = workspace.path_identity
+                calls = []
+
+                def replace_database():
+                    self.database.replace(moved)
+                    if substitute:
+                        replacement.replace(self.database)
+
+                def change_after_locked_status(path, now=None):
+                    result = original_status(path, now)
+                    calls.append(True)
+                    if len(calls) == (1 if change == "missing-after-first-status" else 2):
+                        replace_database()
+                    return result
+
+                def change_before_identity_snapshot(path):
+                    if Path(path) == self.database:
+                        calls.append(True)
+                        if len(calls) == 2:
+                            replace_database()
+                    return original_identity(path)
+
+                if change == "replace-before-identity":
+                    failure = patch("dashboard.workspace.path_identity",
+                                    side_effect=change_before_identity_snapshot)
+                else:
+                    failure = patch("dashboard.workspace.workspace_status",
+                                    side_effect=change_after_locked_status)
+                with failure:
+                    result = self.confirm(preview)
+                self.assertEqual(result["status"], "partial")
+                self.assertTrue(result["committed"])
+                self.assertEqual(moved.read_bytes(), original)
+                if substitute:
+                    self.assertEqual(self.database.read_bytes(), replacement_bytes)
+                else:
+                    self.assertFalse(self.database.exists())
 
     def test_claim_and_cleanup_failures_preserve_evidence(self):
         with patch.object(bootstrap, "_write_new", side_effect=OSError("claim failure")):
@@ -373,6 +623,26 @@ class BootstrapTests(unittest.TestCase):
                          "completed")
         self.assertEqual(self.database.read_bytes(), original)
         self.assertEqual(workspace_status(self.path, later)["state"], "ready")
+
+    def test_expired_retry_preserves_verified_commit_when_receipt_read_fails(self):
+        preview = self.preview()
+        self.assertEqual(self.confirm(preview)["status"], "completed")
+        original = self.database.read_bytes()
+        original_json = bootstrap._json
+        reads = []
+
+        def undecodable_second_receipt(path):
+            if Path(path).name == bootstrap.RECEIPT:
+                reads.append(path)
+                if len(reads) == 2:
+                    raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic invalid byte")
+            return original_json(path)
+
+        with patch.object(bootstrap, "_json", side_effect=undecodable_second_receipt):
+            result = bootstrap.confirm_setup(self.path, preview, NOW + timedelta(hours=1))
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["committed"])
+        self.assertEqual(self.database.read_bytes(), original)
 
     def test_oversized_unexpected_and_symlink_paths_block(self):
         self.path.mkdir()

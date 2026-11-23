@@ -80,7 +80,16 @@ python -m investment monitor-init --database .\investment.sqlite3 --monitoring-p
 New caches include a local random instance identifier and monotonic revision
 counter. Purging expired attempts does not reset that counter. Older cache files
 remain readable, but cannot be bound to the review inbox until a new cache is
-explicitly initialized.
+explicitly initialized. Initialization uses a temporary same-directory staging
+location and no-overwrite hard-link publication; the filesystem must support
+hard links. If it reports a committed or uncertain outcome, preserve every
+reported cache path and the staging directory and its sidecars. A cleanup
+failure may leave only the published hard link; inspect the reported paths.
+Cleanup compares file identities before unlinking, but those operations are not
+atomic. Protect the cache parent and staging directory from concurrent local
+writers; these checks do not defend against an actor who can replace entries
+between the check and deletion, and a substituted file could be deleted.
+Windows ACL protection has not been validated.
 
 The cache is bound to the exact monitoring profile hash. Changing the profile
 requires selecting a newly initialized cache; old evidence is not silently
@@ -199,15 +208,26 @@ a trade.
 Manual observation entry is available only with an explicitly initialized,
 identified `--monitoring-cache`. The operator supplies normalized local fields
 and explicit mapping evidence. The dashboard validates and previews a GBP
-reconciliation against a pinned journal revision before a separate confirmation.
-Confirmation appends the attempt only to the monitoring cache and requires the
-same journal/profile/cache instance and cache revision. It makes no provider or
-network call and never writes to the investment journal. Native-currency or
-unknown-clock observations remain unreconciled; no FX, missing values or
-accounting changes are inferred. The journal and cache are separate stores and
-cannot be committed atomically; each action checks its pinned source revisions
-immediately before writing, while a concurrent external journal update can
-overlap that check. Abandoning a preview stages nothing.
+reconciliation against a pinned journal revision and evidence-chain head before
+a separate confirmation. Confirmation appends the attempt only to the monitoring
+cache and requires the same journal evidence, monitoring profile and cache
+instance. A new attempt is bound to the cache predecessor and exact next
+sequence selected at preview. It makes no provider or network call and never
+writes to the investment journal. Native-currency or unknown-clock observations
+remain unreconciled; no FX, missing values or accounting changes are inferred.
+The journal and cache are separate stores and cannot be committed atomically;
+each action checks its pinned source revisions immediately before writing,
+while a concurrent external journal update can overlap that check. Abandoning a
+preview stages nothing.
+An attempt already staged at preview, or the exact preview-bound append, can be
+confirmed again against the same bindings even if the cache has since advanced.
+An identical attempt appended after an intervening write is not adopted, and a
+divergent predecessor or purged attempt invalidates the old preview. The
+predecessor binding covers retained cache evidence, not purged history or
+authenticity. A post-commit cleanup failure reports the saved revision; an
+unavailable commit result is explicitly uncertain. An exact retry is possible
+only while the bound preview remains available. If its receipt or preview is
+unavailable, inspect the cache rather than assuming nothing was saved.
 
 Provider units are not automatically journal product IDs. GBP observations
 reuse the existing conservative comparison rules: missing source clocks,

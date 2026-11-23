@@ -363,7 +363,10 @@ null. There are 1-50 accounts and at most 100 products:
 - Product: `id`, `name`, `sleeve` (`equity` or `bond`), `currency`,
   `quantity_increment`, `minimum_notional_gbp`.
 - Monetary/quantity inputs use bounded exact nonnegative decimal strings,
-  never binary floats. Clocks are explicit aware UTC evidence.
+  never binary floats. Required evidence clocks are explicit and aware; null
+  clocks, datetime subclasses and nonzero sub-microsecond digits are rejected
+  rather than defaulted or truncated. Zero-only padding beyond microseconds
+  remains readable. Existing invalid evidence is not rewritten or migrated.
 
 Opening records contain `id`, `type: "opening"`, `timestamp`, `available_at`,
 `evidence`, `balances_gbp` for all included accounts, and `holdings`.

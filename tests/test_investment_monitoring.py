@@ -2,11 +2,16 @@
 
 from copy import deepcopy
 from datetime import timedelta
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from investment import InvestmentError
+from investment import store
+from investment.__main__ import main
 from investment.core import iso
 from investment.monitoring import project
 from investment.store import canonical, digest, import_events, initialize, read
@@ -64,6 +69,36 @@ class MonitoringTests(unittest.TestCase):
         self.assertTrue(any(f["rule"] == "lisa_evidence" for f in self.report()["findings"]))
         self.assertFalse(report["accounting_writes"])
         self.assertFalse(report["affects_trading"])
+
+    def test_monitor_cli_projects_the_pinned_revision_when_a_later_commit_arrives(self):
+        from test_investment_opening import cash_observation
+
+        profile_path = self.database.with_name("monitoring.json")
+        profile_path.write_text(json.dumps(self.profile), encoding="utf-8")
+        original_read = store.read_with_clock
+        later = NOW + timedelta(seconds=1)
+        calls = []
+
+        def append_after_read(*args, **kwargs):
+            ledger, observed = original_read(*args, **kwargs)
+            calls.append(ledger.revision)
+            if len(calls) == 1:
+                import_events(self.database, [cash_observation(
+                    later, balance="1000", identifier="later-observation")], later)
+            return ledger, observed
+
+        output, error = io.StringIO(), io.StringIO()
+        with patch("investment.store.read_with_clock", side_effect=append_after_read), \
+                patch("investment.monitoring.read_with_clock", side_effect=append_after_read):
+            result = main([
+                "monitor", "--database", str(self.database),
+                "--monitoring-profile", str(profile_path),
+            ], stdout=output, stderr=error, now=NOW)
+        self.assertEqual(result, 0, error.getvalue())
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["portfolio_revision"], 3)
+        self.assertEqual(report["generated_at"], iso(NOW))
+        self.assertEqual(read(self.database, later).revision, 4)
 
     def test_excluded_savings_do_not_change_holdings_ratio_and_unassigned_blocks(self):
         first = self.report()["dynamic_pct"]

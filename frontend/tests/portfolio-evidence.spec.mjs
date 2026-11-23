@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.mjs";
 
 test("current account differences take priority over review settings", async ({ page }) => {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();

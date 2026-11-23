@@ -83,15 +83,18 @@ The [offline runner](../scripts/offline_tests.py) disables dotenv/proxy secret
 loading, scrubs known credential settings including `GOLDSCOUT_ETORO_*` and
 `TRADER_AI_*`, and blocks standard Python
 socket connection/send/listen and DNS entry points, including UDP. A zero-test
-pattern fails. Tests must still use temporary direct paths; the runner is not
-an OS sandbox. Do not bypass it with subprocesses or native network clients.
+pattern fails. During the run, default workspace resolution is anchored to a
+temporary synthetic checkout and restored afterward. Explicit paths must still
+be temporary; the runner is not an OS sandbox. Do not bypass it with
+subprocesses or native network clients.
 
 The full regression manifest is [requirements-tested.txt](../requirements-tested.txt);
 installations need network, tests do not. Scientific dependencies remain only
 for explicit calendar readiness and precision regression fixtures, not a trading
 runtime. [CI](../.github/workflows/offline-validation.yml) installs the snapshot,
 validates customization, tests the PowerShell guard and runs offline regression
-on Windows/Python 3.11.9 with no broker secrets or persisted checkout credentials.
+on Windows/Python 3.11.9 and 3.10 with no broker secrets or persisted checkout
+credentials. The 3.10 scientific dependencies use compatible pinned versions.
 Its socket guard is not OS egress isolation. Untrusted code requires a
 credential-free sandbox with outbound egress disabled.
 
@@ -110,6 +113,11 @@ credential-free sandbox with outbound egress disabled.
 
 These are starting points, not exhaustive coverage; use existing test owners.
 Frontend work also requires applicable browser checks and a current asset build.
+The Node 24 unit suite is `npm --prefix frontend run test:unit`; the separate
+browser suite is `npm --prefix frontend run test:browser`. The latter requires
+a built frontend and explicitly starts its own synthetic loopback server on an
+OS-selected port; it does not reuse an existing dashboard or accept a custom
+dashboard URL. Browser execution still needs task-specific approval.
 Offline success certifies neither external-provider semantics nor performance.
 
 ## Permissions and hooks
@@ -126,9 +134,9 @@ pattern), customization validator, PowerShell guard tests, frontend build,
 and `python -m investment demo` or `python -m dashboard --demo`. Synthetic
 dashboard previews may add `--api-only`, `--intelligence-demo` and a port.
 Shell composition, arbitrary Python snippets and unrecognized options are not
-covered by this permission. Browser tests still need approval and an explicitly
-verified synthetic server: their configured/default URL could otherwise point
-at operational data. Hook approvals do not override editor/host policy.
+covered by this permission. Browser tests still need approval; their dedicated
+server is synthetic and separate from any operational workspace. Hook approvals
+do not override editor/host policy.
 
 Approve only the specific safe command. No broker/authenticated calls,
 operational maintenance, secret access or guard-policy changes without separate

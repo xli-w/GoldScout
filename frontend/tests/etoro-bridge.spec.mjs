@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.mjs";
 
 const position = (id, units = "2") => ({
   instrument_id: id, asset_currency: "USD", netUnits: units, netContracts: units,

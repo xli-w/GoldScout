@@ -688,8 +688,7 @@ class MonitoringRuntimeTests(unittest.TestCase):
                      "--account-id", "broker", "--allow-network", "--watch"]
         output, error = StringIO(), StringIO()
         before = self.database.read_bytes()
-        with patch("investment.__main__.clock", side_effect=lambda *args: current[0]), \
-             patch("investment.store.clock", side_effect=lambda *args: current[0]), \
+        with patch("investment.store.clock", side_effect=lambda *args: current[0]), \
              patch("investment.monitoring_runtime.clock", side_effect=lambda *args: current[0]), \
              patch("investment.etoro.EToroTransport", return_value=transport), \
              patch("investment.__main__.threading.Event", return_value=Mock(wait=wait)):

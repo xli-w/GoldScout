@@ -78,6 +78,42 @@ class OfflineEnvironmentTests(unittest.TestCase):
         with offline_environment():
             self._assert_isolation_and_restoration()
 
+    def test_default_workspace_selection_is_temporary_and_restored(self):
+        from contextlib import redirect_stdout
+        import io
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from dashboard import workspace
+        from dashboard.__main__ import main as dashboard_main
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory) / "outer-checkout"
+            (checkout / ".git").mkdir(parents=True)
+            (checkout / "investment").mkdir()
+            (checkout / "pyproject.toml").touch()
+            module_file = str(checkout / "dashboard" / "workspace.py")
+            with patch.object(workspace, "__file__", module_file):
+                with offline_environment() as isolated:
+                    selected = isolated / "checkout" / "local-investment"
+                    self.assertEqual(workspace.resolve_workspace(), selected)
+                    self.assertEqual(workspace.workspace_status(selected)["state"], "empty")
+                    server = Mock()
+                    factory = Mock(return_value="synthetic-app")
+                    with patch.dict(sys.modules, {"uvicorn": SimpleNamespace(run=server),
+                                                 "dashboard.app": SimpleNamespace(create_app=factory)}):
+                        with redirect_stdout(io.StringIO()):
+                            dashboard_main(["--api-only"])
+                    self.assertEqual(factory.call_args.kwargs["setup_workspace"], selected)
+                    self.assertEqual(factory.call_args.kwargs["investment_database"],
+                                     selected / "investment.sqlite3")
+                    server.assert_called_once()
+                    self.assertFalse(selected.exists())
+                self.assertEqual(workspace.__file__, module_file)
+                self.assertEqual(workspace.resolve_workspace(), checkout / "local-investment")
+            self.assertFalse(isolated.exists())
+
     def test_proxy_credentials_are_isolated_and_restored(self):
         import proxy_config
 

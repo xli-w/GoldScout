@@ -1,5 +1,6 @@
 """Synthetic v2 role accounting checks with temporary stores."""
 
+import sqlite3
 import tempfile
 import unittest
 from datetime import timedelta
@@ -8,9 +9,9 @@ from unittest.mock import patch
 
 from dashboard.app import create_app
 from fastapi.testclient import TestClient
-from investment import InvestmentError
+from investment import InvestmentError, store
 from investment.service import snapshot
-from investment.store import import_events, initialize
+from investment.store import import_events, initialize, read
 from test_dashboard_api import MemoryEventLoop
 from test_investment_opening import NOW, correction, event, iso, opening, profile
 
@@ -99,7 +100,28 @@ class InvestmentRolesTests(unittest.TestCase):
         self.assertEqual(report["recorded_fee_events"][0]["role"], "dynamic")
         self.assertEqual(report["recorded_flow_events"][0]["role"], "dynamic")
         self.assertEqual(report["recorded_corrections"][0]["role"], "dynamic")
+        ledger = read(self.path, NOW)
+        self.assertEqual(ledger.role_cash[("bank", "dynamic")], 101)
+        self.assertEqual(ledger.role_cash[("broker", "dynamic")], 46)
+        self.assertEqual(ledger.role_holdings[("broker", "equity", "dynamic")], 1)
         self.assertEqual(snapshot(self.path, NOW), report)
+
+    def test_correction_that_breaks_downstream_role_cash_rolls_back(self):
+        contribution = event("role-funding", "contribution", NOW, "bank", amount_gbp="50")
+        contribution["role"] = "dynamic"
+        transfer = event("role-transfer", "transfer", NOW, "bank", amount_gbp="130",
+                         destination_account_id="broker")
+        transfer["role"] = "dynamic"
+        import_events(self.path, [
+            assignment("dynamic-bank", "dynamic", "bank", "100"), contribution, transfer,
+        ], NOW)
+        before = snapshot(self.path, NOW)
+        original = self.path.read_bytes()
+        later = NOW + timedelta(days=1)
+        with self.assertRaisesRegex(InvestmentError, "Insufficient role cash"):
+            import_events(self.path, [correction(contribution, "10", later)], later)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(snapshot(self.path, NOW), before)
 
     def test_later_attribution_does_not_backdate_role_values(self):
         later = NOW + timedelta(hours=1)
@@ -181,9 +203,27 @@ class InvestmentRolesTests(unittest.TestCase):
     def test_assignment_commit_failure_and_retry_keep_journal_consistent(self):
         attribution = assignment("once", "core", "bank", "100")
         before = snapshot(self.path, NOW)
-        with patch("investment.store._append_events", side_effect=InvestmentError("synthetic failure")):
+        actual_connect = store._connect
+        actions = []
+
+        def deny_commit(database, readonly):
+            connection = actual_connect(database, readonly)
+
+            def authorize(action, arg1, arg2, database_name, trigger):
+                if action == sqlite3.SQLITE_INSERT and arg1 == "events":
+                    actions.append("insert")
+                if action == sqlite3.SQLITE_TRANSACTION and arg1 == "COMMIT":
+                    actions.append("commit-denied")
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
+            return connection
+
+        with patch("investment.store._connect", side_effect=deny_commit):
             with self.assertRaises(InvestmentError):
                 import_events(self.path, [attribution], NOW)
+        self.assertEqual(actions, ["insert", "commit-denied"])
         self.assertEqual(snapshot(self.path, NOW), before)
         import_events(self.path, [attribution], NOW)
         after = snapshot(self.path, NOW)

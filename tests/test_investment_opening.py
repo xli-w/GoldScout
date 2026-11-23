@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from investment import InvestmentError
-from investment import store
+from investment import core, store
 from investment.core import iso
 from investment.service import snapshot
 from investment.store import import_events, initialize, read
@@ -128,6 +128,66 @@ def event(identifier, kind, timestamp, account, **values):
                 **values)
 
 
+def funded_scope(timestamp):
+    return {
+        "id": "scope-addition", "type": "scope_addition",
+        "timestamp": iso(timestamp), "available_at": iso(timestamp),
+        "evidence": "synthetic common-clock statements",
+        "account": {
+            "id": "scope", "name": "Additional broker", "kind": "broker",
+            "binding": "scope-test", "currency": "GBP",
+        },
+        "balances_gbp": {"bank": "1000", "broker": "100", "scope": "10"},
+        "holdings": [
+            {"account_id": "broker", "product_id": "equity", "quantity": "50",
+             "price_gbp": "10"},
+            {"account_id": "broker", "product_id": "bond", "quantity": "20",
+             "price_gbp": "20"},
+            {"account_id": "scope", "product_id": "equity", "quantity": "2",
+             "price_gbp": "5"},
+        ],
+    }
+
+
+class ConnectionCloseFailure:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def __enter__(self):
+        self.connection.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self.connection.__exit__(*args)
+
+    def close(self):
+        self.connection.close()
+        raise sqlite3.OperationalError("synthetic post-commit close failure")
+
+
+class TransactionExitFailure(ConnectionCloseFailure):
+    def __exit__(self, *args):
+        result = self.connection.__exit__(*args)
+        if args[0] is None:
+            raise sqlite3.OperationalError("synthetic transaction exit failure")
+        return result
+
+    def close(self):
+        self.connection.close()
+
+
+class CommitResultFailure(ConnectionCloseFailure):
+    def commit(self):
+        self.connection.commit()
+        raise sqlite3.OperationalError("synthetic lost commit result")
+
+    def close(self):
+        self.connection.close()
+
+
 class InvestmentOpeningTests(unittest.TestCase):
     def test_existing_opening_checkpoint_hash_is_unchanged(self):
         from investment.core import replay
@@ -189,6 +249,59 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.database = Path(self.temporary.name) / "investment.sqlite3"
 
+    def test_required_evidence_clocks_never_default_or_lose_precision(self):
+        fixed_clock = core.clock
+
+        def clock_without_implicit_time(value=None):
+            return NOW if value is None else fixed_clock(value)
+
+        invalid_clocks = (
+            None,
+            "2026-01-01T12:00:00.0000001Z",
+            "2026-01-01T12:00:00+00:00:00.0000001",
+        )
+        with patch("investment.core.clock", side_effect=clock_without_implicit_time):
+            for index, value in enumerate(invalid_clocks):
+                with self.subTest(field="created_at", value=value):
+                    spec = profile()
+                    spec["created_at"] = value
+                    database = Path(self.temporary.name) / f"invalid-profile-{index}.sqlite3"
+                    with self.assertRaises(InvestmentError):
+                        initialize(database, spec, NOW)
+                    self.assertFalse(database.exists())
+                for field in ("observed_at", "available_at"):
+                    with self.subTest(field=f"terms.{field}", value=value):
+                        spec = profile()
+                        spec["accounts"][0]["terms"] = savings_terms()
+                        spec["accounts"][0]["terms"][field] = value
+                        database = Path(self.temporary.name) / f"invalid-terms-{index}-{field}.sqlite3"
+                        with self.assertRaises(InvestmentError):
+                            initialize(database, spec, NOW)
+                        self.assertFalse(database.exists())
+                for field in ("timestamp", "available_at"):
+                    with self.subTest(field=f"opening.{field}", value=value):
+                        database = Path(self.temporary.name) / f"invalid-opening-{index}-{field}.sqlite3"
+                        initialize(database, profile(), NOW)
+                        before = database.read_bytes()
+                        initial = opening()
+                        initial[field] = value
+                        with self.assertRaises(InvestmentError):
+                            import_events(database, [initial], NOW + timedelta(microseconds=1))
+                        self.assertEqual(database.read_bytes(), before)
+
+    def test_exact_zero_padded_clocks_remain_readable_without_rewriting(self):
+        spec = profile()
+        spec["created_at"] = "2026-01-01T12:00:00.000000000Z"
+        initial = opening()
+        initial["timestamp"] = initial["available_at"] = "2026-01-01T12:00:00.0000000Z"
+        initialize(self.database, spec, NOW)
+        import_events(self.database, [initial], NOW)
+        before = self.database.read_bytes()
+        ledger = read(self.database, NOW)
+        self.assertEqual(ledger.ids["opening"]["timestamp"], initial["timestamp"])
+        self.assertEqual(ledger.baseline_at, NOW)
+        self.assertEqual(self.database.read_bytes(), before)
+
     def test_revision_bound_preview_and_commit_are_retry_safe(self):
         initialize(self.database, profile(), NOW)
         original = self.database.read_bytes()
@@ -203,6 +316,40 @@ class InvestmentOpeningTests(unittest.TestCase):
         import_events(self.database, [later], NOW)
         self.assertEqual(store.commit_record(self.database, preview, NOW), receipt)
         self.assertEqual(read(self.database, NOW).revision, 2)
+
+    def test_profile_changing_commits_are_retryable_against_their_original_predecessor(self):
+        changed_at = NOW + timedelta(hours=1)
+        rename = {
+            "id": "rename-product", "type": "profile_change",
+            "timestamp": iso(changed_at), "available_at": iso(changed_at),
+            "evidence": "synthetic product documentation", "action": "rename",
+            "target": "product", "entity_id": "equity", "name": "Renamed equity",
+        }
+        later = changed_at + timedelta(hours=1)
+        later_rename = {
+            "id": "rename-bank", "type": "profile_change",
+            "timestamp": iso(later), "available_at": iso(later),
+            "evidence": "synthetic account documentation", "action": "rename",
+            "target": "account", "entity_id": "bank", "name": "Renamed bank",
+        }
+        for value in (rename, funded_scope(changed_at)):
+            with self.subTest(kind=value["type"]):
+                database = self.database.with_name(value["id"] + ".sqlite3")
+                initialize(database, profile(), NOW)
+                import_events(database, [opening()], NOW)
+                preview = store.preview_record(database, value, changed_at)
+                receipt = store.commit_record(database, preview, changed_at)
+                self.assertEqual(store.commit_record(database, preview, changed_at), receipt)
+                import_events(database, [later_rename], later)
+                before = database.read_bytes()
+                self.assertEqual(store.commit_record(database, preview, later), receipt)
+                for field in ("profile_hash", "previous_hash"):
+                    changed = deepcopy(preview)
+                    changed[field] = "0" * 64
+                    with self.subTest(field=field), self.assertRaises(InvestmentError):
+                        store.commit_record(database, changed, later)
+                self.assertEqual(database.read_bytes(), before)
+                self.assertEqual(read(database, later).revision, 3)
 
     def test_profile_amendments_are_append_only_and_survive_replay(self):
         initialize(self.database, profile(), NOW)
@@ -236,25 +383,7 @@ class InvestmentOpeningTests(unittest.TestCase):
     def test_funded_account_scope_addition_is_unitization_neutral(self):
         initialize(self.database, profile(), NOW)
         scope_at = NOW + timedelta(hours=1)
-        account = {
-            "id": "scope", "name": "Additional broker", "kind": "broker",
-            "binding": "scope-test", "currency": "GBP",
-        }
-        scope_addition = {
-            "id": "scope-addition", "type": "scope_addition",
-            "timestamp": iso(scope_at), "available_at": iso(scope_at),
-            "evidence": "synthetic common-clock statements", "account": account,
-            "balances_gbp": {"bank": "1000", "broker": "100", "scope": "10"},
-            "holdings": [
-                {"account_id": "broker", "product_id": "equity", "quantity": "50",
-                 "price_gbp": "10"},
-                {"account_id": "broker", "product_id": "bond", "quantity": "20",
-                 "price_gbp": "20"},
-                {"account_id": "scope", "product_id": "equity", "quantity": "2",
-                 "price_gbp": "5"},
-            ],
-        }
-        import_events(self.database, [opening(), scope_addition], scope_at)
+        import_events(self.database, [opening(), funded_scope(scope_at)], scope_at)
 
         result = snapshot(self.database, scope_at)
         ledger = read(self.database, scope_at)
@@ -263,6 +392,53 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertEqual(ledger.unit_price, 1)
         self.assertEqual(ledger.scope_additions, 20)
         self.assertEqual(result["since_baseline_gain_gbp"], "0")
+
+    def test_funded_scope_requires_complete_matching_contemporaneous_evidence(self):
+        initialize(self.database, profile(), NOW)
+        import_events(self.database, [opening()], NOW)
+        original = self.database.read_bytes()
+        scope_at = NOW + timedelta(hours=1)
+        for mutation in ("missing_balance", "changed_balance", "missing_holding",
+                         "missing_price", "late_availability"):
+            candidate = funded_scope(scope_at)
+            if mutation == "missing_balance":
+                del candidate["balances_gbp"]["broker"]
+            elif mutation == "changed_balance":
+                candidate["balances_gbp"]["bank"] = "999"
+            elif mutation == "missing_holding":
+                candidate["holdings"].pop(1)
+            elif mutation == "missing_price":
+                candidate["holdings"][0]["price_gbp"] = None
+            else:
+                candidate["available_at"] = iso(scope_at + timedelta(seconds=1))
+            with self.subTest(mutation=mutation), self.assertRaises(InvestmentError):
+                import_events(self.database, [candidate], scope_at + timedelta(seconds=1))
+            self.assertEqual(self.database.read_bytes(), original)
+            self.assertEqual(read(self.database, scope_at).revision, 1)
+
+        unpriced = Path(self.temporary.name) / "unpriced.sqlite3"
+        initial = opening()
+        initial["holdings"][0]["price_gbp"] = None
+        initialize(unpriced, profile(), NOW)
+        import_events(unpriced, [initial], NOW)
+        original = unpriced.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "valid performance baseline"):
+            import_events(unpriced, [funded_scope(scope_at)], scope_at)
+        self.assertEqual(unpriced.read_bytes(), original)
+
+    def test_funded_scope_keeps_new_cash_and_holdings_unassigned(self):
+        initialize(self.database, profile(), NOW)
+        assignment = {
+            "id": "core-bank", "type": "role_assignment", "timestamp": iso(NOW),
+            "available_at": iso(NOW), "evidence": "synthetic role evidence",
+            "account_id": "bank", "product_id": None, "role": "core", "amount": "400",
+        }
+        scope_at = NOW + timedelta(hours=1)
+        import_events(self.database, [opening(), assignment, funded_scope(scope_at)], scope_at)
+        ledger = read(self.database, scope_at)
+        self.assertEqual(ledger.role_cash[("bank", "core")], 400)
+        self.assertEqual(ledger.role_cash[("scope", "unassigned")], 10)
+        self.assertEqual(ledger.role_holdings[("scope", "equity", "unassigned")], 2)
 
     def test_retirement_requires_zero_exposure_and_preserves_identity(self):
         initialize(self.database, profile(), NOW)
@@ -381,6 +557,161 @@ class InvestmentOpeningTests(unittest.TestCase):
         self.assertIsNone(result["twr_pct"])
         self.assertEqual(result["recorded_corrections"][0]["replaced_type"], "interest")
 
+    def test_correction_cannot_precede_the_original_evidence_availability(self):
+        initialize(self.database, profile(), NOW)
+        late = NOW + timedelta(days=2)
+        contribution = event("late-funding", "contribution", NOW + timedelta(hours=1),
+                             "bank", amount_gbp="100")
+        contribution["available_at"] = iso(late)
+        import_events(self.database, [
+            dict(opening(), holdings=[]), contribution,
+        ], late)
+        corrected_at = NOW + timedelta(days=1)
+        correction_event = historical_correction(
+            contribution, {"amount_gbp": "80"}, corrected_at)
+        confirmation_at = corrected_at + timedelta(hours=1)
+        confirmation = {
+            "id": "early-confirmation", "type": "cash_confirmation",
+            "timestamp": iso(confirmation_at), "available_at": iso(confirmation_at),
+            "evidence": "synthetic confirmation",
+            "balances_gbp": {"bank": "1080", "broker": "100"},
+        }
+        before = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "Correction.*availability"):
+            import_events(self.database, [correction_event, confirmation], late)
+        self.assertEqual(self.database.read_bytes(), before)
+        self.assertEqual(read(self.database, late).revision, 2)
+
+        payload = store.canonical(correction_event)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            previous = connection.execute(
+                "SELECT hash FROM events WHERE revision=2").fetchone()[0]
+            connection.execute(
+                "INSERT INTO events VALUES (?,?,?,?,?)",
+                (3, correction_event["id"], payload, previous, store.digest(previous + payload)))
+            connection.execute("INSERT INTO commits VALUES (?,?)", (3, "0" * 64))
+        invalid = self.database.read_bytes()
+        with self.assertRaisesRegex(InvestmentError, "Correction.*availability"):
+            read(self.database, late)
+        self.assertEqual(self.database.read_bytes(), invalid)
+
+    def test_later_correction_preserves_journal_order_of_recorded_flows(self):
+        initialize(self.database, profile(), NOW)
+        first = event("first", "contribution", NOW + timedelta(seconds=1),
+                      "bank", amount_gbp="1")
+        second = event("second", "contribution", NOW + timedelta(seconds=2),
+                       "bank", amount_gbp="1")
+        first_correction = historical_correction(
+            first, {"amount_gbp": "2"}, NOW + timedelta(seconds=3))
+        flows = [
+            event(f"flow-{index:03}", "contribution",
+                  NOW + timedelta(seconds=4 + index), "bank", amount_gbp="1")
+            for index in range(101)
+        ]
+        second_at = NOW + timedelta(seconds=105)
+        import_events(self.database, [
+            dict(opening(), holdings=[]), first, second, first_correction, *flows,
+        ], second_at)
+        # Pin the prior schema-v2 checkpoint despite the reporting-order fix.
+        self.assertEqual(
+            store.state_digest(read(self.database, second_at)),
+            "0bb6a8633e05f58cfaeec24e6f6b7f8ba90524ecd5893dc9e64799d7178aa19e")
+        before = snapshot(self.database, second_at)["recorded_flow_events"]
+        self.assertEqual(before[0]["id"], "second")
+        self.assertEqual(before[1]["id"], "replacement-first")
+        second_correction = historical_correction(second, {"amount_gbp": "3"}, second_at)
+        import_events(self.database, [second_correction], second_at)
+        self.assertEqual(
+            store.state_digest(read(self.database, second_at)),
+            "ca105ca877a93b35164e18f266824c6a2530c4ad4435dc0d36920d98492228c9")
+        identifiers = [
+            value["id"] for value in snapshot(self.database, second_at)["recorded_flow_events"]
+        ]
+        self.assertEqual(
+            identifiers, ["replacement-first", *[value["id"] for value in flows],
+                          "replacement-second"])
+        self.assertEqual(identifiers[-100:],
+                         [*[value["id"] for value in flows[-99:]], "replacement-second"])
+
+    def test_correction_replacements_cannot_be_imported_as_source_events(self):
+        original = event("funding", "contribution", NOW + timedelta(seconds=1),
+                         "bank", amount_gbp="100")
+        correction_at = NOW + timedelta(seconds=2)
+        correction_event = historical_correction(original, {"amount_gbp": "80"}, correction_at)
+        after = correction_at + timedelta(seconds=1)
+        extra = event("extra", "interest", after, "bank", amount_gbp="1")
+        replacement = correction_event["replacement_event"]
+        for index, batch in enumerate(([replacement, extra], [replacement], [extra, replacement])):
+            database = self.database.with_name(f"existing-correction-{index}.sqlite3")
+            initialize(database, profile(), NOW)
+            import_events(database, [opening(), original, correction_event], correction_at)
+            before = database.read_bytes()
+            with self.subTest(ids=[value["id"] for value in batch]):
+                with self.assertRaises(InvestmentError):
+                    import_events(database, batch, after)
+                self.assertEqual(database.read_bytes(), before)
+                self.assertEqual(read(database, after).revision, 3)
+
+        for index, batch in enumerate((
+                [correction_event, replacement, extra],
+                [replacement, correction_event, extra])):
+            database = self.database.with_name(f"new-correction-{index}.sqlite3")
+            initialize(database, profile(), NOW)
+            import_events(database, [opening(), original], correction_at)
+            before = database.read_bytes()
+            with self.subTest(ids=[value["id"] for value in batch]):
+                with self.assertRaises(InvestmentError):
+                    import_events(database, batch, after)
+                self.assertEqual(database.read_bytes(), before)
+                self.assertEqual(read(database, after).revision, 2)
+
+        ledger = core.replay(profile(), [opening(), original, correction_event], after)
+        duplicate = core.replay(
+            profile(), [opening(), opening(), original, correction_event], after)
+        self.assertEqual(duplicate.revision, ledger.revision)
+        self.assertEqual(store.state_digest(duplicate), store.state_digest(ledger))
+        with self.assertRaises(InvestmentError):
+            core.replay(profile(), [opening(), original, correction_event, replacement, extra], after)
+
+    def test_replacement_id_cannot_overwrite_an_earlier_correction(self):
+        initialize(self.database, profile(), NOW)
+        original = event("interest", "interest", NOW + timedelta(seconds=1),
+                         "bank", amount_gbp="5")
+        first_at = NOW + timedelta(seconds=2)
+        first = historical_correction(original, {"amount_gbp": "4"}, first_at)
+        import_events(self.database, [opening(), original, first], first_at)
+        next_at = NOW + timedelta(seconds=3)
+        second = historical_correction(first["replacement_event"], {"amount_gbp": "3"}, next_at)
+        second["replacement_event"]["id"] = first["id"]
+        before = self.database.read_bytes()
+        with self.assertRaises(InvestmentError):
+            import_events(self.database, [second], next_at)
+        self.assertEqual(self.database.read_bytes(), before)
+        ledger = read(self.database, next_at)
+        self.assertEqual(ledger.revision, 3)
+        self.assertEqual(ledger.ids[first["id"]], first)
+        self.assertEqual(ledger.cash["bank"], 1004)
+
+    def test_correction_clocks_compare_instants_not_timestamp_spelling(self):
+        initialize(self.database, profile(), NOW)
+        original = event("interest", "interest", NOW, "bank", amount_gbp="5")
+        import_events(self.database, [opening(), original], NOW)
+        correction_at = NOW + timedelta(microseconds=500000)
+        replacement = historical_correction(original, {"amount_gbp": "4"}, correction_at)
+        invalid = deepcopy(replacement)
+        invalid["replacement_event"]["timestamp"] = iso(NOW + timedelta(microseconds=1))
+        before = self.database.read_bytes()
+        with self.assertRaises(InvestmentError):
+            import_events(self.database, [invalid], correction_at)
+        self.assertEqual(self.database.read_bytes(), before)
+        replacement["replacement_event"]["timestamp"] = original["timestamp"].replace("Z", "+00:00")
+        replacement["replacement_event"]["available_at"] = iso(correction_at).replace("Z", "+00:00")
+        import_events(self.database, [replacement], correction_at)
+        ledger = read(self.database, correction_at)
+        self.assertEqual(ledger.cash["bank"], 1004)
+        self.assertEqual(ledger.ids[original["id"]], original)
+        self.assertEqual(ledger.ids[replacement["id"]], replacement)
+
     def test_historical_correction_is_rejected_when_downstream_replay_breaks_cash(self):
         initialize(self.database, profile(), NOW)
         opening_event = dict(opening(), balances_gbp={"bank": "1000", "broker": "100"},
@@ -398,6 +729,23 @@ class InvestmentOpeningTests(unittest.TestCase):
         with self.assertRaisesRegex(InvestmentError, "cash"):
             import_events(self.database, [correction_event], correction_at)
         self.assertEqual(read(self.database, correction_at).cash["broker"], 50)
+
+    def test_historical_correction_is_rejected_when_downstream_sale_would_be_short(self):
+        initialize(self.database, profile(), NOW)
+        buy_at, sell_at, correction_at = (NOW + timedelta(hours=n) for n in (1, 2, 3))
+        purchase = event("purchase", "buy", buy_at, "broker", product_id="equity",
+                         quantity="100", price_gbp="1", fee_gbp="0")
+        sale = event("sale", "sell", sell_at, "broker", product_id="equity",
+                     quantity="130", price_gbp="1", fee_gbp="0")
+        import_events(self.database, [opening(), purchase, sale], sell_at)
+        original = self.database.read_bytes()
+        correction_event = historical_correction(purchase, {"quantity": "50"}, correction_at)
+        with self.assertRaisesRegex(InvestmentError, "short position"):
+            import_events(self.database, [correction_event], correction_at)
+        self.assertEqual(self.database.read_bytes(), original)
+        ledger = read(self.database, correction_at)
+        self.assertEqual(ledger.revision, 3)
+        self.assertEqual(ledger.holdings[("broker", "equity")], 20)
 
     def test_historical_cash_correction_can_replay_earlier_amounts_but_not_observations(self):
         initialize(self.database, profile(), NOW)
@@ -466,11 +814,119 @@ class InvestmentOpeningTests(unittest.TestCase):
             return connection
 
         with patch.object(store, "_connect", side_effect=deny_commit):
-            with self.assertRaisesRegex(InvestmentError, "rolled back"):
+            with self.assertRaisesRegex(InvestmentError, "outcome uncertain"):
                 store.commit_record(self.database, preview, NOW)
         self.assertEqual(denied, [True])
         self.assertEqual(read(self.database, NOW).revision, 0)
         self.assertEqual(store.commit_record(self.database, preview, NOW)["revision"], 1)
+
+    def test_post_commit_close_failure_preserves_initialized_journal(self):
+        connect = sqlite3.connect
+        with patch.object(store.sqlite3, "connect",
+                          side_effect=lambda *args, **kwargs: ConnectionCloseFailure(
+                              connect(*args, **kwargs))):
+            with self.assertRaisesRegex(InvestmentError, "initialized at revision 0"):
+                initialize(self.database, profile(), NOW)
+        self.assertTrue(self.database.exists())
+        self.assertEqual(read(self.database, NOW).revision, 0)
+
+    def test_post_commit_close_failures_report_revision_and_allow_exact_retries(self):
+        initialize(self.database, profile(), NOW)
+        connect = store._connect
+
+        def fail_close(database, readonly):
+            connection = connect(database, readonly)
+            return connection if readonly else ConnectionCloseFailure(connection)
+
+        with patch.object(store, "_connect", side_effect=fail_close):
+            with self.assertRaisesRegex(InvestmentError, "import completed at revision 1"):
+                import_events(self.database, [opening()], NOW)
+        self.assertEqual(read(self.database, NOW).revision, 1)
+        self.assertEqual(import_events(self.database, [opening()], NOW), 1)
+
+        update = event("interest-after-close", "interest", NOW, "bank", amount_gbp="1")
+        preview = store.preview_record(self.database, update, NOW)
+        with patch.object(store, "_connect", side_effect=fail_close):
+            with self.assertRaisesRegex(InvestmentError, "record committed at revision 2"):
+                store.commit_record(self.database, preview, NOW)
+        self.assertEqual(read(self.database, NOW).revision, 2)
+        self.assertEqual(store.commit_record(self.database, preview, NOW),
+                         {"id": update["id"], "revision": 2})
+
+    def test_transaction_exit_failure_after_known_commit_preserves_evidence(self):
+        connect = sqlite3.connect
+        with patch.object(store.sqlite3, "connect",
+                          side_effect=lambda *args, **kwargs: TransactionExitFailure(
+                              connect(*args, **kwargs))):
+            with self.assertRaisesRegex(InvestmentError, "initialized at revision 0"):
+                initialize(self.database, profile(), NOW)
+        self.assertEqual(read(self.database, NOW).revision, 0)
+        store_connect = store._connect
+
+        def fail_exit(database, readonly):
+            connection = store_connect(database, readonly)
+            return connection if readonly else TransactionExitFailure(connection)
+
+        with patch.object(store, "_connect", side_effect=fail_exit):
+            with self.assertRaisesRegex(InvestmentError, "import completed at revision 1"):
+                import_events(self.database, [opening()], NOW)
+        self.assertEqual(read(self.database, NOW).revision, 1)
+        self.assertEqual(import_events(self.database, [opening()], NOW), 1)
+
+    def test_lost_commit_result_preserves_evidence_and_never_claims_rollback(self):
+        connect = sqlite3.connect
+        with patch.object(store.sqlite3, "connect",
+                          side_effect=lambda *args, **kwargs: CommitResultFailure(
+                              connect(*args, **kwargs))):
+            with self.assertRaises(InvestmentError) as failed_init:
+                initialize(self.database, profile(), NOW)
+        self.assertNotIn("rolled back", str(failed_init.exception))
+        self.assertEqual(read(self.database, NOW).revision, 0)
+        store_connect = store._connect
+
+        def lose_result(database, readonly):
+            connection = store_connect(database, readonly)
+            return connection if readonly else CommitResultFailure(connection)
+
+        with patch.object(store, "_connect", side_effect=lose_result):
+            with self.assertRaises(InvestmentError) as failed_import:
+                import_events(self.database, [opening()], NOW)
+        self.assertNotIn("rolled back", str(failed_import.exception))
+        self.assertEqual(read(self.database, NOW).revision, 1)
+        self.assertEqual(import_events(self.database, [opening()], NOW), 1)
+
+    def test_connection_validation_failure_closes_the_handle(self):
+        initialize(self.database, profile(), NOW)
+        connect = sqlite3.connect
+        opened = []
+
+        class InvalidConnection:
+            def __init__(self, connection):
+                self.connection = connection
+                self.closed = False
+
+            def execute(self, *args, **kwargs):
+                raise sqlite3.OperationalError("synthetic PRAGMA failure")
+
+            def close(self):
+                self.connection.close()
+                self.closed = True
+
+        def invalid_connection(*args, **kwargs):
+            connection = InvalidConnection(connect(*args, **kwargs))
+            opened.append(connection)
+            return connection
+
+        with patch.object(store.sqlite3, "connect", side_effect=invalid_connection):
+            with self.assertRaisesRegex(InvestmentError, "Cannot open investment store"):
+                store._connect(self.database, False)
+        try:
+            self.assertEqual(len(opened), 1)
+            self.assertTrue(opened[0].closed)
+        finally:
+            for connection in opened:
+                if not connection.closed:
+                    connection.close()
 
     def test_database_size_limit_rolls_back_import_batch(self):
         initialize(self.database, profile(), NOW)
@@ -550,6 +1006,15 @@ class InvestmentOpeningTests(unittest.TestCase):
         import_events(self.database, [first, second], NOW)
         with self.assertRaisesRegex(InvestmentError, "revision"):
             store.commit_record(self.database, preview, NOW)
+        fabricated = deepcopy(preview)
+        fabricated["revision"] = 2
+        fabricated["event"] = second
+        fabricated["event_hash"] = store.digest(store.canonical(second))
+        with closing(sqlite3.connect(self.database)) as connection:
+            fabricated["previous_hash"] = connection.execute(
+                "SELECT hash FROM events WHERE revision=2").fetchone()[0]
+        with self.assertRaisesRegex(InvestmentError, "revision"):
+            store.commit_record(self.database, fabricated, NOW)
         self.assertEqual(read(self.database, NOW).revision, 3)
 
     def test_preview_binding_rejects_other_profile_and_invalid_event(self):

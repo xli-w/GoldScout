@@ -7,7 +7,10 @@ import threading
 
 from investment import InvestmentError
 from investment.core import CORRECTABLE_EVENTS, clock, fmt
-from investment.store import canonical, commit_record, digest, preview_record, read
+from investment.store import (
+    CommittedInvestmentError, UncertainInvestmentError, canonical, commit_record,
+    digest, preview_record, read,
+)
 
 
 class RecordingError(ValueError):
@@ -38,14 +41,14 @@ class RecordingSessions:
         stat = path.stat()
         return str(path), stat.st_dev, stat.st_ino
 
-    def _verify_store(self):
+    def _verify_store(self, uncertain_profile_hash=None):
         try:
             if self._path_identity() != self.path_identity:
                 raise RecordingError("investment_store_changed", 409)
             ledger = read(self.database, self.clock())
         except (InvestmentError, OSError) as exc:
             raise RecordingError("investment_store_unavailable", 503) from exc
-        if digest(canonical(ledger.spec)) != self.profile_hash:
+        if digest(canonical(ledger.spec)) not in (self.profile_hash, uncertain_profile_hash):
             raise RecordingError("investment_store_changed", 409)
         return ledger
 
@@ -202,20 +205,40 @@ class RecordingSessions:
                 return pending["receipt"]
             if pending["expires"] <= now:
                 raise RecordingError("preview_expired", 409)
-        ledger = self._verify_store()
+        uncertain_profile_hash = pending.get("uncertain_profile_hash")
+        ledger = self._verify_store(uncertain_profile_hash)
         try:
             value = pending["value"]["event"]
-            # Full replay validates the preview and commit; only derive the resulting profile here.
-            if value.get("type") == "scope_addition":
-                ledger.spec["accounts"].append(value["account"])
-            elif value.get("type") == "profile_change":
-                if value["action"] == "add_product":
-                    ledger.spec["products"].append(value["product"])
-                elif value["action"] == "rename":
-                    collection = ledger.spec["accounts" if value["target"] == "account" else "products"]
-                    next(item for item in collection if item["id"] == value["entity_id"])["name"] = value["name"]
-            profile_hash = digest(canonical(ledger.spec))
+            if uncertain_profile_hash is not None:
+                expected_hash = (uncertain_profile_hash if value["id"] in ledger.ids
+                                 else self.profile_hash)
+                if digest(canonical(ledger.spec)) != expected_hash:
+                    raise RecordingError("investment_store_changed", 409)
+                profile_hash = uncertain_profile_hash
+            else:
+                # Full replay validates the preview and commit; only derive the resulting profile here.
+                if value.get("type") == "scope_addition":
+                    ledger.spec["accounts"].append(value["account"])
+                elif value.get("type") == "profile_change":
+                    if value["action"] == "add_product":
+                        ledger.spec["products"].append(value["product"])
+                    elif value["action"] == "rename":
+                        collection = ledger.spec["accounts" if value["target"] == "account" else "products"]
+                        next(item for item in collection if item["id"] == value["entity_id"])["name"] = value["name"]
+                profile_hash = digest(canonical(ledger.spec))
             receipt = commit_record(self.database, pending["value"], now)
+        except CommittedInvestmentError as exc:
+            if (exc.event_id != value["id"] or
+                    exc.revision != pending["value"]["revision"] + 1):
+                raise RecordingError("confirmation_rejected", 409) from exc
+            with self.lock:
+                self.profile_hash = profile_hash
+                pending["receipt"] = {"id": exc.event_id, "revision": exc.revision}
+            raise RecordingError("investment_store_unavailable", 503) from exc
+        except UncertainInvestmentError as exc:
+            with self.lock:
+                pending["uncertain_profile_hash"] = profile_hash
+            raise RecordingError("investment_commit_uncertain", 503) from exc
         except InvestmentError as exc:
             if isinstance(exc.__cause__, (sqlite3.Error, OSError)):
                 raise RecordingError("investment_store_unavailable", 503) from exc

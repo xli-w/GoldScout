@@ -26,7 +26,6 @@ from research_data.dataset import (
 
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SUBMICROSECOND = re.compile(r"\.\d{6}(\d+)(?:Z|[+-]\d{2}:\d{2})$")
-UTC_OFFSET = re.compile(r"[+-](\d{2}):(\d{2})$")
 MAX_AUDIT_DAYS = 366 * 50
 MAX_EXAMPLES = 5
 MAX_FX_CLOCKS = 50000
@@ -167,9 +166,6 @@ def _readiness_timestamp(value, where):
         parsed = _timestamp(value, where)
     except OverflowError as exc:
         raise CampaignDatasetError(f"{where} is outside the supported UTC range") from exc
-    offset = UTC_OFFSET.search(value)
-    if offset and (int(offset.group(1)) > 23 or int(offset.group(2)) > 59):
-        raise CampaignDatasetError(f"{where} has an invalid UTC offset")
     fractional = SUBMICROSECOND.search(value)
     if fractional and fractional.group(1).strip("0"):
         raise CampaignDatasetError(f"{where}: non-zero sub-microsecond precision is unsupported")

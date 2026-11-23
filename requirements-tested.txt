@@ -1,10 +1,13 @@
 # Offline regression snapshot; exchange-calendars needs pandas/numpy.
 exchange-calendars==4.13.2
 korean-lunar-calendar==0.4.0
-numpy==2.4.6
-pandas==3.1.1
+numpy==2.2.6; python_version < "3.11"
+numpy==2.4.6; python_version >= "3.11"
+pandas==2.3.3; python_version < "3.11"
+pandas==3.1.1; python_version >= "3.11"
 pyluach==2.3.0
-python-dateutil==4.0.0
+python-dateutil==2.9.0.post0; python_version < "3.11"
+python-dateutil==4.0.0; python_version >= "3.11"
 python-dotenv==1.2.4
 PyYAML==6.0.1
 toolz==1.2.0

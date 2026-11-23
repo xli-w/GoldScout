@@ -326,8 +326,8 @@ def project(ledger, profile, now, cache=None, source_mode="recorded"):
     }
 
 
-def monitoring_snapshot(database, profile_path, cache_path=None, now=None):
-    ledger, now = read_with_clock(database, now)
+def monitoring_snapshot(database, profile_path, cache_path=None, now=None, *, clock_source=None):
+    ledger, now = read_with_clock(database, now, clock_source=clock_source)
     profile = load_json(profile_path)
     validate_profile(profile, ledger, now)
     cache = None

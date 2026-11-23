@@ -12,6 +12,10 @@ jobs:
   offline:
     runs-on: windows-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11.9"]
     env:
       PYTHON_DOTENV_DISABLED: "1"
       ALPACA_API_KEY: ""
@@ -25,19 +29,52 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11.9"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-tested.txt
       - name: Install tested dependencies
         run: python -m pip install -r requirements-tested.txt
       - name: Validate AI customization
+        if: matrix.python-version == '3.11.9'
         run: python scripts/validate_ai_setup.py
       - name: Test safety hook policy
+        if: matrix.python-version == '3.11.9'
         shell: powershell
         run: ./scripts/test_agent_guard.ps1
       - name: Run isolated offline regression suite
         run: python scripts/offline_tests.py
-      - name: Check whitespace
-        run: git diff --check
+      - name: Check committed whitespace
+        if: matrix.python-version == '3.11.9'
+        shell: powershell
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          $base = $null
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $base = $env:PR_BASE
+            if (-not $base) { throw 'Pull request comparison base is unavailable.' }
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:PUSH_BEFORE -and
+                    $env:PUSH_BEFORE -notmatch '^0+$') {
+            $base = $env:PUSH_BEFORE
+          } else {
+            $base = git --no-pager merge-base HEAD "origin/$env:DEFAULT_BRANCH"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot determine a whitespace comparison base.' }
+            $head = git --no-pager rev-parse HEAD
+            if ($base -eq $head) {
+              $commits = (git --no-pager rev-list --parents -n 1 HEAD).Split(' ')
+              $base = if ($commits.Length -gt 1) { $commits[1] } else { $null }
+            }
+          }
+          if ($base) {
+            git --no-pager cat-file -e "$base^{commit}"
+            if ($LASTEXITCODE -ne 0) { throw 'Whitespace comparison base is unavailable.' }
+            git --no-pager diff --check $base HEAD
+          } else {
+            git --no-pager show --format= --check HEAD
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

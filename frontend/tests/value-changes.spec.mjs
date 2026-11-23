@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.mjs";
 
 const first = "2026-01-01T12:00:00Z";
 const second = "2026-01-02T12:00:00.000001Z";

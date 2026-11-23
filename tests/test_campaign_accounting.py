@@ -76,12 +76,13 @@ class CampaignAccountingTests(unittest.TestCase):
                 account_fills(value, [])
 
     def test_no_insufficient_cash_negative_cash_or_implicit_credit(self):
-        for event, initial in (
-            (fill("buy", 0, "buy", "2", "5"), "9"),
-            (fill("sell", 0, "sell", "1", "5", "6"), "0"),
-        ):
-            with self.subTest(event=event), self.assertRaisesRegex(CampaignAccountingError, "cash"):
-                account_fills(initial, [event])
+        with self.assertRaisesRegex(CampaignAccountingError, "buy debit exceeds"):
+            account_fills("9", [fill("buy", 0, "buy", "2", "5")])
+        with self.assertRaisesRegex(CampaignAccountingError, "sell fees would make GBP cash negative"):
+            account_fills("10", [
+                fill("buy", 0, "buy", "1", "10"),
+                fill("sell", 1, "sell", "1", "5", "6"),
+            ])
 
     def test_no_short_sale_or_sale_beyond_position(self):
         with self.assertRaisesRegex(CampaignAccountingError, "exceeds"):

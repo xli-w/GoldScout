@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, Inexact, ROUND_DOWN, ROUND_UP, localcontext
 import io
-import importlib
+import importlib.util
 import json
 from pathlib import Path
 import sqlite3
@@ -1163,21 +1163,30 @@ class InvestmentTests(unittest.TestCase):
 
     def test_pure_demo_contract_no_files_or_broker_imports(self):
         original_import = builtins.__import__
+        original_error = store.CommittedInvestmentError
+        names = ("investment.core", "investment.store",
+                 "investment.service", "investment.__main__")
+        modules = {
+            name: importlib.util.module_from_spec(importlib.util.find_spec(name))
+            for name in names
+        }
 
         def guarded(name, *args, **kwargs):
             if name == "config" or name == "bot" or name.startswith(("bot.", "alpaca")):
                 raise AssertionError("Investment must never import broker/config")
             return original_import(name, *args, **kwargs)
 
-        with patch("builtins.open", side_effect=AssertionError("demo filesystem")), \
+        with patch.dict(sys.modules, modules), \
+                patch("builtins.open", side_effect=AssertionError("demo filesystem")), \
                 patch("sqlite3.connect", side_effect=AssertionError("demo database")), \
                 patch("builtins.__import__", side_effect=guarded):
-            for name in ("investment.core", "investment.store",
-                         "investment.service", "investment.__main__"):
-                importlib.reload(sys.modules[name])
-            result = demo_snapshot(NOW)
+            for module in modules.values():
+                module.__spec__.loader.exec_module(module)
+            result = modules["investment.service"].demo_snapshot(NOW)
             stream = io.StringIO()
-            self.assertEqual(main(["demo"], stdout=stream, now=NOW), 0)
+            self.assertEqual(modules["investment.__main__"].main(
+                ["demo"], stdout=stream, now=NOW), 0)
+        self.assertIs(store.CommittedInvestmentError, original_error)
         self.assertEqual(result["equity_gbp"], "1000")
         self.assertEqual(result["schema_version"], 2)
         self.assertEqual(result["net_contributions_gbp"], "0")
@@ -1389,10 +1398,12 @@ class InvestmentTests(unittest.TestCase):
             "balances_gbp": {"broker": "100", "savings": "0"},
         }
         actual_clock = store.clock
+        pinned_reads = []
 
         def after_snapshot(value=None):
             if value is not None:
                 return actual_clock(value)
+            pinned_reads.append(True)
             with closing(sqlite3.connect(self.database, timeout=0)) as writer:
                 writer.execute("BEGIN IMMEDIATE")
                 writer.execute("INSERT INTO events VALUES (2,'probe','{}','','')")
@@ -1405,10 +1416,22 @@ class InvestmentTests(unittest.TestCase):
 
         with patch("investment.store.clock", side_effect=after_snapshot):
             ledger, captured = store.read_with_clock(self.database)
+            service_report = snapshot(self.database)
+            output, errors = io.StringIO(), io.StringIO()
+            exit_code = main(["report", "--database", str(self.database)],
+                             stdout=output, stderr=errors)
         self.assertEqual(ledger.revision, 1)
         self.assertEqual(captured, before)
+        self.assertEqual(service_report["generated_at"], iso(before))
+        self.assertEqual(exit_code, 0, errors.getvalue())
+        self.assertEqual(json.loads(output.getvalue())["generated_at"], iso(before))
+        self.assertEqual(len(pinned_reads), 3)
         self.assertEqual(import_events(self.database, [confirmation], later), 2)
         self.assertEqual(read(self.database, later).revision, 2)
+        with self.assertRaisesRegex(InvestmentError, "either an observation time or a clock source"):
+            snapshot(self.database, later, clock_source=lambda: later)
+        with self.assertRaisesRegex(InvestmentError, "must return an observation time"):
+            snapshot(self.database, clock_source=lambda: None)
 
     def test_replay_hash_tamper_fails_closed(self):
         self.init_demo()
@@ -1547,6 +1570,68 @@ class InvestmentTests(unittest.TestCase):
         with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
             main(["demo", "--contribution"], now=NOW)
 
+    def test_cli_reports_a_committed_journal_when_the_followup_snapshot_fails(self):
+        root = Path(self.temporary.name)
+        profile_path, events_path = root / "profile.json", root / "events.json"
+        profile_path.write_text(json.dumps(self.spec), encoding="utf-8")
+        events_path.write_text(json.dumps(demo_events(NOW)), encoding="utf-8")
+        output, errors = io.StringIO(), io.StringIO()
+        with patch("investment.__main__.snapshot", side_effect=InvestmentError("synthetic read failure")):
+            code = main(["init", "--profile", str(profile_path), "--database", str(self.database)],
+                        stdout=output, stderr=errors, now=NOW)
+        self.assertEqual(code, 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("initialized", errors.getvalue())
+        self.assertIn("revision 0", errors.getvalue())
+        self.assertIn("report failed", errors.getvalue())
+        self.assertEqual(read(self.database, NOW).revision, 0)
+
+        output, errors = io.StringIO(), io.StringIO()
+        with patch("investment.__main__.snapshot", side_effect=InvestmentError("synthetic read failure")):
+            code = main(["import", "--events", str(events_path), "--database", str(self.database)],
+                        stdout=output, stderr=errors, now=NOW)
+        self.assertEqual(code, 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("import completed", errors.getvalue())
+        self.assertIn("revision 1", errors.getvalue())
+        self.assertIn("report failed", errors.getvalue())
+        self.assertNotIn("rolled back", errors.getvalue())
+        self.assertEqual(read(self.database, NOW).revision, 1)
+        self.assertEqual(main(["import", "--events", str(events_path), "--database", str(self.database)],
+                              stdout=io.StringIO(), stderr=io.StringIO(), now=NOW), 0)
+        self.assertEqual(read(self.database, NOW).revision, 1)
+        errors = io.StringIO()
+        with patch("investment.__main__.snapshot", side_effect=KeyboardInterrupt):
+            code = main(["import", "--events", str(events_path), "--database", str(self.database)],
+                        stdout=io.StringIO(), stderr=errors, now=NOW)
+        self.assertEqual(code, 130)
+        self.assertIn("import completed at revision 1", errors.getvalue())
+        self.assertEqual(read(self.database, NOW).revision, 1)
+        errors = io.StringIO()
+        with patch("investment.__main__.snapshot", side_effect=RuntimeError("unexpected failure")):
+            with self.assertRaisesRegex(RuntimeError, "unexpected failure"):
+                main(["import", "--events", str(events_path), "--database", str(self.database)],
+                     stdout=io.StringIO(), stderr=errors, now=NOW)
+        self.assertIn("import completed at revision 1", errors.getvalue())
+        self.assertIn("report failed", errors.getvalue())
+        self.assertEqual(read(self.database, NOW).revision, 1)
+        from test_investment_opening import ConnectionCloseFailure
+
+        connect = store._connect
+
+        def fail_close(database, readonly):
+            connection = connect(database, readonly)
+            return connection if readonly else ConnectionCloseFailure(connection)
+
+        errors = io.StringIO()
+        with patch.object(store, "_connect", side_effect=fail_close):
+            code = main(["import", "--events", str(events_path), "--database", str(self.database)],
+                        stdout=io.StringIO(), stderr=errors, now=NOW)
+        self.assertEqual(code, 2)
+        self.assertIn("import completed at revision 1", errors.getvalue())
+        self.assertIn("cleanup failed", errors.getvalue())
+        self.assertEqual(read(self.database, NOW).revision, 1)
+
     def test_json_duplicate_and_nonfinite_refused(self):
         file = Path(self.temporary.name) / "input.json"
         for raw in ('{"a":1,"a":2}', '[NaN]', '["unterminated]', '[' * 2000):
@@ -1641,10 +1726,13 @@ class InvestmentTests(unittest.TestCase):
         file.write_text(json.dumps([ev("new", "contribution", amount_gbp="100")]),
                         encoding="utf-8")
         broken = io.StringIO()
+        errors = io.StringIO()
         with patch.object(broken, "write", side_effect=OSError("Injected output failure")):
             with self.assertRaises(OSError):
                 main(["import", "--events", str(file), "--database", str(self.database)],
-                     stdout=broken, now=NOW)
+                     stdout=broken, stderr=errors, now=NOW)
+        self.assertIn("import completed at revision 2", errors.getvalue())
+        self.assertIn("report failed", errors.getvalue())
         self.assertEqual(snapshot(self.database, NOW)["revision"], 2)
         before = self.database.read_bytes()
         with patch.object(broken, "write", side_effect=OSError("Injected output failure")):

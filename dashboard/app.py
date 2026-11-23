@@ -429,7 +429,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
 
         try:
             if investment_database is not None:
-                report = snapshot(investment_database, now=clock())
+                report = snapshot(investment_database, clock_source=clock)
             else:
                 from dashboard.investment_demo import demo_opening_snapshot
                 report = demo_opening_snapshot(now=clock())
@@ -534,7 +534,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         from investment.monitoring import monitoring_snapshot
         try:
             if monitoring_profile is not None:
-                result = monitoring_snapshot(investment_database, monitoring_profile, monitoring_cache, clock())
+                result = monitoring_snapshot(
+                    investment_database, monitoring_profile, monitoring_cache, clock_source=clock)
             elif investment_database is not None:
                 result = {"enabled": False}
             else:
@@ -557,7 +558,9 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         from investment import InvestmentError
         from investment.awareness import awareness_snapshot
         try:
-            result = awareness_snapshot(investment_database, intelligence_database, awareness_profile, clock(), version)
+            result = awareness_snapshot(
+                investment_database, intelligence_database, awareness_profile,
+                version=version, clock_source=clock)
             schema = json.loads((ROOT.parent / "investment" / "awareness.schema.json").read_text(encoding="utf-8"))
             Draft202012Validator(schema, format_checker=FormatChecker()).validate(result)
             return result
@@ -880,17 +883,17 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         except InvestmentError:
             return JSONResponse(status_code=503, content={"error": "etoro_refresh_unavailable"})
 
-    def workflow_sources():
+    def workflow_sources(include_cache_cursor=False):
         from investment.monitoring import project, validate_profile
         from investment.monitoring_reviews import monitoring_cache_binding
         from investment.monitoring_store import read_cache
-        from investment.store import canonical, digest, load_json, read_with_clock
+        from investment.store import canonical, digest, load_json, read_snapshot_with_clock
 
-        now = clock()
-        ledger, now = read_with_clock(investment_database, now)
+        ledger, now, journal_head = read_snapshot_with_clock(investment_database, clock_source=clock)
         profile = load_json(monitoring_profile)
         validate_profile(profile, ledger, now)
-        cache = read_cache(monitoring_cache, profile, now) if monitoring_cache is not None else None
+        cache = (read_cache(monitoring_cache, profile, now, include_cursor=include_cache_cursor)
+                 if monitoring_cache is not None else None)
         cache_binding = None
         if cache is not None:
             cache_binding = monitoring_cache_binding(
@@ -902,7 +905,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             "cache_binding": cache_binding,
         }
         return {
-            "now": now, "ledger": ledger, "profile": profile, "cache": cache,
+            "now": now, "ledger": ledger, "journal_head": journal_head,
+            "profile": profile, "cache": cache,
             "report": report, "identity": identity,
             "profile_hash": identity["profile_hash"],
         }
@@ -1029,7 +1033,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         from investment import InvestmentError
         from investment.core import explicit_clock, iso, text
         from investment.monitoring import validate_observation
-        from investment.reconciliation import preview_observations
+        from investment.reconciliation import compare_observations
         from investment.monitoring_store import MAX_ATTEMPT_BYTES
         from investment.store import canonical
         import secrets
@@ -1047,7 +1051,7 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             prior = monitoring_workflow.existing_preview(token, request_id, fingerprint, clock())
             if prior is not None:
                 return prior
-            sources = workflow_sources()
+            sources = workflow_sources(include_cache_cursor=True)
             if sources["cache"] is None or sources["cache"]["instance_id"] is None:
                 return JSONResponse(status_code=409, content={"error": "identified_monitoring_cache_required"})
             now = sources["now"]
@@ -1124,10 +1128,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                         "holdings": observation["holdings"],
                     }],
                 }
-                reconciliation = preview_observations(
-                    investment_database, staged, mapping["max_age_seconds"], now)
-                if reconciliation["revision"] != sources["ledger"].revision:
-                    return JSONResponse(status_code=409, content={"error": "investment_revision_changed"})
+                reconciliation = compare_observations(
+                    sources["ledger"], staged, mapping["max_age_seconds"], now)
             preview_id = secrets.token_urlsafe(32)
             response = {
                 "preview_id": preview_id, "request_id": request_id,
@@ -1147,9 +1149,14 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                 token, request_id, fingerprint,
                 {"preview_id": preview_id, "response": response,
                  "attempt": attempt, "source_revision": sources["ledger"].revision,
+                 "journal_head": sources["journal_head"],
                  "profile_hash": sources["profile_hash"],
                  "cache_revision": sources["cache"]["revision"],
                  "cache_instance_id": sources["cache"]["instance_id"],
+                 "attempt_revision": (sources["cache"]["attempt_revisions"][request_id]
+                                      if existing_attempt is not None
+                                      else sources["cache"]["next_revision"]),
+                 "predecessor_hash": sources["cache"]["predecessor_hash"],
                  "expires": now + monitoring_workflow.PREVIEW_TTL, "receipt": None},
                 now)
             return response
@@ -1166,7 +1173,10 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             return JSONResponse(status_code=403, content={"error": "monitoring_workflow_unauthorized"})
         from dashboard.monitoring_workflow import WorkflowError
         from investment import InvestmentError
-        from investment.monitoring_store import append_attempt
+        from investment.monitoring_store import (
+            CommittedMonitoringError, StaleMonitoringCacheError, UncertainMonitoringError,
+            append_attempt,
+        )
 
         token = request.cookies.get("investment_monitoring_session")
         try:
@@ -1179,20 +1189,43 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                 return pending["receipt"]
             sources = workflow_sources()
             if (sources["ledger"].revision != pending["source_revision"]
+                    or sources["journal_head"] != pending["journal_head"]
                     or sources["profile_hash"] != pending["profile_hash"]
                     or sources["cache"] is None
-                    or sources["cache"]["revision"] != pending["cache_revision"]
                     or sources["cache"]["instance_id"] != pending["cache_instance_id"]):
                 return JSONResponse(status_code=409, content={"error": "stale_observation_preview"})
             revision = append_attempt(
                 monitoring_cache, sources["profile"], pending["attempt"], sources["now"],
                 expected_instance_id=pending["cache_instance_id"],
-                expected_revision=pending["cache_revision"])
+                expected_revision=pending["cache_revision"],
+                expected_attempt_revision=pending["attempt_revision"],
+                expected_predecessor_hash=pending["predecessor_hash"])
             receipt = {
                 "staged": True, "cache_revision": revision,
                 "stages_only_to": "monitoring_cache", "investment_journal_changed": False,
             }
-            return monitoring_workflow.set_receipt(token, payload["preview_id"], receipt, clock())
+            try:
+                return monitoring_workflow.set_receipt(token, payload["preview_id"], receipt, clock())
+            except WorkflowError:
+                return JSONResponse(status_code=503, content={
+                    "error": "observation_committed_receipt_unavailable", "committed": True,
+                    "cache_revision": revision, "retryable": False,
+                    "stages_only_to": "monitoring_cache", "investment_journal_changed": False,
+                })
+        except CommittedMonitoringError as exc:
+            return JSONResponse(status_code=503, content={
+                "error": "observation_committed_cleanup_failed", "committed": True,
+                "cache_revision": exc.revision, "retryable": True,
+                "stages_only_to": "monitoring_cache", "investment_journal_changed": False,
+            })
+        except UncertainMonitoringError:
+            return JSONResponse(status_code=503, content={
+                "error": "observation_commit_outcome_uncertain", "committed": None,
+                "retryable": True, "stages_only_to": "monitoring_cache",
+                "investment_journal_changed": False,
+            })
+        except StaleMonitoringCacheError:
+            return JSONResponse(status_code=409, content={"error": "stale_observation_preview"})
         except WorkflowError as exc:
             return JSONResponse(status_code=exc.status, content={"error": exc.code})
         except (ValueError, InvestmentError, OSError):

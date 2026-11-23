@@ -111,9 +111,12 @@ FX:        timestamp,available_at,gbp_per_unit
 cash rate: timestamp,available_at,annual_rate
 ```
 
-Every timestamp must be RFC3339 with an explicit UTC offset. Series timestamps
-must be strictly increasing and unique. Embedded newlines inside timestamp
-fields and malformed/unterminated quoted records are rejected; normal LF or
+Every timestamp must be RFC3339 with a valid explicit UTC offset; malformed
+offsets are rejected on import and reopen. Series timestamps
+must be strictly increasing and unique; ordering and availability comparisons
+retain all supplied fractional digits after UTC normalization. Embedded
+newlines inside timestamp fields and malformed/unterminated quoted records are
+rejected; normal LF or
 CRLF record endings are accepted. Numeric values must be finite; OHLC prices
 and FX rates must be positive, volume non-negative, and high/low must bound
 open and close. Product period-end and FX observation timestamps cannot follow
@@ -138,7 +141,11 @@ Manifest size is limited to 2 MiB, each CSV to 64 MiB, all source files to 256
 MiB, 256 total series, 10,000 actions, and 1,000,000 rows per series. The
 generated dataset manifest includes per-file checksums, row counts, timestamp
 envelopes, the untouched source payload metadata, and explicit unresolved
-checks. Reopen compares canonical manifest values with their JSON types, so a
+checks. Its first/last timestamp summaries retain at most microseconds, so
+they are coarse metadata rather than exact sub-microsecond bounds; the original
+source bytes and exact validation remain authoritative. Readiness separately
+rejects nonzero sub-microsecond source precision. Reopen compares canonical
+manifest values with their JSON types, so a
 boolean cannot silently replace a numeric provenance value. File reads check
 regular-file identity and byte limits after opening as well as before reading;
 filesystems that cannot provide a stable file identity are rejected. These

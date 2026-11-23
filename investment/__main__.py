@@ -6,7 +6,6 @@ import sys
 import threading
 
 from . import InvestmentError
-from .core import clock
 from .service import demo_snapshot, snapshot
 from .store import import_events, initialize, load_json
 
@@ -80,15 +79,18 @@ def main(argv=None, stdout=None, stderr=None, now=None):
     review_update.add_argument("--note", default="")
     args = parser.parse_args(argv)
     requested_now = now
+    committed = None
+    reported = False
     try:
-        now = clock(now)
         if args.command == "demo":
             value = demo_snapshot(now)
         elif args.command == "init":
             initialize(args.database, load_json(args.profile), now)
+            committed = ("initialized", 0)
             value = snapshot(args.database, now)
         elif args.command == "import":
-            import_events(args.database, load_json(args.events), now)
+            revision = import_events(args.database, load_json(args.events), now)
+            committed = ("import completed", revision)
             value = snapshot(args.database, now)
         elif args.command in ("backup", "restore"):
             from .lifecycle import copy_verified
@@ -122,8 +124,12 @@ def main(argv=None, stdout=None, stderr=None, now=None):
                      "evidence": "Unconfigured; operator must verify wrapper, provider and denominator locally"}
                     for a in ledger.spec["accounts"]],
             }
+        elif args.command == "monitor":
+            from .monitoring import monitoring_snapshot
+            value = monitoring_snapshot(
+                args.database, args.monitoring_profile, args.cache, requested_now)
         elif args.command.startswith("monitor"):
-            from .monitoring import monitoring_snapshot, validate_profile
+            from .monitoring import validate_profile
             from .monitoring_store import initialize_cache, append_attempt, purge_expired
             from .store import read_with_clock
             ledger, observed = read_with_clock(args.database, requested_now)
@@ -148,8 +154,6 @@ def main(argv=None, stdout=None, stderr=None, now=None):
                         break
                     print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout, flush=True)
                     threading.Event().wait(86400)
-            else:
-                value = monitoring_snapshot(args.database, args.monitoring_profile, args.cache, observed)
         elif args.command in ("review-init", "review-sync"):
             from pathlib import Path
             from .monitoring import monitoring_snapshot, validate_profile
@@ -202,13 +206,32 @@ def main(argv=None, stdout=None, stderr=None, now=None):
             value = update_review(args.reviews, args.case_id, args.request_id,
                                   args.expected_revision, args.action, args.note, requested_now)
         print(json.dumps(value, sort_keys=True, allow_nan=False), file=stdout)
+        reported = True
         return 0
     except InvestmentError as exc:
-        print(f"InvestmentError: {exc}", file=stderr)
+        if committed is not None:
+            action, revision = committed
+            print(f"{type(exc).__name__}: Journal {action} at revision {revision}; "
+                  f"report failed: {exc}. Preserve the journal and review it before retrying.",
+                  file=stderr)
+        else:
+            print(f"InvestmentError: {exc}", file=stderr)
+        reported = True
         return 2
     except KeyboardInterrupt:
-        print("Command interrupted. Preserve any earlier commit receipts; monitoring never changes accounts.", file=stderr)
+        if committed is not None:
+            action, revision = committed
+            print(f"Command interrupted after journal {action} at revision {revision}. "
+                  "Preserve the journal and review it before retrying.", file=stderr)
+        else:
+            print("Command interrupted. Preserve any earlier commit receipts; monitoring never changes accounts.", file=stderr)
+        reported = True
         return 130
+    finally:
+        if committed is not None and not reported:
+            action, revision = committed
+            print(f"Journal {action} at revision {revision}; report failed or did not complete. "
+                  "Preserve the journal and review it before retrying.", file=stderr)
 
 
 if __name__ == "__main__":
