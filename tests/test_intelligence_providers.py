@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import base64
 import importlib.util
 import io
+import json
 import os
 import socket
 import ssl
@@ -14,7 +15,12 @@ from unittest.mock import Mock, patch
 
 import proxy_config
 
-from market_intelligence.providers import BEA_CALENDAR_URL, BLS_CALENDAR_URL, FED_NEWS_URL, CalendarTransport, PinnedHTTPSConnection, ProviderError, parse_bea_calendar, parse_bls_calendar
+from market_intelligence.providers import (
+    BEA_CALENDAR_URL, BLS_CALENDAR_URL, BOE_MPC_DATES_URL, FED_NEWS_URL,
+    ONS_CANCELLED_URL, ONS_UPCOMING_URL, CalendarTransport, PinnedHTTPSConnection,
+    ProviderError, parse_bea_calendar, parse_bls_calendar, parse_boe_mpc_calendar,
+    parse_ons_calendar,
+)
 from market_intelligence.contracts import ServiceFailure
 from market_intelligence.service import IntelligenceService
 from market_intelligence.__main__ import main
@@ -26,6 +32,24 @@ def calendar(start="DTSTART;TZID=America/New_York:20261113T083000", extra="", ti
     return ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Offline fixture//EN\r\n"
             "BEGIN:VEVENT\r\nUID:" + uid + "\r\nSUMMARY:" + title + "\r\n" + start + "\r\n" + extra +
             "END:VEVENT\r\nEND:VCALENDAR\r\n").encode("utf-8")
+
+
+def ons_release(uri, title, release_date, cancelled=False, finalised=True,
+                postponed=False, provisional_date=None, date_changes=None):
+    description = {
+        "title": title, "release_date": release_date, "cancelled": cancelled,
+        "finalised": finalised, "postponed": postponed,
+    }
+    if provisional_date is not None:
+        description["provisional_date"] = provisional_date
+    result = {"uri": uri, "description": description}
+    if date_changes is not None:
+        result["date_changes"] = date_changes
+    return result
+
+
+def ons_response(*releases):
+    return json.dumps({"breakdown": {"total": len(releases)}, "releases": releases}).encode("utf-8")
 
 
 class FakeResponse:
@@ -75,6 +99,49 @@ class IntelligenceCalendarTransportTests(unittest.TestCase):
         self.factory.assert_called_once_with("www.bea.gov", "93.184.216.34", 3.0)
         self.assertEqual(self.connection.request.call_args.args[:2],
                          ("GET", "/news/schedule/ics/online-calendar-subscription.ics"))
+
+    def test_uk_endpoints_use_source_specific_hosts_paths_and_content_types(self):
+        cases = (
+            (ONS_UPCOMING_URL, "api.beta.ons.gov.uk",
+             "/v1/search/releases?limit=1000&sort=release_date_asc&release-type=type-upcoming",
+             "application/json"),
+            (ONS_CANCELLED_URL, "api.beta.ons.gov.uk",
+             "/v1/search/releases?limit=1000&sort=release_date_asc&release-type=type-cancelled",
+             "application/json"),
+            (BOE_MPC_DATES_URL, "www.bankofengland.co.uk",
+             "/monetary-policy/upcoming-mpc-dates", "text/html"),
+        )
+        for url, hostname, path, content_type in cases:
+            with self.subTest(url=url):
+                self.connection.getresponse.return_value = FakeResponse(
+                    headers={"Content-Type": content_type})
+                self.assertEqual(self.transport.fetch(url), b"calendar")
+                self.resolver.assert_called_with(hostname, 443, type=socket.SOCK_STREAM)
+                self.assertEqual(self.factory.call_args.args[:2], (hostname, "93.184.216.34"))
+                request = self.connection.request.call_args
+                self.assertEqual(request.args[:2], ("GET", path))
+                self.assertEqual(request.kwargs["headers"]["Accept"], content_type)
+                self.assertEqual(request.kwargs["headers"]["User-Agent"],
+                                 "GoldScoutMarketIntelligence/1.0 (+https://github.com/xli-w/GoldScout)")
+
+    def test_supported_content_registry_uses_real_allowlist_without_expanding_discovery(self):
+        from urllib.parse import urlsplit
+        from market_intelligence.content import CONTENT_SOURCES
+        for source in CONTENT_SOURCES.values():
+            with self.subTest(source=source.institution, url=source.url):
+                if not source.supported:
+                    before = self.resolver.call_count
+                    with self.assertRaises(ProviderError) as refused:
+                        self.transport.fetch(source.url)
+                    self.assertEqual(refused.exception.code, "endpoint_refused")
+                    self.assertEqual(self.resolver.call_count, before)
+                    continue
+                mime = "application/rss+xml" if source.url.endswith(".xml") else "text/html"
+                self.connection.getresponse.return_value = FakeResponse(headers={"Content-Type": mime})
+                self.assertEqual(self.transport.fetch(source.url), b"calendar")
+                url = urlsplit(source.url)
+                self.resolver.assert_called_with(url.hostname, 443, type=socket.SOCK_STREAM)
+                self.assertEqual(self.connection.request.call_args.args[:2], ("GET", url.path))
 
     def test_authenticated_proxy_preserves_destination_pin_and_tls_name(self):
         proxy = "http://sample:p%40ss@proxy.invalid:8080"
@@ -421,6 +488,125 @@ class IntelligenceCalendarTransportTests(unittest.TestCase):
         wrapped.sendall.assert_not_called()
 
 
+class UKCalendarParserTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 11, 14, 12, tzinfo=timezone.utc)
+
+    def test_ons_parser_preserves_selected_release_state_and_date_change_notes(self):
+        upcoming = ons_response(
+            ons_release(
+                "/releases/cpi", "Consumer price inflation, October 2026",
+                "2026-11-18T07:00:00Z",
+                date_changes=[{"previous_date": "2026-11-17",
+                               "change_notice": "The release date has changed."}],
+            ),
+            ons_release(
+                "/releases/labour-market", "Labour market overview, November 2026",
+                None, finalised=False, provisional_date="December 2026",
+            ),
+            ons_release(
+                "/releases/other", "Population estimates, mid-2026", "2026-12-01T00:00:00Z",
+            ),
+        )
+        cancelled = ons_response(ons_release(
+            "/releases/cancelled-cpi", "Consumer price inflation, July 2026",
+            "2026-11-20T07:00:00Z", cancelled=True,
+        ))
+        batch = parse_ons_calendar(upcoming, cancelled, self.now, self.now)
+
+        self.assertTrue(batch.complete_snapshot)
+        self.assertEqual(batch.source.source, "ons")
+        self.assertEqual(batch.source.source_urls, (ONS_UPCOMING_URL, ONS_CANCELLED_URL))
+        self.assertEqual(batch.ignored_events, 1)
+        events = {event.event_id: event for event in batch.events}
+        cpi = next(event for event in events.values() if event.title.startswith("Consumer price"))
+        labour = next(event for event in events.values() if event.title.startswith("Labour market"))
+        cancelled_event = next(event for event in events.values() if event.status == "cancelled")
+        self.assertEqual((cpi.category, cpi.status, cpi.symbols), ("inflation", "scheduled", ()))
+        self.assertEqual(cpi.scheduled_at, datetime(2026, 11, 18, 7, tzinfo=timezone.utc))
+        self.assertEqual(cpi.available_at, self.now)
+        self.assertEqual(cpi.source_notes,
+                         ("Previous scheduled date: 2026-11-17", "The release date has changed."))
+        self.assertEqual((labour.category, labour.status), ("employment", "tentative"))
+        self.assertEqual(labour.source_notes, ("Provisional date: December 2026",))
+        self.assertEqual(cancelled_event.status, "cancelled")
+        self.assertEqual(len(batch.input_hash), 64)
+
+    def test_ons_parser_rejects_partial_or_misclassified_response(self):
+        incomplete = json.dumps({"breakdown": {"total": 1}, "releases": []}).encode("utf-8")
+        with self.assertRaises(ProviderError) as result:
+            parse_ons_calendar(ons_response(), incomplete, self.now, self.now)
+        self.assertEqual(result.exception.code, "response_incomplete")
+        inconsistent = ons_response(ons_release(
+            "/releases/cancelled", "Consumer price inflation", "2026-11-20T07:00:00Z",
+            cancelled=True,
+        ))
+        with self.assertRaises(ProviderError) as result:
+            parse_ons_calendar(inconsistent, ons_response(), self.now, self.now)
+        self.assertEqual(result.exception.code, "invalid_calendar")
+        duplicate_field = b'{"breakdown":{"total":0,"total":0},"releases":[]}'
+        with self.assertRaises(ProviderError) as result:
+            parse_ons_calendar(duplicate_field, ons_response(), self.now, self.now)
+        self.assertEqual(result.exception.code, "invalid_calendar")
+
+    def test_boe_parser_converts_confirmed_schedule_using_london_dst(self):
+        dates_2026 = (
+            "Thursday 5 February", "Thursday 19 March", "Thursday 7 May",
+            "Thursday 18 June", "Thursday 6 August", "Thursday 17 September",
+            "Thursday 5 November", "Thursday 17 December",
+        )
+        dates_2027 = (
+            "Thursday 4 February", "Thursday 18 March", "Thursday 29 April",
+            "Thursday 17 June", "Thursday 5 August", "Thursday 16 September",
+            "Thursday 4 November", "Thursday 16 December",
+        )
+        payload = (
+            "<h2>2026 confirmed dates</h2>" + "".join(f"<p>{date}</p>" for date in dates_2026)
+            + "<h2>2027 confirmed dates</h2>" + "".join(f"<p>{date}</p>" for date in dates_2027)
+            + "<p>Current Bank Rate</p>"
+        ).encode("utf-8")
+        batch = parse_boe_mpc_calendar(payload, self.now)
+        self.assertTrue(batch.complete_snapshot)
+        self.assertEqual(batch.source.source, "boe_mpc")
+        self.assertEqual(len(batch.events), 9)
+        winter = next(event for event in batch.events if event.event_id == "boe-mpc-2026-12-17")
+        summer = next(event for event in batch.events if event.event_id == "boe-mpc-2027-06-17")
+        self.assertEqual(winter.scheduled_at, datetime(2026, 12, 17, 12, tzinfo=timezone.utc))
+        self.assertEqual(summer.scheduled_at, datetime(2027, 6, 17, 11, tzinfo=timezone.utc))
+        self.assertTrue(all(event.scheduled_at > self.now for event in batch.events))
+        self.assertEqual((summer.category, summer.symbols, summer.source_timezone),
+                         ("monetary_policy", (), "Europe/London"))
+        self.assertIn("12:00 noon", summer.source_notes[0])
+
+    def test_boe_parser_fails_closed_for_incomplete_or_invalid_year_sections(self):
+        payload = b"<h2>2026 confirmed dates</h2><p>Thursday 5 February</p>"
+        with self.assertRaises(ProviderError) as result:
+            parse_boe_mpc_calendar(payload, self.now)
+        self.assertEqual(result.exception.code, "invalid_calendar")
+        current_year_only = (
+            "<h2>2026 confirmed dates</h2>" +
+            "".join(f"<p>{date}</p>" for date in (
+                "Thursday 5 February", "Thursday 19 March", "Thursday 7 May",
+                "Thursday 18 June", "Thursday 6 August", "Thursday 17 September",
+                "Thursday 5 November", "Thursday 17 December",
+            )) + "<p>Current Bank Rate</p>"
+        ).encode("utf-8")
+        with self.assertRaises(ProviderError) as result:
+            parse_boe_mpc_calendar(current_year_only, self.now)
+        self.assertEqual(result.exception.code, "invalid_calendar")
+        invalid_weekday = (
+            "<h2>2026 confirmed dates</h2>" +
+            "".join(f"<p>{date}</p>" for date in (
+                "Thursday 5 February", "Thursday 19 March", "Thursday 7 May",
+                "Thursday 18 June", "Thursday 6 August", "Thursday 17 September",
+                "Thursday 5 November", "Thursday 18 December",
+            )) + "<p>Current Bank Rate</p>"
+        ).encode("utf-8")
+        with self.assertRaises(ProviderError) as result:
+            parse_boe_mpc_calendar(invalid_weekday, self.now)
+        self.assertEqual(result.exception.code, "invalid_calendar")
+
+
 @unittest.skipIf(importlib.util.find_spec("icalendar") is None, "Install requirements-intelligence.txt for ICS tests")
 class IntelligenceCalendarServiceTests(IntelligenceStoreFixture, unittest.TestCase):
     def setUp(self):
@@ -665,6 +851,58 @@ class IntelligenceCalendarServiceTests(IntelligenceStoreFixture, unittest.TestCa
             self.assertEqual(self.transport.fetch.call_args.args[0], BEA_CALENDAR_URL)
             self.assertEqual({source.source for source in self.store.calendar().sources}, {"bea"})
 
+    def test_ons_complete_snapshots_revision_changes_and_reject_partial_pairs(self):
+        first = ons_release(
+            "/releases/cpi", "Consumer price inflation, October 2026",
+            (self.now + timedelta(days=5)).isoformat(),
+            date_changes=[{"previous_date": (self.now + timedelta(days=4)).date().isoformat(),
+                           "change_notice": "Release date moved by one day."}],
+        )
+        revised = ons_release(
+            "/releases/cpi", "Consumer price inflation, October 2026",
+            (self.now + timedelta(days=8)).isoformat(), postponed=True,
+            provisional_date="December 2026",
+            date_changes=[{"previous_date": (self.now + timedelta(days=5)).date().isoformat(),
+                           "change_notice": "The release has been postponed."}],
+        )
+        initial_upcoming, cancelled = ons_response(first), ons_response()
+        revised_upcoming = ons_response(revised)
+        incomplete_cancelled = json.dumps(
+            {"breakdown": {"total": 1}, "releases": []}).encode("utf-8")
+        self.transport.fetch.side_effect = (
+            initial_upcoming, cancelled, revised_upcoming, cancelled,
+            revised_upcoming, incomplete_cancelled,
+        )
+        self.store.enqueue(self.request(enabled=True), self.now)
+
+        with self.service(sources=("ons",)) as service:
+            result, _ = service.check_once("ons")
+        self.assertEqual(result["status"], "succeeded")
+        original = self.store.calendar().events[0]
+        self.assertEqual((original.status, original.revision), ("scheduled", 0))
+        self.assertIn("Release date moved by one day.", original.source_notes)
+
+        self.now += timedelta(minutes=1)
+        with self.service(sources=("ons",)) as service:
+            result, _ = service.check_once("ons")
+        self.assertEqual(result["status"], "succeeded")
+        updated = self.store.calendar().events[0]
+        self.assertEqual((updated.status, updated.revision), ("postponed", 1))
+        self.assertEqual(updated.source_notes[0], "Previous scheduled date: " +
+                         (self.now + timedelta(days=5)).date().isoformat())
+        self.assertEqual(updated.available_at, self.now)
+
+        self.now += timedelta(minutes=1)
+        with self.service(sources=("ons",)) as service:
+            result, _ = service.check_once("ons")
+        self.assertEqual((result["status"], result["error_code"]),
+                         ("failed", "response_incomplete"))
+        snapshot = self.store.calendar()
+        self.assertEqual(snapshot.events, (updated,))
+        self.assertEqual(snapshot.sources[0].status, "unavailable")
+        self.assertEqual(snapshot.sources[0].source_urls, (ONS_UPCOMING_URL, ONS_CANCELLED_URL))
+        self.assertEqual(self.transport.fetch.call_count, 6)
+
     def test_oldest_due_source_runs_first_when_both_are_overdue(self):
         self.transport.fetch.return_value = calendar(title="GDP (Second Estimate)", uid="bea-release")
         self.store.enqueue(self.request(enabled=True), self.now)
@@ -859,11 +1097,18 @@ class IntelligenceCalendarServiceTests(IntelligenceStoreFixture, unittest.TestCa
     def test_cancel_before_worker_entry_does_not_start_a_fetch(self):
         class DeferredWorker:
             def __init__(self, target, **kwargs):
-                self.target = target
+                self.running = True
+                def invoke():
+                    self.running = False
+                    target()
+                self.target = invoke
             def start(self):
                 pass
             def is_alive(self):
-                return True
+                return self.running
+            def join(self):
+                if self.running:
+                    self.target()
         self.store.enqueue(self.request(enabled=True), self.now)
         with patch("market_intelligence.service.threading.Thread", DeferredWorker):
             with self.service() as service:

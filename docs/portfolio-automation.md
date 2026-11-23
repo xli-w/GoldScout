@@ -21,6 +21,64 @@ never inputs to the AI pipeline. AI still sees only the public evidence allowed
 by the [existing intelligence service](intelligence.md); it cannot trade, move
 money, amend policy or replenish experimental losses.
 
+### Local briefing relevance and guided exposure mapping
+
+The additional `dashboard.relevance` backend is separate from the existing
+awareness projection and its JSON/profile wire contracts. It projects a public
+briefing onto the **currently positive journal exposures**, not historical
+holdings at publication. The guided editor offers recorded accounts/instruments,
+four public macro topics (`inflation`, `employment`, `growth`,
+`monetary_policy`) and UK/US geography tags; hand-written JSON is not required.
+Account-only tags apply to that account's cash, not implicitly to its holdings.
+Instrument IDs in this API are the journal's product IDs.
+
+Default matches use only supported recorded cash/equity/bond classifications:
+cash has inflation/monetary-policy channels; equity and bond holdings have the
+four macro channels. These are possible **UK/US macro context** channels, not
+inferred geographic ownership. Names, issuers, denomination currency and public
+research symbols do not establish exposure. Explicit topic/geography tags are
+locally declared context, not verified fund look-through; unknown look-through
+and missing declarations remain explicit even when a class-based match exists.
+A declared match is distinguished from a classified match and includes a review
+question, not a trade recommendation.
+
+`RelevanceWorkspace` requires explicit journal, investment-profile and separate
+local mapping-config paths. It never discovers an operational workspace. The
+dashboard selects the mapping file in its separate intelligence config directory,
+outside the journal workspace; request bodies cannot choose files or bindings.
+Journal, profile and lock-file path collisions are rejected.
+Reads neither create files nor start collection/model calls. Saves must use the
+dashboard's existing same-origin/CSRF safe-write handler, never GET. They accept
+the editor's mappings, expected mapping revision and expected journal head hash.
+Mappings have at most 100 unique account/instrument pairs, bounded unique tags
+and a bounded local file; revisions start at zero when absent and increment on
+each successful save. Malformed or foreign files are not repaired or adopted.
+
+The server binds the configuration to portfolio identity, the selected investment
+profile hash, journal path and journal file identity. Saves serialize cooperating
+writers using the existing local file-lock helper, compare revisions, fsync a
+temporary file and atomically replace the mapping file. A copied/restored journal
+at a new identity does not silently inherit the old mapping binding. This is
+editable local configuration, not append-only accounting or immutable evidence.
+Keep it private and back it up separately if required.
+
+Results retain journal-head hash, mapping revision and public briefing ID.
+After reading, the backend rechecks the journal/profile binding and mappings;
+on mismatch it suppresses matches, editor details and personalized valuation.
+Future briefing-generation/cutoff clocks are unavailable. A missing briefing
+still permits local mapping editing. The journal and mapping file are
+**separate stores, not one atomic transaction**: an external write can overlap
+the final recheck; a committed mapping save is not rolled back by a later
+journal change. Reload before using changed context.
+
+Valuation comes only from the existing replay's complete, dated common-clock
+valuation. Incomplete/missing/late marks produce `state: incomplete` and no
+amounts or weights; complete results expose the existing dated total, not a
+partial subtotal or manufactured GBP conversion. Match records never manufacture
+look-through weights. All personalized matching stays local and is never added
+to a public manifest, collection request or hosted AI input. Provider choice and
+availability are independent of this backend.
+
 ### Configure explicitly
 
 Use only selected investment-capital accounts, not household cash. Create a local

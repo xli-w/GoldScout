@@ -127,12 +127,15 @@ class JSONSummaryProvider:
     profile: str
     model: str
     complete: Callable[[SummaryRequest, threading.Event], ProviderResponse]
+    kind: str = "custom"
 
     def __post_init__(self):
         identifier(self.profile)
         text(self.model, 128)
         if not callable(self.complete):
             raise ValueError("Provider completion must be callable")
+        if self.kind not in ("custom", "local", "openai", "anthropic", "gemini"):
+            raise ValueError("Unsupported summary provider kind")
 
 
 @dataclass(frozen=True)

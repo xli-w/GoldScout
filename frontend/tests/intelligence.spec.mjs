@@ -1,5 +1,68 @@
 import { test, expect } from "./fixtures.mjs";
 
+test("managed intelligence offers setup without an unavailable screen or provider GET",async({page})=>{
+  const posts=[];
+  const setup={available:true,state:"not_initialized",config:{enabled:false,calendar_sources:["bls"],content_sources:[],profile:null},
+    catalog:{calendar:[{source:"bls",geography:"US"}],content:[]},worker_running:false,error_code:null};
+  await page.route("**/api/**",route=>route.abort());
+  await page.route("**/api/v1/settings",route=>route.fulfill({json:{mode:"recorded",workspace:"setup"}}));
+  await page.route("**/api/v1/intelligence/session",route=>route.fulfill({json:{enabled:true,csrf:"synthetic-csrf"}}));
+  await page.route("**/api/v1/intelligence",route=>route.fulfill({json:{
+    source_mode:"recorded",generated_at:"2026-11-23T12:00:00Z",setup}}));
+  await page.route("**/api/v1/intelligence/setup",route=>{
+    posts.push({body:route.request().postDataJSON(),csrf:route.request().headers()["x-csrf-token"]});
+    return route.fulfill({json:setup});
+  });
+  await page.goto("/intelligence");
+  await expect(page.getByRole("heading",{name:"Sourced briefing",exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Initialize intelligence",exact:true})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Intelligence unavailable",exact:true})).toHaveCount(0);
+  expect(posts).toHaveLength(0);
+  await page.getByRole("button",{name:"Initialize intelligence",exact:true}).click();
+  await expect.poll(()=>posts.length).toBe(1);
+  expect(posts[0]).toEqual({body:{action:"initialize"},csrf:"synthetic-csrf"});
+});
+
+test("sourced briefing citations use its retained manifest and separate interpretation",async({page})=>{
+  const now="2026-11-23T12:00:00Z";
+  const snapshot={source_mode:"recorded",database_id:"synthetic-store",generated_at:now,
+    setup:{available:true,state:"ready",worker_running:false,error_code:null,
+      config:{enabled:true,calendar_sources:["ons"],content_sources:["ons_cpi"],profile:{name:"public",kind:"local",model:"synthetic",port:11434}},
+      catalog:{calendar:[{source:"ons",geography:"UK"}],content:[]}},
+    settings:{enabled:true,calendar_enabled:true,news_enabled:true,ai_enabled:true,mode:"advisory",ai_profile:"public",revision:1},
+    profiles:["public"],controls_enabled:true,service_status_capable:true,service_status_state:"unknown",service_status:null,
+    source_status:null,calendar_sources:[],calendar:[],calendar_total:0,calendar_truncated:false,
+    news_last_success_at:null,news:[],briefs:[],controls:[],budget:null,
+    foundation:{schema_capable:true,source_health:[],operation:null,
+      refreshes:[{request_id:"queued",action:"sources",requested_at:now,state:"queued"}],
+      briefing:{briefing_id:"briefing-retained",generated_at:now,provider:"public",model:"synthetic",freshness:"recent",profile_current:true,
+        manifest:{evidence:[{evidence_id:"durable-1",source:"ons_cpi",source_url:"https://example.test/retained",title:"Retained release",
+          text:"The published source reports this exact fact.",published_at:null,received_at:now}],gaps:["Selected source only."],omitted:0,input_hash:"retained-hash",cutoff:now},
+        output:{headline:"Public evidence briefing",developments:[{title:"Retained release",topic:"inflation",geography:"UK",
+          claims:[{text:"The published source reports this exact fact.",evidence_ids:["durable-1"]}],
+          interpretation:{text:"Possible implication: conditions may differ.",evidence_ids:["durable-1"]},uncertainties:["Coverage remains incomplete."]}]}}}};
+  const posts=[];
+  await page.route("**/api/**",route=>route.abort());
+  await page.route("**/api/v1/settings",route=>route.fulfill({json:{mode:"recorded",workspace:"investment"}}));
+  await page.route("**/api/v1/intelligence/session",route=>route.fulfill({json:{enabled:true,csrf:"synthetic-csrf"}}));
+  await page.route("**/api/v1/intelligence",route=>route.fulfill({json:snapshot}));
+  await page.route("**/api/v1/intelligence/refresh",route=>{
+    posts.push(route.request().postDataJSON());
+    snapshot.news=[{evidence_id:"new-unrelated",title:"Later source",snippet:"New content",source_url:"https://example.test/new",published_at:null}];
+    return route.fulfill({status:202,json:null});
+  });
+  await page.goto("/intelligence");
+  await expect(page.getByRole("heading",{name:"Sourced briefing",exact:true})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Interpretation",exact:true})).toBeVisible();
+  await expect(page.getByRole("link",{name:"Retained release",exact:true}).first()).toHaveAttribute("href","#public-evidence-durable-1");
+  await page.getByRole("button",{name:"Refresh sources",exact:true}).click();
+  await expect.poll(()=>posts.length).toBe(1);
+  expect(posts[0].action).toBe("sources");
+  await page.getByRole("link",{name:"Retained release",exact:true}).first().click();
+  await expect(page.locator("#public-evidence-durable-1")).toContainText("The published source reports this exact fact.");
+  await expect(page.locator("#intelligence-briefing")).toContainText("Queued requests need a running intelligence service");
+});
+
 test("synthetic intelligence controls and briefs work without account data",async({page},testInfo)=>{
   test.skip(testInfo.project.name!=="desktop","The synthetic demo has one mutable workspace");
   const errors=[];page.on("pageerror",error=>errors.push(error.message));

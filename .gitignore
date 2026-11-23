@@ -13,6 +13,7 @@ bot_ledger.sqlite3*
 investment.sqlite3*
 /local-investment/
 /.goldscout-planning/
+**/.goldscout-intelligence/
 /.goldscout-connections.json*
 /.goldscout-settings.json*
 **/.etoro/

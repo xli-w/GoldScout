@@ -1,16 +1,20 @@
 """Allowlisted calendar adapters. Importing this module performs no IO."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
+from html.parser import HTMLParser
 import http.client
 import ipaddress
+import json
 import logging
+import re
 import socket
 import ssl
 import threading
 import time
 from typing import Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dns_config import DNSConfigurationError, resolve_host
 from market_intelligence.contracts import CalendarEvent, SourceCoverage, SYMBOLS, utc_time
@@ -23,12 +27,31 @@ _SOCKET_TYPE = socket.socket
 BLS_CALENDAR_URL = "https://www.bls.gov/schedule/news_release/bls.ics"
 BEA_CALENDAR_URL = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
 FED_NEWS_URL = "https://www.federalreserve.gov/feeds/press_monetary.xml"
+ONS_UPCOMING_URL = "https://api.beta.ons.gov.uk/v1/search/releases?limit=1000&sort=release_date_asc&release-type=type-upcoming"
+ONS_CANCELLED_URL = "https://api.beta.ons.gov.uk/v1/search/releases?limit=1000&sort=release_date_asc&release-type=type-cancelled"
+BOE_MPC_DATES_URL = "https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates"
 CALENDAR_ENDPOINTS = {
     BLS_CALENDAR_URL: ("www.bls.gov", "/schedule/news_release/bls.ics"),
     BEA_CALENDAR_URL: ("www.bea.gov", "/news/schedule/ics/online-calendar-subscription.ics"),
 }
 RSS_ENDPOINTS = {
     FED_NEWS_URL: ("www.federalreserve.gov", "/feeds/press_monetary.xml"),
+    "https://apps.bea.gov/rss/rss.xml": ("apps.bea.gov", "/rss/rss.xml"),
+}
+JSON_ENDPOINTS = {
+    ONS_UPCOMING_URL: ("api.beta.ons.gov.uk", "/v1/search/releases?limit=1000&sort=release_date_asc&release-type=type-upcoming"),
+    ONS_CANCELLED_URL: ("api.beta.ons.gov.uk", "/v1/search/releases?limit=1000&sort=release_date_asc&release-type=type-cancelled"),
+}
+HTML_ENDPOINTS = {
+    BOE_MPC_DATES_URL: ("www.bankofengland.co.uk", "/monetary-policy/upcoming-mpc-dates"),
+    "https://www.ons.gov.uk/economy/inflationandpriceindices/bulletins/consumerpriceinflation/latest":
+        ("www.ons.gov.uk", "/economy/inflationandpriceindices/bulletins/consumerpriceinflation/latest"),
+    "https://www.bankofengland.co.uk/monetary-policy-summary-and-minutes/2026/november-2026":
+        ("www.bankofengland.co.uk", "/monetary-policy-summary-and-minutes/2026/november-2026"),
+    "https://www.bea.gov/news/2026/personal-income-and-outlays-september-2026":
+        ("www.bea.gov", "/news/2026/personal-income-and-outlays-september-2026"),
+    "https://www.federalreserve.gov/newsevents/pressreleases/monetary20261028a.htm":
+        ("www.federalreserve.gov", "/newsevents/pressreleases/monetary20261028a.htm"),
 }
 MAX_DOWNLOAD_BYTES = 1048576
 SERIES = {
@@ -76,6 +99,7 @@ class CalendarBatch:
     events: Tuple[CalendarEvent, ...]
     input_hash: str
     ignored_events: int
+    complete_snapshot: bool = False
 
     def __post_init__(self):
         if not isinstance(self.source, SourceCoverage) or type(self.events) is not tuple or len(self.events) > 1000:
@@ -86,6 +110,8 @@ class CalendarBatch:
             raise ValueError("Provider batch requires matching downloaded provenance")
         if type(self.ignored_events) is not int or not 0 <= self.ignored_events <= 1000:
             raise ValueError("Invalid ignored event count")
+        if type(self.complete_snapshot) is not bool:
+            raise ValueError("Snapshot completeness must be explicit")
 
 
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -183,11 +209,22 @@ class CalendarTransport:
             abort()
 
     def fetch(self, url, cancel_event=None):
-        endpoints = {**CALENDAR_ENDPOINTS, **RSS_ENDPOINTS}
+        endpoints = {**CALENDAR_ENDPOINTS, **RSS_ENDPOINTS, **JSON_ENDPOINTS, **HTML_ENDPOINTS}
         if url not in endpoints:
             raise ProviderError("endpoint_refused")
         host, path = endpoints[url]
-        rss = url in RSS_ENDPOINTS
+        if url in RSS_ENDPOINTS:
+            accepted_types = ("application/rss+xml", "application/xml", "text/xml")
+            accept_header = "application/rss+xml, application/xml, text/xml"
+        elif url in JSON_ENDPOINTS:
+            accepted_types = ("application/json",)
+            accept_header = "application/json"
+        elif url in HTML_ENDPOINTS:
+            accepted_types = ("text/html",)
+            accept_header = "text/html"
+        else:
+            accepted_types = ("text/calendar", "text/plain")
+            accept_header = "text/calendar"
         if cancel_event is not None and cancel_event.is_set():
             raise ProviderError("request_timeout")
         if not self.fetch_lock.acquire(blocking=False):
@@ -235,8 +272,8 @@ class CalendarTransport:
                 raise ProviderError("request_timeout")
             connection.request("GET", path, headers={
                 "Host": host,
-                "User-Agent": "TraderMarketIntelligence/1 (calendar advisory)",
-                "Accept": "application/rss+xml, application/xml, text/xml" if rss else "text/calendar",
+                "User-Agent": "GoldScoutMarketIntelligence/1.0 (+https://github.com/xli-w/GoldScout)",
+                "Accept": accept_header,
                 "Accept-Encoding": "identity", "Connection": "close"})
             active_socket = connection.sock
             stage = "response"
@@ -245,7 +282,6 @@ class CalendarTransport:
                 raise ProviderError("http_unavailable")
             if response.getheader("Content-Encoding", "identity").lower() != "identity":
                 raise ProviderError("encoding_refused")
-            accepted_types = ("application/rss+xml", "application/xml", "text/xml") if rss else ("text/calendar", "text/plain")
             if response.getheader("Content-Type", "").split(";", 1)[0].strip().lower() not in accepted_types:
                 raise ProviderError("content_refused")
             length = response.getheader("Content-Length")
@@ -312,10 +348,244 @@ def parse_bea_calendar(payload: bytes, received_at: datetime) -> CalendarBatch:
     return _parse_calendar(payload, received_at, "bea", BEA_CALENDAR_URL, BEA_SERIES, dated_titles=True)
 
 
-CALENDAR_SOURCES = {
-    "bls": (BLS_CALENDAR_URL, parse_bls_calendar, tuple(sorted(set(SERIES.values())))),
-    "bea": (BEA_CALENDAR_URL, parse_bea_calendar, tuple(sorted(set(BEA_SERIES.values())))),
-}
+def parse_ons_calendar(upcoming_payload, cancelled_payload, upcoming_received_at, cancelled_received_at):
+    utc_time(upcoming_received_at)
+    utc_time(cancelled_received_at)
+    if cancelled_received_at < upcoming_received_at:
+        raise ProviderError("invalid_calendar")
+
+    def records(payload):
+        if not isinstance(payload, bytes) or not payload or len(payload) > MAX_DOWNLOAD_BYTES:
+            raise ProviderError("invalid_calendar")
+
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("Duplicate JSON field")
+                result[key] = value
+            return result
+
+        def reject_constant(value):
+            raise ValueError(f"Invalid JSON constant: {value}")
+
+        try:
+            response = json.loads(payload, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+            raise ProviderError("invalid_calendar") from exc
+        if type(response) is not dict or type(response.get("breakdown")) is not dict:
+            raise ProviderError("invalid_calendar")
+        total = response["breakdown"].get("total")
+        releases = response.get("releases")
+        if type(total) is not int or not 0 <= total <= 1000 or type(releases) is not list:
+            raise ProviderError("invalid_calendar")
+        if len(releases) != total:
+            raise ProviderError("response_incomplete")
+        return releases
+
+    def release_event(item, received_at, cancelled=False):
+        if type(item) is not dict or type(item.get("description")) is not dict:
+            raise ProviderError("invalid_calendar")
+        uri = item.get("uri")
+        description = item["description"]
+        title = description.get("title")
+        if (not isinstance(uri, str) or not re.fullmatch(r"/releases/[A-Za-z0-9._~/-]{1,500}", uri)
+                or ".." in uri.split("/") or not isinstance(title, str) or not title.strip()
+                or len(title) > 500):
+            raise ProviderError("invalid_calendar")
+        category = _ons_category(title)
+        if category is None:
+            return None
+
+        release_date = description.get("release_date")
+        scheduled_at = None
+        if release_date is not None:
+            if not isinstance(release_date, str) or len(release_date) > 64:
+                raise ProviderError("invalid_calendar")
+            try:
+                parsed = datetime.fromisoformat(release_date.replace("Z", "+00:00"))
+                if parsed.utcoffset() is None:
+                    raise ValueError
+                scheduled_at = parsed.astimezone(timezone.utc)
+            except ValueError as exc:
+                raise ProviderError("invalid_calendar") from exc
+
+        flags = ("cancelled", "finalised", "postponed")
+        if any(type(description.get(name)) is not bool for name in flags):
+            raise ProviderError("invalid_calendar")
+        if cancelled != description["cancelled"]:
+            raise ProviderError("invalid_calendar")
+        provisional_date = description.get("provisional_date")
+        if provisional_date is not None and (
+                not isinstance(provisional_date, str) or len(provisional_date) > 128
+                or any(ord(character) < 32 or character in "<>" for character in provisional_date)):
+            raise ProviderError("invalid_calendar")
+
+        changes = item.get("date_changes")
+        notes = []
+        if changes is not None:
+            if type(changes) is not list or len(changes) > 10:
+                raise ProviderError("invalid_calendar")
+            for change in changes:
+                if type(change) is not dict:
+                    raise ProviderError("invalid_calendar")
+                previous = change.get("previous_date")
+                notice = change.get("change_notice")
+                if previous is not None:
+                    if not isinstance(previous, str) or len(previous) > 64:
+                        raise ProviderError("invalid_calendar")
+                    notes.append(f"Previous scheduled date: {previous}")
+                if notice is not None:
+                    if (not isinstance(notice, str) or not notice.strip() or len(notice) > 1000
+                            or any(ord(character) < 32 or character in "<>" for character in notice)):
+                        raise ProviderError("invalid_calendar")
+                    notes.append(notice.strip())
+        if provisional_date:
+            notes.append(f"Provisional date: {provisional_date}")
+        if len(notes) > 10:
+            raise ProviderError("invalid_calendar")
+
+        if cancelled:
+            status = "cancelled"
+        elif description["postponed"]:
+            status = "postponed"
+        elif provisional_date is not None or not description["finalised"]:
+            status = "tentative"
+        else:
+            status = "scheduled"
+        event_id = "ons-" + hashlib.sha256(uri.encode("utf-8")).hexdigest()
+        return CalendarEvent(
+            event_id, "ons", "https://www.ons.gov.uk" + uri, category, (), scheduled_at,
+            received_at, title.strip(), status, source_timezone="UTC", source_notes=tuple(notes))
+
+    upcoming = records(upcoming_payload)
+    cancelled_records = records(cancelled_payload)
+    events = []
+    ignored = 0
+    for item in upcoming:
+        event = release_event(item, upcoming_received_at)
+        if event is None:
+            ignored += 1
+        else:
+            events.append(event)
+    for item in cancelled_records:
+        event = release_event(item, cancelled_received_at, cancelled=True)
+        if event is None:
+            ignored += 1
+        elif event.scheduled_at is not None and event.scheduled_at < cancelled_received_at - timedelta(days=30):
+            ignored += 1
+        else:
+            events.append(event)
+    if len(events) > 1000 or len({event.event_id for event in events}) != len(events):
+        raise ProviderError("invalid_calendar")
+
+    checked_at = cancelled_received_at
+    input_hash = hashlib.sha256(
+        len(upcoming_payload).to_bytes(4, "big") + upcoming_payload
+        + len(cancelled_payload).to_bytes(4, "big") + cancelled_payload).hexdigest()
+    source = SourceCoverage(
+        "ons", ("employment", "growth", "inflation"), checked_at,
+        None, None, "unavailable", input_hash, ONS_UPCOMING_URL,
+        (ONS_UPCOMING_URL, ONS_CANCELLED_URL))
+    return CalendarBatch(source, tuple(events), input_hash, ignored, complete_snapshot=True)
+
+
+def _ons_category(title):
+    value = title.casefold()
+    if any(term in value for term in (
+            "consumer price", "producer price", "cpi", "cpih", "inflation")):
+        return "inflation"
+    if any(term in value for term in (
+            "labour market", "labour force", "employment", "unemployment", "vacanc", "earnings")):
+        return "employment"
+    if any(term in value for term in (
+            "gross domestic product", "gdp", "retail sales", "public sector finances",
+            "trade in goods", "trade in services", "national accounts", "economic activity")):
+        return "growth"
+    return None
+
+
+class _VisibleText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in ("script", "style"):
+            self.skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in ("script", "style") and self.skip_depth:
+            self.skip_depth -= 1
+
+    def handle_data(self, data):
+        if not self.skip_depth and data.strip():
+            self.parts.append(data.strip())
+
+
+def parse_boe_mpc_calendar(payload, received_at):
+    utc_time(received_at)
+    if not isinstance(payload, bytes) or not payload or len(payload) > MAX_DOWNLOAD_BYTES:
+        raise ProviderError("invalid_calendar")
+    try:
+        text = payload.decode("utf-8")
+        parser = _VisibleText()
+        parser.feed(text)
+        parser.close()
+        content = " ".join(parser.parts)
+    except (UnicodeDecodeError, ValueError):
+        raise ProviderError("invalid_calendar") from None
+    year_sections = re.findall(
+        r"(20\d{2})\s+confirmed dates(.*?)(?=20\d{2}\s+confirmed dates|Current Bank Rate|"
+        r"Monetary Policy Committee Reports and announcements|$)", content, re.IGNORECASE)
+    if not year_sections:
+        raise ProviderError("invalid_calendar")
+    try:
+        london = ZoneInfo("Europe/London")
+    except ZoneInfoNotFoundError as exc:
+        raise ProviderError("parser_unavailable") from exc
+
+    events, seen_years, future_years = [], set(), set()
+    months = {name.casefold(): index for index, name in enumerate(
+        ("January", "February", "March", "April", "May", "June", "July", "August",
+         "September", "October", "November", "December"), start=1)}
+    for year_text, section in year_sections:
+        year = int(year_text)
+        if year in seen_years:
+            raise ProviderError("invalid_calendar")
+        seen_years.add(year)
+        dates = re.findall(r"Thursday\s+(\d{1,2})\s+([A-Za-z]+)", section, re.IGNORECASE)
+        if len(dates) != 8:
+            raise ProviderError("invalid_calendar")
+        seen_dates = set()
+        for day_text, month_text in dates:
+            try:
+                month = months[month_text.casefold()]
+                local = datetime(year, month, int(day_text), 12, 0, tzinfo=london)
+            except (KeyError, ValueError) as exc:
+                raise ProviderError("invalid_calendar") from exc
+            if local.weekday() != 3 or local.date() in seen_dates:
+                raise ProviderError("invalid_calendar")
+            seen_dates.add(local.date())
+            scheduled_at = local.astimezone(timezone.utc)
+            if scheduled_at > received_at:
+                events.append(CalendarEvent(
+                    f"boe-mpc-{scheduled_at:%Y-%m-%d}", "boe_mpc", BOE_MPC_DATES_URL,
+                    "monetary_policy", (), scheduled_at, received_at,
+                    f"MPC Bank Rate announcement and minutes - {local:%d %B %Y}",
+                    source_timezone="Europe/London",
+                    source_notes=("The Bank states MPC summaries and minutes are published at 12:00 noon on Thursdays.",)))
+                if year > received_at.year:
+                    future_years.add(year)
+    if len(events) > 24 or not future_years:
+        raise ProviderError("invalid_calendar")
+    events.sort(key=lambda event: event.scheduled_at)
+    input_hash = hashlib.sha256(payload).hexdigest()
+    source = SourceCoverage(
+        "boe_mpc", ("monetary_policy",), received_at,
+        None, None, "unavailable", input_hash, BOE_MPC_DATES_URL)
+    return CalendarBatch(source, tuple(events), input_hash, 0, complete_snapshot=True)
 
 
 def _parse_calendar(payload, received_at, source_name, source_url, series, dated_titles=False):
@@ -398,3 +668,11 @@ def _parse_calendar(payload, received_at, source_name, source_url, series, dated
         raise
     except (ValueError, TypeError, AttributeError, OverflowError, RecursionError) as exc:
         raise ProviderError("invalid_calendar") from exc
+
+
+CALENDAR_SOURCES = {
+    "bls": (BLS_CALENDAR_URL, parse_bls_calendar, tuple(sorted(set(SERIES.values())))),
+    "bea": (BEA_CALENDAR_URL, parse_bea_calendar, tuple(sorted(set(BEA_SERIES.values())))),
+    "ons": (ONS_UPCOMING_URL, parse_ons_calendar, ("employment", "growth", "inflation")),
+    "boe_mpc": (BOE_MPC_DATES_URL, parse_boe_mpc_calendar, ("monetary_policy",)),
+}

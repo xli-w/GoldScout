@@ -119,7 +119,17 @@ class IntelligenceWorkspace:
                         or any(brief.available_at>generated_at for brief in briefs)):
                     raise StoreError("clock_invalid")
                 budget=self.store._analysis_usage(handle,generated_at)
+            calendar_events = sorted(
+                calendar.events if calendar else (),
+                key=lambda event: (
+                    event.scheduled_at is None, event.scheduled_at or generated_at,
+                    event.source, event.event_id))
+            upcoming_events = [event for event in calendar_events
+                               if event.scheduled_at is None or event.scheduled_at >= generated_at]
+            foundation = self.store.foundation_snapshot(generated_at) if hasattr(self.store, "foundation_snapshot") else {
+                "briefing": None, "source_health": [], "operation": None, "schema_capable": False}
             return {"source_mode":"demo" if self.demo else "recorded","database_id":self.store.database_id,"generated_at":generated_at.isoformat().replace("+00:00","Z"),
+                    "foundation":foundation,
                     "settings":json.loads(encode(settings)),"profiles":list(self.profiles),"controls_enabled":self.controls_enabled,
                     "news_capable":self.store.schema_version>=3,"ai_capable":self.store.schema_version>=4 and bool(self.profiles),
                     "service_status_capable":self.store.schema_version>=5,
@@ -127,7 +137,10 @@ class IntelligenceWorkspace:
                     "service_status":json.loads(encode(service_status)) if service_status else None,
                     "source_status":json.loads(encode(status)) if status else None,
                     "calendar_sources":[json.loads(encode(item)) for item in calendar.sources] if calendar else [],
-                    "calendar":[json.loads(encode(item)) for item in calendar.events[:100]] if calendar else [],
+                    "calendar":[json.loads(encode(item)) for item in calendar_events[:100]],
+                    "calendar_total":len(calendar_events),"calendar_truncated":len(calendar_events)>100,
+                    "upcoming_calendar":[json.loads(encode(item)) for item in upcoming_events[:100]],
+                    "upcoming_calendar_total":len(upcoming_events),"upcoming_calendar_truncated":len(upcoming_events)>100,
                     "news":[json.loads(encode(item)) for item in archive.batch.items[:50]] if archive else [],
                     "news_last_success_at":archive.available_at.isoformat().replace("+00:00","Z") if archive else None,
                     "briefs":[json.loads(encode(item)) for item in briefs],"controls":[json.loads(encode(item)) for item in controls],

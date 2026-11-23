@@ -72,6 +72,37 @@ class IntelligenceWireTests(CalendarFixture, unittest.TestCase):
         for record in (self.settings, self.snapshot, request, receipt):
             self.validator.validate(self.wire(record))
 
+    def test_calendar_wire_allows_unlinked_macro_sources_only(self):
+        us_snapshot = self.wire(self.snapshot)
+        us_snapshot["events"][0]["symbols"] = []
+        self.assertFalse(self.validator.is_valid(us_snapshot))
+
+        macro_source = SourceCoverage(
+            "ons", ("inflation",), self.now - timedelta(hours=1),
+            self.now - timedelta(hours=1), self.now + timedelta(days=1), "healthy",
+            "a" * 64, "https://api.beta.ons.gov.uk/v1/search/releases?type=upcoming",
+            ("https://api.beta.ons.gov.uk/v1/search/releases?type=upcoming",
+             "https://api.beta.ons.gov.uk/v1/search/releases?type=cancelled"))
+        macro_event = replace(
+            self.event, event_id="ons-release", source="ons",
+            source_url="https://www.ons.gov.uk/releases/cpi", symbols=(), source_timezone="UTC")
+        macro_snapshot = CalendarSnapshot(
+            1, self.now - timedelta(hours=1), (macro_source,), (macro_event,))
+        self.validator.validate(self.wire(macro_snapshot))
+        missing_ons_endpoints = self.wire(macro_snapshot)
+        missing_ons_endpoints["sources"][0]["source_urls"] = []
+        self.assertFalse(self.validator.is_valid(missing_ons_endpoints))
+
+        unknown_source = self.wire(macro_snapshot)
+        unknown_source["events"][0]["source"] = "unknown"
+        self.assertFalse(self.validator.is_valid(unknown_source))
+
+    def test_legacy_calendar_event_without_source_notes_remains_readable(self):
+        snapshot = self.wire(self.snapshot)
+        snapshot["events"][0].pop("source_notes")
+        restored = construct(CalendarSnapshot, snapshot)
+        self.assertEqual(restored.events[0].source_notes, ())
+
     def test_legacy_source_provenance_remains_unknown_and_incomplete_pairs_are_rejected(self):
         snapshot = self.wire(self.snapshot)
         snapshot["sources"][0].pop("input_hash")

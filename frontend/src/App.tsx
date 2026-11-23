@@ -39,7 +39,7 @@ export function App() {
     enabled: workspace.isSuccess && workspace.data === "investment",
   });
   const intelligencePage = location.pathname === "/intelligence";
-  const intelligence = useIntelligence(intelligencePage && workspace.isSuccess && workspace.data !== "setup");
+  const intelligence = useIntelligence(intelligencePage && workspace.isSuccess);
   const [now, setNow] = useState(Date.now());
   const [valueChangeSelection, setValueChangeSelection] = useState<ValueChangeSelection | null>(null);
   useEffect(() => {
@@ -60,13 +60,13 @@ export function App() {
   if (workspace.isPending) return <main className="loading" role="status">Loading portfolio workspace</main>;
   if (location.pathname === "/etoro-portfolio") return <Navigate
     to={workspace.data === "setup" ? "/setup#setup-etoro" : "/investment#investment-etoro"} replace />;
-  if (workspace.data === "setup" || location.pathname === "/setup") return <div className="setup-shell">
+  if ((workspace.data === "setup" && !intelligencePage) || location.pathname === "/setup") return <div className="setup-shell">
     <main><InvestmentSetup onComplete={() => {
       void Promise.all([
         client.invalidateQueries({ queryKey: ["workspace"] }),
         client.invalidateQueries({ queryKey: ["investment"] }),
       ]).then(() => navigate("/investment", { replace: true }));
-    }} /></main>
+    }} /><p><NavLink to="/intelligence">Set up public intelligence</NavLink></p></main>
   </div>;
   if (location.pathname === "/") return <Navigate to="/investment" replace />;
 
@@ -141,10 +141,13 @@ export function App() {
           : location.pathname === "/investment/reviews" ? <MonitoringWorkflowPage />
           : location.pathname === "/investment-guide" ? <InvestmentGuide />
           : location.pathname === "/planning" ? <PlanningProfilePage />
-          : location.pathname === "/settings" ? <SettingsPage
+          : location.pathname === "/settings" ? <><section className="position-section">
+            <h2>Public intelligence</h2><p>Choose public UK/US sources and an optional AI profile, then enable automatic collection.</p>
+            <NavLink to="/intelligence#intelligence-setup">Set up intelligence</NavLink>
+          </section><SettingsPage
             session={settingsSession.data}
             loadError={settingsSession.isError}
-            onSaved={() => void client.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY })} />
+            onSaved={() => void client.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY })} /></>
           : intelligencePage ? <IntelligenceView data={intelligence} />
           : <div className="error-state" role="alert"><p>This page is not part of GoldScout.</p><NavLink to="/investment">Open investment records</NavLink></div>}
         <footer><span>GoldScout <span className="footer-separator">/</span> <NavLink to="/investment-guide">Help</NavLink></span>

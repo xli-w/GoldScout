@@ -13,7 +13,7 @@ def main(argv=None):
                         help="Local investment workspace; defaults to local-investment in a source checkout")
     parser.add_argument("--api-only", action="store_true", help="Development API without production frontend assets")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--intelligence-database",type=Path,help="Existing separate intelligence database")
+    parser.add_argument("--intelligence-database",type=Path,help="Existing standalone intelligence database (otherwise use dashboard-managed setup)")
     parser.add_argument("--intelligence-demo",action="store_true",help="Synthetic temporary intelligence with demo-only controls")
     parser.add_argument("--analysis-controls",action="store_true",help="Enable local analysis settings only")
     parser.add_argument("--analysis-profiles",nargs="*",default=[],help="Registered nonsecret AI profile names")

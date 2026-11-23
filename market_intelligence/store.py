@@ -21,7 +21,7 @@ from market_intelligence.analysis import AnalysisBrief, AnalysisLimits, Evidence
 
 
 APPLICATION_ID = 0x4D494E54
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 MAX_PAYLOAD = 524288
 MAX_RAW_NEWS = 1048576
 MAX_SERVICE_PAYLOAD = 8192
@@ -29,7 +29,7 @@ _Record = TypeVar("_Record")
 
 
 def storage_schema(version=SCHEMA_VERSION):
-    if version not in (1, 2, 3, 4, 5):
+    if version not in (1, 2, 3, 4, 5, 6, 7):
         raise StoreError("schema_unsupported")
     definitions = {
         ("table", "identity"): "CREATE TABLE identity(id INTEGER PRIMARY KEY CHECK(id=1), database_id TEXT NOT NULL CHECK(length(database_id) BETWEEN 1 AND 128))",
@@ -70,6 +70,9 @@ def storage_schema(version=SCHEMA_VERSION):
         definitions.update(analysis_storage_schema())
     if version >= 5:
         definitions.update(service_status_schema())
+    if version >= 7:
+        from market_intelligence.public_store import public_storage_schema
+        definitions.update(public_storage_schema())
     return definitions
 
 
@@ -178,9 +181,11 @@ def parse_time(value):
 
 def construct(record_type: type[_Record], payload: object) -> _Record:
     expected = {field.name for field in fields(record_type)}
-    optional = {"input_hash", "source_url"} if record_type is SourceCoverage else set()
+    optional = {"input_hash", "source_url", "source_urls"} if record_type is SourceCoverage else set()
     if record_type is AnalysisBrief:
         optional = {"reservation_id"}
+    if record_type is CalendarEvent:
+        optional = {"source_notes"}
     if type(payload) is not dict or set(payload) - expected or expected - set(payload) - optional:
         raise ValueError("Stored record fields do not match the contract")
     values = dict(payload)
@@ -208,12 +213,18 @@ def construct(record_type: type[_Record], payload: object) -> _Record:
         if type(values["evidence_ids"]) is not list:
             raise ValueError("Invalid stored claim references")
         values["evidence_ids"] = tuple(values["evidence_ids"])
+    if record_type is CalendarEvent and "source_notes" in values:
+        if type(values["source_notes"]) is not list:
+            raise ValueError("Invalid source notes")
+        values["source_notes"] = tuple(values["source_notes"])
+    elif record_type is CalendarEvent:
+        values["source_notes"] = ()
     if record_type is ServiceObservation:
         if type(values["calendar_sources"]) is not list or type(values["failures"]) is not list:
             raise ValueError("Invalid service observation collections")
         values["calendar_sources"] = tuple(values["calendar_sources"])
         values["failures"] = tuple(construct(ServiceFailure, item) for item in values["failures"])
-    for name in ("symbols", "categories"):
+    for name in ("symbols", "categories", "source_urls"):
         if name in values:
             if type(values[name]) is not list:
                 raise ValueError("Stored collection must be an array")
@@ -285,13 +296,13 @@ def connection(path, writable=False, expected_id=None):
         if handle.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID:
             raise StoreError("foreign_database")
         version = handle.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (1, 2, 3, 4, SCHEMA_VERSION):
+        if version not in (1, 2, 3, 4, 5, 6, SCHEMA_VERSION):
             raise StoreError("schema_unsupported")
         if handle.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             raise StoreError("schema_unsupported")
         schema = handle.execute(f"SELECT {bounded_column('type', 16)}, {bounded_column('name', 128)}, "
                                 f"{bounded_column('sql', 8192)} FROM sqlite_master "
-                                "WHERE name NOT LIKE 'sqlite_%' LIMIT 65").fetchall()
+                                f"WHERE name NOT LIKE 'sqlite_%' LIMIT {len(storage_schema(version)) + 1}").fetchall()
         actual_schema = {(row["type"], row["name"]): row["sql"] for row in schema}
         if actual_schema != storage_schema(version):
             raise StoreError("storage_invalid")
@@ -370,6 +381,11 @@ def upgrade(path):
             if version < 5:
                 for statement in service_status_schema().values():
                     handle.execute(statement)
+            if version < 7:
+                from market_intelligence.public_store import public_storage_schema
+                for statement in public_storage_schema().values():
+                    handle.execute(statement)
+                store._seed_calendar_baselines(handle)
             if version != SCHEMA_VERSION:
                 handle.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     finally:
@@ -377,7 +393,10 @@ def upgrade(path):
     return IntelligenceStore(path)
 
 
-class IntelligenceStore:
+from market_intelligence.public_store import PublicStoreMethods
+
+
+class IntelligenceStore(PublicStoreMethods):
     def __init__(self, path):
         self.path = database_path(path)
         with connection(self.path) as handle:
@@ -563,18 +582,31 @@ class IntelligenceStore:
             record = self._command(handle, request_id)
             return record[1] if record else None
 
-    def enqueue(self, request, now):
+    def enqueue(self, request, now, public_configuration=None):
         utc_time(now)
         if not isinstance(request, ControlRequest) or request.requested_at > now:
             raise ValueError("A validated, already observed control request is required")
         if request.database_id != self.database_id:
             raise StoreError("identity_mismatch")
         payload = encode(request)
+        selection = None
+        if public_configuration is not None:
+            from market_intelligence.public_store import selection_payload
+            selection = selection_payload(public_configuration, request.settings)
         with connection(self.path, writable=True, expected_id=self.database_id) as handle:
+            version = handle.execute("PRAGMA user_version").fetchone()[0]
+            if selection is not None and version < 7:
+                raise StoreError("upgrade_required")
             existing = self._command(handle, request.request_id)
             if existing:
                 if existing[2] != digest(payload):
                     raise StoreError("request_conflict")
+                if version >= 7:
+                    prior = handle.execute("SELECT payload,payload_hash FROM public_configuration_requests WHERE request_id=?",
+                                           (request.request_id,)).fetchone()
+                    if ((prior is None) != (selection is None)
+                            or prior is not None and tuple(prior) != selection):
+                        raise StoreError("request_conflict")
                 return existing[1]
             if handle.execute("SELECT COUNT(*) FROM commands WHERE status='pending'").fetchone()[0] >= 100:
                 raise StoreError("queue_full")
@@ -586,6 +618,9 @@ class IntelligenceStore:
                            (request.request_id, payload, digest(payload), encoded_receipt, digest(encoded_receipt), status,
                             now.isoformat().replace("+00:00", "Z")))
             self._event(handle, receipt, now)
+            if selection is not None:
+                handle.execute("INSERT INTO public_configuration_requests VALUES(?,?,?)",
+                               (request.request_id, *selection))
             return receipt
 
     def _event(self, handle, receipt, now):
@@ -669,6 +704,19 @@ class IntelligenceStore:
             raise ValueError("Calendar must already be available")
         payload = encode(snapshot)
         with connection(self.path, writable=True, expected_id=self.database_id) as handle:
+            version = handle.execute("PRAGMA user_version").fetchone()[0]
+            if (version < 6 and any(source.source in ("ons", "boe_mpc") for source in snapshot.sources)):
+                raise StoreError("upgrade_required")
+            if version < 6:
+                if (any(event.source_notes or event.status == "postponed" for event in snapshot.events)
+                        or any(source.source_urls for source in snapshot.sources)):
+                    raise StoreError("upgrade_required")
+                legacy = json.loads(payload)
+                for event in legacy["events"]:
+                    del event["source_notes"]
+                for source in legacy["sources"]:
+                    del source["source_urls"]
+                payload = json.dumps(legacy, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
             settings, observed_at = self._settings(handle)
             if settings.revision != settings_revision:
                 raise StoreError("settings_changed")
@@ -683,6 +731,8 @@ class IntelligenceStore:
                 raise StoreError("clock_invalid")
             handle.execute("INSERT INTO calendar_history VALUES(?,?,?,?)",
                            (snapshot.revision, settings_revision, payload, digest(payload)))
+            if version >= 7:
+                self._record_calendar_baselines(handle, snapshot)
 
     def _require_news_schema(self, handle):
         if handle.execute("PRAGMA user_version").fetchone()[0] < 2:

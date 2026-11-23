@@ -15,7 +15,7 @@ from dashboard.app import create_app
 from dashboard.intelligence import IntelligenceWorkspace
 from fastapi.testclient import TestClient
 from market_intelligence.analysis import JSONSummaryProvider, ProviderResponse
-from market_intelligence.contracts import ServiceFailure
+from market_intelligence.contracts import CalendarEvent, CalendarSnapshot, ServiceFailure, SourceCoverage
 from market_intelligence.news import NewsObservation, parse_fed_news
 from market_intelligence.providers import BEA_CALENDAR_URL, BLS_CALENDAR_URL, ProviderError
 from market_intelligence.store import IntelligenceStore, StoreBusy, StoreError
@@ -444,6 +444,30 @@ class ServiceDashboardIntegrationTests(IntelligenceStoreFixture, unittest.TestCa
             "uncertainties": ["Market reaction is unknown."],
             "symbols": ["SPY"], "recommendation": "watch",
         }), 10)
+
+    def test_dashboard_sorts_calendar_and_reports_truncated_total(self):
+        self.store.enqueue(self.request(enabled=True), self.now)
+        self.store.apply_pending(self.now)
+        source = SourceCoverage(
+            "ons", ("inflation",), self.now, self.now + timedelta(minutes=1),
+            self.now + timedelta(minutes=102), "healthy")
+        events = tuple(
+            CalendarEvent(
+                f"ons-event-{index:03d}", "ons", "https://www.ons.gov.uk/releases/example",
+                "inflation", (), self.now + timedelta(minutes=index + 1), self.now,
+                f"Release {index:03d}", source_timezone="UTC")
+            for index in range(101)
+        ) + (CalendarEvent(
+            "ons-unknown-date", "ons", "https://www.ons.gov.uk/releases/unknown",
+            "inflation", (), None, self.now, "Unscheduled release", "tentative",
+            source_timezone="UTC"),)
+        self.store.publish_calendar(CalendarSnapshot(1, self.now, (source,), events), 1, self.now)
+
+        snapshot = self.snapshot()
+        self.assertEqual((snapshot["calendar_total"], len(snapshot["calendar"]),
+                          snapshot["calendar_truncated"]), (102, 100, True))
+        self.assertEqual(snapshot["calendar"][0]["event_id"], "ons-event-000")
+        self.assertEqual(snapshot["calendar"][-1]["event_id"], "ons-event-099")
 
     def test_supervised_analysis_uses_one_completion_and_no_feed_fetch(self):
         provider = Mock(side_effect=self.complete)

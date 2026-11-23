@@ -14,7 +14,9 @@ from unittest.mock import patch
 
 from dashboard.intelligence import IntelligenceWorkspace
 from market_intelligence.analysis import AnalysisLimits, analysis_input
-from market_intelligence.contracts import CalendarSnapshot, ControlRequest, IntelligenceSettings
+from market_intelligence.contracts import (
+    CalendarEvent, CalendarSnapshot, ControlRequest, IntelligenceSettings, SourceCoverage,
+)
 from market_intelligence.store import IntelligenceStore, StoreError, digest, encode, initialize, storage_schema, upgrade
 from market_intelligence.news import parse_fed_news
 from market_intelligence.service import IntelligenceService
@@ -83,7 +85,7 @@ class IntelligenceArchiveMigrationTests(unittest.TestCase):
 
     def test_unknown_or_foreign_storage_is_not_upgraded(self):
         with closing(sqlite3.connect(self.path)) as handle:
-            handle.execute("PRAGMA user_version=6")
+            handle.execute("PRAGMA user_version=8")
         before = self.path.read_bytes()
         with self.assertRaises(StoreError):
             upgrade(self.path)
@@ -98,8 +100,35 @@ class IntelligenceArchiveMigrationTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())["schema_version"], 1)
         with redirect_stdout(io.StringIO()) as output:
             self.assertEqual(main(["upgrade", "--database", str(self.path)]), 0)
-        self.assertEqual(json.loads(output.getvalue())["schema_version"], 5)
+        self.assertEqual(json.loads(output.getvalue())["schema_version"], 7)
         self.assertEqual(IntelligenceStore(self.path).database_id, self.store.database_id)
+
+    def test_version_five_requires_explicit_upgrade_before_uk_calendar_use(self):
+        path = Path(self.directory.name) / "version-five.sqlite3"
+        old = initialize(path, self.now, schema_version=5)
+        request = ControlRequest("enable", old.database_id, 0, self.now,
+                                 self.now + timedelta(minutes=5),
+                                 IntelligenceSettings(enabled=True, revision=1))
+        old.enqueue(request, self.now)
+        old.apply_pending(self.now)
+        snapshot = CalendarSnapshot(1, self.now, (), ())
+        old.publish_calendar(snapshot, 1, self.now)
+        uk_source = SourceCoverage("ons", ("inflation",), None, None, None, "unavailable")
+        uk_event = CalendarEvent(
+            "ons-release", "ons", "https://www.ons.gov.uk/releases/cpi", "inflation", (),
+            self.now + timedelta(days=1), self.now, "Consumer price inflation", source_timezone="UTC")
+        with self.assertRaises(StoreError) as result:
+            old.publish_calendar(CalendarSnapshot(2, self.now, (uk_source,), (uk_event,)), 1, self.now)
+        self.assertEqual(result.exception.code, "upgrade_required")
+
+        with self.assertRaises(StoreError) as result:
+            IntelligenceService(old, allow_network=True, calendar_sources=("ons",))
+        self.assertEqual(result.exception.code, "upgrade_required")
+        upgraded = upgrade(path)
+        self.assertEqual(upgraded.schema_version, 7)
+        self.assertEqual(upgraded.calendar(), snapshot)
+        service = IntelligenceService(upgraded, calendar_sources=("ons",))
+        self.assertEqual(service.calendar_sources, ("ons",))
 
     def test_old_schema_news_access_refuses_without_implicit_upgrade(self):
         with self.assertRaises(StoreError) as result:
@@ -140,7 +169,7 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
             before = {table: handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
                       for table in ("news_payloads", "news_items", "news_acquisitions")}
         migrated = upgrade(path)
-        self.assertEqual(migrated.schema_version, 5)
+        self.assertEqual(migrated.schema_version, 7)
         self.assertEqual(migrated.news_acquisition("fetch-1"), record)
         self.assertEqual(migrated.news_body("fetch-1"), self.raw)
         self.assertIsNone(migrated.news_status())
@@ -169,7 +198,7 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
             before={table:handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
                     for table in ("news_payloads","news_acquisitions","news_items","news_observations")}
         upgraded=upgrade(path)
-        self.assertEqual(upgraded.schema_version,5)
+        self.assertEqual(upgraded.schema_version,7)
         self.assertEqual(upgraded.news_status(),status)
         self.assertEqual(upgraded.news_body("attempt-1"),self.raw)
         with closing(sqlite3.connect(path)) as handle:
@@ -205,7 +234,7 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
         self.assertEqual(path.read_bytes(), before)
 
         upgraded = upgrade(path)
-        self.assertEqual(upgraded.schema_version, 5)
+        self.assertEqual(upgraded.schema_version, 7)
         self.assertEqual(upgraded.database_id, old.database_id)
         self.assertEqual(upgraded.news_status(), status)
         self.assertEqual(upgraded.news_body(status.acquisition_id), self.raw)

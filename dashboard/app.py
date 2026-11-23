@@ -134,9 +134,13 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
     async def lifespan(app):
         if etoro_connection is not None:
             etoro_connection.start_once()
+        if intelligence_setup is not None:
+            intelligence_setup.start()
         try:
             yield
         finally:
+            if intelligence_setup is not None:
+                intelligence_setup.stop()
             if etoro_connection is not None:
                 etoro_connection.stop()
 
@@ -150,6 +154,8 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
             json.loads((ROOT / "setup.schema.json").read_text(encoding="utf-8")),
             format_checker=FormatChecker())
     intelligence = None
+    intelligence_setup = None
+    relevance = None
     investment_recording = None
     monitoring_workflow = None
     planning = None
@@ -172,8 +178,26 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
         from dashboard.intelligence import IntelligenceWorkspace
         intelligence = IntelligenceWorkspace(
             intelligence_database, analysis_profiles, analysis_controls_enabled, intelligence_demo)
+    elif investment_database is not None:
+        from dashboard.intelligence_setup import IntelligenceSetup
+        intelligence_setup = IntelligenceSetup(
+            setup_workspace or Path(investment_database).absolute().parent, clock=clock)
+        try:
+            from dashboard.relevance import RelevanceWorkspace
+        except ImportError:
+            pass
+        else:
+            relevance = RelevanceWorkspace(
+                journal_path=investment_database,
+                profile_path=Path(investment_database).absolute().parent / "profile.json",
+                mapping_path=intelligence_setup.path.parent / "relevance-mappings.json",
+                clock_source=clock)
     mutation_paths = {
         "/api/v1/intelligence/controls",
+        "/api/v1/intelligence/setup",
+        "/api/v1/intelligence/settings",
+        "/api/v1/intelligence/refresh",
+        "/api/v1/intelligence/relevance",
         "/api/investment/v1/recording/preview",
         "/api/investment/v1/recording/confirm",
         "/api/investment/v1/monitoring-workflow/sync",
@@ -217,6 +241,9 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
                 request.method == "POST" and request.url.path in mutation_paths and (
                     (intelligence and intelligence.controls_enabled and
                      request.url.path.startswith("/api/v1/intelligence/")) or
+                    (intelligence_setup and request.url.path in (
+                        "/api/v1/intelligence/setup", "/api/v1/intelligence/settings",
+                        "/api/v1/intelligence/refresh", "/api/v1/intelligence/relevance")) or
                     (investment_recording and
                      request.url.path.startswith("/api/investment/v1/recording/")) or
                     (monitoring_workflow and
@@ -593,8 +620,25 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
 
     @app.get("/api/v1/intelligence")
     def intelligence_snapshot():
+        if intelligence_setup is not None:
+            status = intelligence_setup.status()
+            workspace = intelligence_setup.workspace
+            try:
+                result = workspace.snapshot() if workspace is not None and status["state"] != "unavailable" else {}
+            except Exception:
+                result = {}
+                status = {**status, "state": "unavailable", "error_code": "intelligence_read_failed"}
+            result["setup"] = status
+            result.setdefault("source_mode", "recorded")
+            result.setdefault("generated_at", clock().isoformat().replace("+00:00", "Z"))
+            if relevance is not None:
+                result["relevance"] = relevance.snapshot(result.get("foundation", {}).get("briefing"))
+            return result
         if intelligence is None:
-            return JSONResponse(status_code=503,content={"error":"intelligence_not_configured"})
+            return {"source_mode": "unconfigured", "generated_at": clock().isoformat().replace("+00:00", "Z"),
+                    "setup": {"available": False, "state": "select_workspace", "config": None,
+                              "catalog": {"calendar": [], "content": []}, "worker_running": False,
+                              "error_code": None}}
         try:
             return intelligence.snapshot()
         except Exception as exc:
@@ -603,12 +647,60 @@ def create_app(clock=None, static_directory=None, serve_frontend=True,
 
     @app.get("/api/v1/intelligence/session")
     def intelligence_session(request:Request):
-        if intelligence is None or not intelligence.controls_enabled:
+        owner = intelligence_setup or intelligence
+        if owner is None or intelligence_setup is None and not intelligence.controls_enabled:
             return {"enabled":False,"csrf":None}
-        token,record=intelligence.security.session(request.cookies.get("analysis_session"),clock(),create=True)
+        token,record=owner.security.session(request.cookies.get("analysis_session"),clock(),create=True)
         response=JSONResponse({"enabled":True,"csrf":record["csrf"]})
         response.set_cookie("analysis_session",token,httponly=True,samesite="strict",secure=request.url.scheme=="https",path="/api/v1/intelligence",max_age=900)
         return response
+
+    def authorize_intelligence(request):
+        return bool(intelligence_setup and intelligence_setup.security.authorize(
+            request.cookies.get("analysis_session"), request.headers.get("x-csrf-token"), clock()))
+
+    @app.post("/api/v1/intelligence/setup")
+    async def intelligence_initialize(request: Request):
+        if not authorize_intelligence(request):
+            return error("invalid_request", 403)
+        try:
+            payload = await bounded_json(request)
+            if type(payload) is not dict or set(payload) != {"action"}:
+                raise ValueError("Invalid setup")
+            return await run_in_threadpool(intelligence_setup.initialize, payload["action"])
+        except (ValueError, OSError, RuntimeError):
+            return error("intelligence_setup_rejected", 400)
+
+    @app.post("/api/v1/intelligence/settings")
+    async def intelligence_save(request: Request):
+        if not authorize_intelligence(request):
+            return error("invalid_request", 403)
+        try:
+            return await run_in_threadpool(intelligence_setup.save, await bounded_json(request))
+        except (ValueError, OSError, RuntimeError) as exc:
+            from dashboard.intelligence_setup import IntelligenceSetupError
+            return error(exc.code if isinstance(exc, IntelligenceSetupError) else "intelligence_settings_rejected", 400)
+
+    @app.post("/api/v1/intelligence/refresh")
+    async def intelligence_refresh(request: Request):
+        if not authorize_intelligence(request):
+            return error("invalid_request", 403)
+        try:
+            result = await run_in_threadpool(intelligence_setup.refresh, await bounded_json(request))
+            return JSONResponse(status_code=202, content=result)
+        except (ValueError, OSError, RuntimeError):
+            return error("intelligence_refresh_rejected", 409)
+
+    @app.post("/api/v1/intelligence/relevance")
+    async def intelligence_relevance_save(request: Request):
+        if not authorize_intelligence(request):
+            return error("invalid_request", 403)
+        if relevance is None:
+            return error("relevance_unavailable", 409)
+        try:
+            return await run_in_threadpool(relevance.save_mappings, await bounded_json(request))
+        except (ValueError, OSError) as exc:
+            return error(getattr(exc, "code", "relevance_save_rejected"), getattr(exc, "status", 409))
 
     async def bounded_json(request, maximum=4096, strict=False):
         if request.headers.get("content-type","").split(";",1)[0]!="application/json":

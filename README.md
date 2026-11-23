@@ -160,3 +160,20 @@ These use synthetic evidence, not account access.
 Local source edits, tests, builds and synthetic previews are normal development.
 Use temporary test data; credentials, operational stores, provider calls and
 maintenance need task-specific approval. See the development guide for checks.
+
+## Optional intelligence setup
+
+Open **Intelligence**, explicitly initialize its separate public-evidence store,
+select calendars/content sources and optionally a local or hosted model, then
+save enablement. Credentials are entered separately in **Settings**; only their
+setting names appear in intelligence configuration. The dashboard runs the
+selected service while open and retains enablement across restarts. Page reads
+do not collect. **Refresh sources** and **Generate briefing** are separate actions.
+Confirmed exposure mappings stay local and can be edited on the page.
+
+The briefing foundation retains quotations and citations, with constrained
+topic interpretations. It is not complete live economic coverage: BLS outcomes
+are unsupported, several official content adapters are dated snapshots, and
+structured rate/vintage extraction remains unfinished. BoE document excerpts
+are excluded from hosted synthesis while those reuse rights remain unestablished.
+See the [capability limits and setup guide](docs/intelligence.md).

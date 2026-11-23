@@ -73,6 +73,37 @@ Partial or uncertain setup does not enable recording.
 Monitoring cache/workflow writes have separate gates; a page refresh never
 collects provider data or updates accounting.
 
+### Optional managed intelligence
+
+**Intelligence** offers explicit initialization/upgrade, source selection,
+optional local/hosted model configuration and persistent enablement. Settings
+links to this same setup; it is not a second service. The selected workspace
+determines a separate sibling `.goldscout-intelligence/<workspace-name>/`
+directory containing `settings.json`, `intelligence.sqlite3` and local relevance
+mappings. Merely opening the dashboard/page does not create these files.
+
+Once enabled, collection runs for the dashboard's lifetime and restarts with it.
+There is no background OS service while the dashboard is closed. Source refresh
+and briefing refresh have separate durable requests. The existing ownership
+lock coordinates CLI/dashboard use; queued settings, applied controls and actual
+worker/source state remain distinct. Disabling persists a control even if
+another owner must apply it.
+
+For the same saved selection in the standalone CLI, stop the dashboard owner and
+use `python -m market_intelligence run --managed-config <settings.json>
+--allow-network`. Saved enablement/source/provider restrictions still apply;
+command-line overrides cannot silently expand them. A `status` read makes no
+provider calls; managed `once` processes controls only.
+
+The page leads with retained public quotations, provenance and constrained
+interpretation templates, then locally explained exposure matches, upcoming
+events and source diagnostics. Private mapping/journal evidence never enters
+hosted synthesis. Missing valuation prevents exposure weights, not qualitative
+context. Source completeness, dated adapters, unsupported BLS outcomes and
+unvalidated external compatibility remain explicit in the
+[intelligence guide](intelligence.md); this is a partial foundation, not complete
+live coverage.
+
 The portfolio **Overview** shows the recorded value and its date, current
 attention, compact account actions and up to three recent activity entries.
 Saved goals appear only when configured. **History and insights** contains the

@@ -173,7 +173,7 @@ class IntelligenceStoreTests(IntelligenceStoreFixture, unittest.TestCase):
 
     def test_future_schema_is_refused_without_resetting_settings(self):
         with closing(sqlite3.connect(self.path)) as handle:
-            handle.execute("PRAGMA user_version=6")
+            handle.execute("PRAGMA user_version=8")
         with self.assertRaises(StoreError) as result:
             IntelligenceStore(self.path)
         self.assertEqual(result.exception.code, "schema_unsupported")

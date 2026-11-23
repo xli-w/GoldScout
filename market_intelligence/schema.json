@@ -10,7 +10,10 @@
     {"$ref": "#/$defs/control_request"},
     {"$ref": "#/$defs/control_receipt"},
     {"$ref": "#/$defs/news_observation"},
-    {"$ref": "#/$defs/service_observation"}
+    {"$ref": "#/$defs/service_observation"},
+    {"$ref": "#/$defs/public_document"},
+    {"$ref": "#/$defs/public_manifest"},
+    {"$ref": "#/$defs/public_briefing"}
   ],
   "$defs": {
     "id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$", "not": {"pattern": "[^A-Za-z0-9_.:-]"}},
@@ -20,8 +23,74 @@
     "nullable_revision": {"oneOf": [{"$ref": "#/$defs/revision"}, {"type": "null"}]},
     "url": {"type": "string", "format": "uri", "pattern": "^https://(?:[A-Za-z0-9.-]+|\\[[A-Fa-f0-9:]+\\])(?::443)?(?:[/?#][^\\s]*)?$", "not": {"pattern": "\\s"}, "maxLength": 2048},
     "symbol": {"enum": ["SPY", "QQQ", "BTC/USD", "GLD", "USO"]},
-    "symbols": {"type": "array", "items": {"$ref": "#/$defs/symbol"}, "uniqueItems": true, "minItems": 1, "maxItems": 5},
+    "symbols": {"type": "array", "items": {"$ref": "#/$defs/symbol"}, "uniqueItems": true, "maxItems": 5},
     "category": {"enum": ["monetary_policy", "inflation", "employment", "growth", "energy"]},
+    "public_topic": {"enum": ["inflation", "employment", "growth", "monetary_policy"]},
+    "public_document": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "source", "publisher_family", "source_url", "title", "text", "topic", "geography", "kind", "published_at", "received_at", "scheduled_at"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/id"}, "source": {"$ref": "#/$defs/id"},
+        "publisher_family": {"$ref": "#/$defs/id"}, "source_url": {"$ref": "#/$defs/url"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+        "text": {"type": "string", "minLength": 1, "maxLength": 12000},
+        "topic": {"$ref": "#/$defs/public_topic"}, "geography": {"enum": ["UK", "US"]},
+        "kind": {"enum": ["schedule", "release", "policy"]},
+        "published_at": {"$ref": "#/$defs/nullable_timestamp"},
+        "received_at": {"$ref": "#/$defs/timestamp"},
+        "scheduled_at": {"$ref": "#/$defs/nullable_timestamp"}
+      }
+    },
+    "public_manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["compiler_version", "input_hash", "cutoff", "evidence", "gaps", "omitted"],
+      "properties": {
+        "compiler_version": {"const": "public-topics-v1"},
+        "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$", "maxLength": 64},
+        "cutoff": {"$ref": "#/$defs/timestamp"},
+        "evidence": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"$ref": "#/$defs/public_document"}},
+        "gaps": {"type": "array", "maxItems": 30, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+        "omitted": {"type": "integer", "minimum": 0}
+      }
+    },
+    "public_citation": {
+      "type": "object", "additionalProperties": false, "required": ["text", "evidence_ids"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 1800},
+        "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+      }
+    },
+    "public_output": {
+      "type": "object", "additionalProperties": false, "required": ["headline", "developments"],
+      "properties": {
+        "headline": {"const": "Public evidence briefing"},
+        "developments": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["title", "topic", "geography", "claims", "interpretation", "uncertainties"],
+            "properties": {
+              "title": {"type": "string", "minLength": 1, "maxLength": 500},
+              "topic": {"$ref": "#/$defs/public_topic"}, "geography": {"enum": ["UK", "US"]},
+              "claims": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"$ref": "#/$defs/public_citation"}},
+              "interpretation": {"$ref": "#/$defs/public_citation"},
+              "uncertainties": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "string", "minLength": 1, "maxLength": 500}}
+            }
+          }
+        }
+      }
+    },
+    "public_briefing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["briefing_id", "generated_at", "provider", "model", "prompt_version", "schema_version", "manifest", "verification", "output"],
+      "properties": {
+        "briefing_id": {"$ref": "#/$defs/id"}, "generated_at": {"$ref": "#/$defs/timestamp"},
+        "provider": {"$ref": "#/$defs/id"}, "model": {"type": "string", "minLength": 1, "maxLength": 128},
+        "prompt_version": {"const": "public-briefing-v1"}, "schema_version": {"const": "1"},
+        "manifest": {"$ref": "#/$defs/public_manifest"}, "verification": {"const": "unverified"},
+        "output": {"$ref": "#/$defs/public_output"}
+      }
+    },
     "settings": {
       "type": "object", "additionalProperties": false,
       "required": ["enabled", "calendar_enabled", "news_enabled", "ai_enabled", "mode", "ai_profile", "revision"],
@@ -46,12 +115,19 @@
         "coverage_end": {"$ref": "#/$defs/nullable_timestamp"},
         "status": {"enum": ["healthy", "unavailable", "invalid"]},
         "input_hash": {"oneOf": [{"type": "string", "pattern": "^[a-f0-9]{64}$", "not": {"pattern": "[^a-f0-9]"}}, {"type": "null"}]},
-        "source_url": {"oneOf": [{"$ref": "#/$defs/url"}, {"type": "null"}]}
+        "source_url": {"oneOf": [{"$ref": "#/$defs/url"}, {"type": "null"}]},
+        "source_urls": {"type": "array", "items": {"$ref": "#/$defs/url"}, "maxItems": 2, "uniqueItems": true}
       },
-      "dependentRequired": {"input_hash": ["source_url"], "source_url": ["input_hash"]},
+      "dependentRequired": {
+        "input_hash": ["source_url"], "source_url": ["input_hash"]
+      },
       "allOf": [
         {"if": {"properties": {"input_hash": {"type": "string"}}, "required": ["input_hash"]}, "then": {"properties": {"source_url": {"$ref": "#/$defs/url"}}}},
-        {"if": {"properties": {"source_url": {"type": "string"}}, "required": ["source_url"]}, "then": {"properties": {"input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}}
+        {"if": {"properties": {"source_url": {"type": "string"}}, "required": ["source_url"]}, "then": {"properties": {"input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}},
+        {"if": {"properties": {"source_urls": {"minItems": 1}}, "required": ["source_urls"]},
+         "then": {"required": ["source_url", "input_hash"]}},
+        {"if": {"properties": {"source": {"const": "ons"}, "input_hash": {"type": "string"}}, "required": ["source", "input_hash"]},
+         "then": {"required": ["source_urls"], "properties": {"source_urls": {"minItems": 2, "maxItems": 2}}}}
       ],
       "if": {"properties": {"status": {"const": "healthy"}}, "required": ["status"]},
       "then": {"properties": {
@@ -69,10 +145,15 @@
         "symbols": {"$ref": "#/$defs/symbols"}, "scheduled_at": {"$ref": "#/$defs/nullable_timestamp"},
         "available_at": {"$ref": "#/$defs/timestamp"},
         "title": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S"},
-        "status": {"enum": ["scheduled", "tentative", "cancelled"]},
+        "status": {"enum": ["scheduled", "tentative", "cancelled", "postponed"]},
         "source_timezone": {"type": "string", "minLength": 1, "maxLength": 100},
-        "published_at": {"$ref": "#/$defs/nullable_timestamp"}, "revision": {"$ref": "#/$defs/revision"}
-      }
+        "published_at": {"$ref": "#/$defs/nullable_timestamp"}, "revision": {"$ref": "#/$defs/revision"},
+        "source_notes": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 1000}, "maxItems": 10}
+      },
+      "allOf": [
+        {"if": {"properties": {"source": {"not": {"enum": ["ons", "boe_mpc"]}}}, "required": ["source"]},
+         "then": {"properties": {"symbols": {"minItems": 1}}}}
+      ]
     },
     "calendar_snapshot": {
       "type": "object", "additionalProperties": false,
@@ -118,12 +199,12 @@
       "type": "object", "additionalProperties": false,
       "required": ["source", "error_code", "observed_at"],
       "properties": {
-        "source": {"enum": ["bls", "bea", "fed_monetary", "analysis"]},
+        "source": {"enum": ["bls", "bea", "ons", "boe_mpc", "fed_monetary", "analysis"]},
         "error_code": {"type": "string"},
         "observed_at": {"$ref": "#/$defs/timestamp"}
       },
       "allOf": [
-        {"if": {"properties": {"source": {"enum": ["bls", "bea"]}}},
+        {"if": {"properties": {"source": {"enum": ["bls", "bea", "ons", "boe_mpc"]}}},
          "then": {"properties": {"error_code": {"enum": ["endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable", "encoding_refused", "content_refused", "response_too_large", "response_incomplete", "source_unavailable", "invalid_calendar", "unsupported_calendar", "parser_unavailable", "revision_conflict", "calendar_capacity"]}}}},
         {"if": {"properties": {"source": {"const": "fed_monetary"}}},
          "then": {"properties": {"error_code": {"enum": ["endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable", "encoding_refused", "content_refused", "response_too_large", "response_incomplete", "source_unavailable", "invalid_news", "parser_unavailable", "article_refused"]}}}},
@@ -138,9 +219,9 @@
         "observation_id": {"$ref": "#/$defs/id"}, "service_id": {"$ref": "#/$defs/id"},
         "revision": {"type": "integer", "minimum": 1}, "settings_revision": {"$ref": "#/$defs/revision"},
         "observed_at": {"$ref": "#/$defs/timestamp"}, "network_permitted": {"type": "boolean"},
-        "calendar_sources": {"type": "array", "items": {"enum": ["bls", "bea"]}, "minItems": 1, "maxItems": 2, "uniqueItems": true},
+        "calendar_sources": {"type": "array", "items": {"enum": ["bls", "bea", "ons", "boe_mpc"]}, "minItems": 1, "maxItems": 4, "uniqueItems": true},
         "news_permitted": {"type": "boolean"}, "ai_permitted": {"type": "boolean"},
-        "failures": {"type": "array", "items": {"$ref": "#/$defs/service_failure"}, "maxItems": 4}
+        "failures": {"type": "array", "items": {"$ref": "#/$defs/service_failure"}, "maxItems": 6}
       },
       "allOf": [
         {"if": {"properties": {"network_permitted": {"const": false}}},

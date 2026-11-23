@@ -1,8 +1,9 @@
 # Market Intelligence
 
-The local intelligence service collects BLS/BEA calendars and Federal Reserve
-monetary-policy RSS, archives source evidence and optionally generates advisory
-AI briefs. It never places orders, changes stops or suppresses strategy signals.
+The local intelligence service collects selected BLS/BEA calendars, selected
+ONS releases, Bank of England MPC dates and Federal Reserve monetary-policy RSS,
+archives source evidence and optionally generates advisory AI briefs. It never
+places orders, changes stops or suppresses strategy signals.
 There is no order evaluator, broker observer or execution runtime. The persisted
 `shadow` settings value is a historical evidence label with no runtime effect;
 it does not evaluate hypothetical orders. Calendar completeness is unverified.
@@ -30,9 +31,10 @@ economic-event awareness, uncertainty and research-hypothesis generation. The
 local exposure projection links explicitly mapped public context to recorded instruments;
 account balances, private identifiers and broker/account evidence must not become
 hosted AI inputs. Public research sources still need verified rights and relevance.
-Current BLS/BEA/Fed coverage is US-focused; BoE/UK/global calendars and issuer
-coverage are proposed extensions requiring approved sources and coverage tests,
-not capabilities inferred from an empty calendar.
+ONS and BoE calendar adapters are now registered as opt-in, limited UK sources;
+they do not provide full UK or global coverage. Issuer coverage remains a proposed
+extension requiring approved sources and coverage tests, not a capability inferred
+from an empty calendar.
 
 Separate three uses:
 
@@ -68,7 +70,7 @@ python -m pip install -r requirements-intelligence.txt
 python -m market_intelligence initialize --database intelligence.sqlite3
 ```
 
-Existing version-1/2/3/4 intelligence databases require an explicit upgrade for
+Existing version-1 through version-6 intelligence databases require an explicit upgrade for
 the latest capabilities, with the service stopped. Older supported databases
 remain readable and are never upgraded by a read. Foreign or investment stores
 must never be used as this database:
@@ -90,6 +92,64 @@ collect and analyze as before, but its service observations are unavailable unti
 the operator explicitly upgrades the separate intelligence database.
 Saved version-2 news remains visible after upgrade even when no later source
 observation exists; the source status stays unknown rather than being invented.
+Version 6 gates the new UK calendar payload contract and records all ONS result
+endpoints contributing to a combined input hash. Upgrade version-5 databases
+explicitly before selecting ONS or BoE; the upgrade preserves existing evidence
+and does not migrate or rewrite calendar records. Older application builds reject
+version-6 stores rather than silently reading a payload they may not understand.
+
+Version 7 adds immutable public-content acquisitions, first-availability
+documents, retained briefing manifests, event revision baselines and durable
+synthesis operations. The investment journal remains version 2. Old intelligence
+stores remain readable; reads do not upgrade them. Writes to pre-version-6
+calendars retain their historical wire shape or reject newer fields before
+mutation. Upgrade preserves historical payload bytes and existing budget use.
+
+## Cross-source public briefings
+
+This is a partial foundation, not complete live economic coverage. BLS CPI and
+Employment Situation content remain unsupported after source-format access was
+denied during assessment. Several policy/PCE endpoints are explicitly dated
+snapshots, not rolling discovery. Structured extraction of rates, units and
+vintages is not implemented: facts are retained source excerpts. The minimum
+planned current UK/US outcome coverage is therefore not yet met.
+
+The compiler groups selected official documents by topic and UK/US geography.
+Scheduled releases stay explicitly separate from published outcomes. Successful
+selected-calendar downloads do not establish completeness: collection provenance
+can be present while coverage remains unknown. Unavailable sources and input
+omissions remain visible in the retained manifest.
+
+One public-only synthesis call covers an eligible changed bundle. No account
+names, balances, quantities, private notes, confirmed private mappings or
+portfolio-dependent retrieval lists enter this request. The model has no tools
+or browsing. Facts must quote retained evidence exactly; numeric values, periods
+and units cannot be invented in qualitative interpretation fields. Interpretations use a small explicit topic-template vocabulary selected by the
+model, not unrestricted generated factual prose; unsupported narrative is
+withheld. Interpretations are labelled unverified. These checks do not prove semantic
+correctness or a causal relationship; read the cited documents.
+
+Repeated checks and daily London editions reuse unchanged public evidence
+without changing the original generation time. Corrections change semantic
+identity. Source checks, current edition, generation time and UTC budget day
+are separate clocks. A stale or failed source check never renews evidence.
+Prior successful briefings remain available after failures with their original
+dates; old one-hour news briefs retain their existing contract.
+
+Synthesis reservations share the historical daily call/input/output allowance.
+An append-only operation records dispatch intent before calling the provider.
+Timeouts, cancellations and owner loss can leave an uncertain paid outcome:
+the allowance is retained and that operation is not automatically dispatched
+again. Validated saved results can finish publication after restart without
+another model call. No exactly-once provider-delivery guarantee is made.
+Replay rejects unbacked spending reservations or transitions reopening a terminal
+operation. Briefings are unavailable before their committed generation time.
+
+Local relevance is a separate projection over the recorded journal and
+user-confirmed public exposure mappings. Every match explains whether it follows
+a supported classification or a declaration. Missing valuation does not prevent
+a qualitative match, but it does not permit invented portfolio weights. Neither
+the projection nor public synthesis changes journal records or starts orders.
 
 ## Providers
 
@@ -307,7 +367,7 @@ cannot be retracted. System DNS and storage delays can exceed the check's local
 deadline. Inspect recorded state after an uncertain interruption rather than
 assuming rollback.
 
-### US source assessment
+### Source scope and limitations
 
 The [BEA subscription page](https://www.bea.gov/news/schedule/icalendar)
 identifies the configured calendar feed. The Federal Reserve's
@@ -318,23 +378,48 @@ documentation page returned 403 during this assessment. These references do
 not validate current feed contents, parser compatibility, coverage, retention
 rights or rate limits; verify those separately before an approved live check.
 
-### UK source assessment
-
-No UK source is enabled. The official ONS
+UK adapters are registered but are **not selected by default**. The official ONS
 [release-search documentation](https://developer.ons.gov.uk/search/search-releases/)
 describes upcoming/cancelled releases, provisional dates and paginated results;
 its [API introduction](https://developer.ons.gov.uk/) labels the API beta. The
-published example does not establish a per-entry revision clock or stable
-multi-page snapshot. Exact release-calendar retention, attribution, AI-use and
-rate-limit terms, date changes and product relevance still need verification
-before an adapter can preserve the existing evidence contract.
+adapter selects release titles matching a limited set of inflation, labour
+market and economic activity terms; it is not a complete ONS catalogue and does
+not map events to holdings. It fetches the upcoming and cancelled result sets
+separately, accepts only complete responses of at most 1,000 records each, and
+publishes neither if either fetch or validation fails. It keeps recent
+cancellations (scheduled within the prior 30 days), provisional/postponed
+status and available date-change notes. The API does not provide a dependable
+per-entry revision clock or exact change-publication time: `available_at` is
+the local receipt time, not the ONS publication time. Pagination or a changed
+API contract fails closed rather than being treated as complete coverage.
 
 The [Bank of England legal terms](https://www.bankofengland.co.uk/legal) permit
 certain personal or internal non-commercial use and distinguish its database
 licence and third-party material. They do not establish blanket permission to
-archive every feed or send its text to hosted AI. Verify the exact source,
-rights, machine-readable coverage and clocks before considering collection.
-Neither assessment is a live feed check or evidence of complete UK coverage.
+archive every feed or send its text to hosted AI. The MPC adapter reads the
+official upcoming-dates page and creates dated entries from confirmed-year
+Thursday schedules, using noon Europe/London as the scheduled time. It does
+not collect rate decisions, minutes or economic commentary. Past dates are
+excluded, and at least one full future year of eight Thursday dates is required;
+a changed or incomplete schedule fails closed. Neither UK adapter has been validated against a
+live GoldScout collection in this implementation; source rights, provider
+compatibility, coverage and current rate limits remain unverified. Empty UK
+calendar results are not evidence that no releases or meetings exist.
+
+The existing default remains BLS and BEA. UK sources must be selected
+explicitly; for example, after separate task-specific approval, one-source
+checks can be run with:
+
+```powershell
+python -m market_intelligence check --database intelligence.sqlite3 --allow-network --check-source ons
+python -m market_intelligence check --database intelligence.sqlite3 --allow-network --check-source boe_mpc
+```
+
+An ONS check makes two requests, one for each result set, but remains one
+supervised source check. Routine collection can instead select one or both UK
+sources with repeated `--calendar-source` options. These public feeds remain
+opt-in, advisory evidence; calendar entries have no instrument mapping or
+trading authority.
 
 ### Service observations
 
@@ -394,3 +479,112 @@ corporate-action/news completeness and a profitable edge are not established.
 OS DNS and local outages cannot be guaranteed to honor a hard wall-clock deadline.
 Live provider and hosted-platform validation have not occurred in development.
 Research exclusions for news/LLM signals remain unchanged; no order gate exists.
+
+## Bounded official release-content adapters
+
+`market_intelligence.content` is a pure parsing/one-request collection boundary,
+not a crawler, database writer, calendar-outcome inference engine or numeric
+extractor. `CONTENT_SOURCES` maps stable capability IDs to immutable metadata
+(`institution`, `url`, `kind`, `topic`, `geography`, `supported`, `reason`).
+Support means the specific bounded excerpt shape below has synthetic regression
+coverage. It does **not** mean current provider compatibility, complete coverage,
+automatic rolling policy coverage, rights clearance for every use or live
+GoldScout validation. Public official pages were consulted for source shapes and
+terms; no GoldScout live provider or operational configuration was used.
+
+### Content source matrix and transport endpoints
+
+Only the five supported fixed URLs below need transport registration, with
+identity encoding, the existing HTTPS/address/proxy controls, no redirect or
+direct-network fallback, and a response cap of 1 MiB. A link retained as a
+document citation is never another fetch instruction.
+
+| Capability | Institution / scope | Fixed fetch URL | Selected content and limitations |
+| --- | --- | --- | --- |
+| `ons_cpi` | ONS / UK inflation / release | `https://www.ons.gov.uk/economy/inflationandpriceindices/bulletins/consumerpriceinflation/latest` | Bulletin `h1` and all list items in the unique `#main-points` block, requiring both CPIH and CPI labels. Not tables, forecasts, arbitrary ONS releases or all release revisions. A transport refusing a redirect fails rather than following an unregistered target. |
+| `boe_policy` | Bank of England / UK monetary policy / policy | `https://www.bankofengland.co.uk/monetary-policy-summary-and-minutes/2026/november-2026` | **Dated November 2026**, direct paragraphs of the section headed “Monetary Policy Summary, November 2026”. Not minutes, current Bank Rate metadata, related links or future decisions. Personal/internal non-commercial scope only, subject to the Bank's terms below. |
+| `bea_gdp` | BEA / US growth / release | `https://apps.bea.gov/rss/rss.xml` | First feed item whose title starts `GDP (Advance/Second/Third Estimate),` or `Gross Domestic Product (Advance/Second/Third Estimate),`; its description is an official **summary excerpt**, not a full release. Regional GDP, other GDP series and later historical feed items are deliberately excluded. |
+| `bea_pce` | BEA / US inflation / release | `https://www.bea.gov/news/2026/personal-income-and-outlays-september-2026` | **Dated September 2026** release: the two direct body paragraphs beginning “From the preceding month,” and “From the same month one year ago,” containing `PCE price index`, before the first table/technical section. Not nominal consumption treated as inflation, tables, technical notes or rolling releases. |
+| `fed_statement` | Federal Reserve / US monetary policy / policy | `https://www.federalreserve.gov/newsevents/pressreleases/monetary20261028a.htm` | **Dated 28 October 2026** FOMC statement paragraphs in the official article body, ending before media enquiries. Not the headline-only RSS description, implementation note, minutes, projections or schedule announcements. |
+| `bls_cpi` | BLS / US inflation / release | Unsupported; candidate `https://www.bls.gov/news.release/cpi.nr0.htm` is **not** a required allowlist addition | Official public-page/text research returned Access Denied. No parser compatibility or complete release shape is claimed; no alternate-network bypass is attempted. |
+| `bls_employment` | BLS / US employment / release | Unsupported; candidate `https://www.bls.gov/news.release/empsit.nr0.htm` is **not** a required allowlist addition | Official public text research returned Access Denied. No speculative Employment Situation parser or numeric outcomes. US employment coverage remains absent. |
+
+Dated capabilities are intentionally finite evidence, not automatically updated
+“latest” aliases. Adding a different dated URL requires a reviewed registry/parser
+change and transport registration, not accepting a URL from a feed, webpage,
+operator text or model. They may already be outside a downstream compiler's
+freshness window. In particular, date-only UK publication metadata remains
+unknown at instant precision; a new receipt must not be described as proof of
+a newly issued policy decision.
+
+### Parser assumptions, clocks and quoting
+
+`parse_content(name, raw_bytes, received_at)` returns one complete
+`SourceDocument` tuple or raises `ContentError`; unavailable selected content is
+not an empty healthy result. HTML must be UTF-8, end with `</html>`, contain unique
+selected blocks and explicitly closed selected quotation elements. HTML
+complexity is bounded to 30,000 tags and depth 128. Scripts/styles/forms/frames
+inside selected quotations, duplicate attributes, unexpected selected shapes,
+invalid dates, XML DTD/entities and partial pages fail closed. These conservative
+checks may reject legitimate future markup changes; they are not claims of a
+general-purpose HTML parser. RSS is one complete RSS/channel, at most 1,000
+items; only the **first matching national GDP item** is selected, and malformed
+selected fields fail rather than falling back to an older item. Historical
+unselected feed entries may lack descriptions.
+
+Source punctuation and words are retained as plain text with HTML entity
+decoding and whitespace normalization. Only the documented excerpts are quoted.
+Title and text are non-empty, bounded to 500 and 12,000 characters, respectively;
+overlong selected content is rejected, never silently truncated. The public
+evidence contract does not accept literal angle brackets or control characters.
+No actual/forecast/previous, rate-decision value, CPI/PCE value, numeric
+surprise, vintage or structured time-series extraction is claimed.
+
+The supplied clock runs after the fixed fetch, establishing aware-UTC receipt,
+not publication or market availability before receipt. A source publication
+instant is retained only when explicitly stated: BEA RSS RFC-style dates with an
+explicit offset/EST/EDT/GMT; BEA release embargo date/time with explicit EST/EDT;
+Fed displayed release date plus explicit EST/EDT release time. Missing exact
+publication metadata stays `None`; date-only ONS/BoE labels are validated but
+not converted to guessed midnight/noon UTC. Invalid/conflicting selected dates,
+ambiguous time-zone labels and publication after receipt are rejected.
+`scheduled_at` remains `None`; schedules never manufacture realized outcomes.
+`document_id` hashes normalized content/source/publication, excluding receipt.
+Publisher families are stable `ons`, `boe`, `bea`, `fed` IDs.
+
+`collect_content(name, transport, clock, cancel_event)` makes exactly one
+`transport.fetch(fixed_url, cancel_event=...)` call, checks cancellation before
+dispatch and before return, and returns the **original raw bytes** plus parsed
+documents. No persistence, archive rewriting, retries, linked-document fetches,
+credentials, broker access or AI calls occur here. The parent owns archival,
+re-parsing/commit and enabled-network policy.
+
+### Rights and validation boundary
+
+The [ONS terms](https://www.ons.gov.uk/help/termsandconditions) identify most
+website content as Crown copyright under OGL v3, with attribution and explicit
+third-party exemptions; these adapters select textual official bulletin points,
+not images, logos or third-party material. The
+[Federal Reserve disclaimer](https://www.federalreserve.gov/disclaimer.htm)
+identifies Board information as public domain unless otherwise indicated and
+requests source citation; third-party material and insignia are excluded.
+BEA selection is limited to the agency's own US-government release prose,
+not linked third-party content or database licence claims.
+
+The [Bank legal terms](https://www.bankofengland.co.uk/legal) permit downloading,
+displaying or printing for personal use or internal non-commercial use and
+distinguish Bank database licensing and third-party rights. The `boe_policy`
+parser is limited to that textual personal/internal-use basis. It is **not**
+blanket clearance for redistribution, commercial exploitation, sending Bank
+text to hosted AI, training, or treating policy prose as OGL database data.
+Those uses require independently established permission/terms; an entry marked
+supported is a parser capability, not a grant of rights. Unknown rights for a
+different source or use remain unsupported rather than being inferred from
+public accessibility.
+
+Regression fixtures are synthetic and offline, with explicit tests for selected
+content, bounded text/raw bytes, revisions/receipt-independent IDs, source dates,
+cancellation, no linked fetching, malformed/partial selected content and
+unsupported sources. The focused command is
+`py -3.11 scripts/offline_tests.py --pattern test_intelligence_content.py`.
+There has been **no live GoldScout collection validation** of these adapters.

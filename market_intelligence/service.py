@@ -1,6 +1,6 @@
 """Single-owner advisory service with explicitly enabled calendar collection."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import logging
 import os
@@ -13,7 +13,9 @@ from market_intelligence.contracts import (
     SERVICE_ERROR_CODES, SERVICE_HEARTBEAT_SECONDS, CalendarSnapshot, ServiceFailure,
     SourceCoverage, identifier,
 )
-from market_intelligence.providers import CALENDAR_SOURCES, CalendarTransport, ProviderError
+from market_intelligence.providers import (
+    CALENDAR_SOURCES, ONS_CANCELLED_URL, ONS_UPCOMING_URL, CalendarTransport, ProviderError,
+)
 from market_intelligence.news import FED_NEWS_URL, NEWS_ERROR_CODES, parse_fed_news
 from market_intelligence.analysis import AdvisoryAnalyzer, AnalysisLimits, AnalysisError
 from market_intelligence.runtime import PersistentAnalysisBudget
@@ -103,6 +105,9 @@ class IntelligenceService:
                 or len(set(calendar_sources)) != len(calendar_sources)
                 or any(name not in CALENDAR_SOURCES for name in calendar_sources)):
             raise ValueError("Calendar sources must be unique registered names")
+        if (store.schema_version < 6
+                and any(name in ("ons", "boe_mpc") for name in calendar_sources)):
+            raise StoreError("upgrade_required")
         self.calendar_sources = calendar_sources
         if type(collect_news) is not bool:
             raise ValueError("News collection capability must be boolean")
@@ -137,6 +142,8 @@ class IntelligenceService:
         self._check_started = False
         self._check_result = None
         self._check_deadline = None
+        self.foundation_owner = False
+        self.runtime_guard = None
 
     @property
     def last_provider_error(self):
@@ -162,6 +169,9 @@ class IntelligenceService:
         try:
             self.calendar_transport.cancel()
         finally:
+            if (self.worker is not None and self.worker is not threading.current_thread()
+                    and self.worker.is_alive()):
+                self.worker.join()
             if lock is not None:
                 lock.close()
             self.lock = None
@@ -247,6 +257,11 @@ class IntelligenceService:
         except StoreError:
             logger.error("Service settings could not be read; earlier settings or evidence may already be committed.")
             raise
+        if self.runtime_guard is not None:
+            self.runtime_guard(settings)
+        if (self.allow_network and not self.foundation_owner and self.store.schema_version >= 7
+                and self.store.has_managed_configuration()):
+            raise StoreError("managed_configuration_required")
         if settings.revision != self.last_settings_revision:
             try:
                 if not controls_applied:
@@ -360,10 +375,25 @@ class IntelligenceService:
                 try:
                     if cancelled.is_set():
                         raise ProviderError("request_timeout")
-                    payload = self.calendar_transport.fetch(url, cancel_event=cancelled)
-                    if cancelled.is_set():
-                        raise ProviderError("request_timeout")
-                    batch = parser(payload, self.clock())
+                    if source_name == "ons":
+                        upcoming_payload = self.calendar_transport.fetch(
+                            ONS_UPCOMING_URL, cancel_event=cancelled)
+                        upcoming_received_at = self.clock()
+                        if cancelled.is_set():
+                            raise ProviderError("request_timeout")
+                        cancelled_payload = self.calendar_transport.fetch(
+                            ONS_CANCELLED_URL, cancel_event=cancelled)
+                        cancelled_received_at = self.clock()
+                        if cancelled.is_set():
+                            raise ProviderError("request_timeout")
+                        batch = parser(
+                            upcoming_payload, cancelled_payload,
+                            upcoming_received_at, cancelled_received_at)
+                    else:
+                        payload = self.calendar_transport.fetch(url, cancel_event=cancelled)
+                        if cancelled.is_set():
+                            raise ProviderError("request_timeout")
+                        batch = parser(payload, self.clock())
                 except ProviderError as exc:
                     error = exc.code if not news_job or exc.code in NEWS_ERROR_CODES else "source_unavailable"
                 except Exception:
@@ -458,17 +488,29 @@ class IntelligenceService:
         old_sources = previous.sources if previous else ()
         old_events = previous.events if previous else ()
         if error is None:
-            previous_events = {(event.source, event.event_id): event for event in old_events}
-            facts = ("category", "symbols", "scheduled_at", "title", "status", "source_timezone", "published_at")
-            for event in batch.events:
-                prior = previous_events.get((event.source, event.event_id))
-                if prior is not None and (event.revision < prior.revision or (
-                        event.revision == prior.revision and tuple(getattr(event, name) for name in facts)
-                        != tuple(getattr(prior, name) for name in facts))):
-                    error = "revision_conflict"
-                    break
+            previous_events = self.store.calendar_event_baselines(source_name)
+            facts = ("source_url", "category", "symbols", "scheduled_at", "title", "status",
+                     "source_timezone", "published_at", "source_notes")
+            if batch.complete_snapshot:
+                revised = []
+                for event in batch.events:
+                    prior = previous_events.get((event.source, event.event_id))
+                    event_revision = 0 if prior is None else prior.revision + (
+                        tuple(getattr(event, name) for name in facts)
+                        != tuple(getattr(prior, name) for name in facts))
+                    revised.append(replace(event, revision=event_revision))
+                batch = replace(batch, events=tuple(revised))
+            else:
+                for event in batch.events:
+                    prior = previous_events.get((event.source, event.event_id))
+                    if prior is not None and (event.revision < prior.revision or (
+                            event.revision == prior.revision and tuple(getattr(event, name) for name in facts)
+                            != tuple(getattr(prior, name) for name in facts))):
+                        error = "revision_conflict"
+                        break
         if error is None:
-            retained = {(event.source, event.event_id): event for event in old_events if event.source == source_name}
+            retained = ({} if batch.complete_snapshot else
+                        {(event.source, event.event_id): event for event in old_events if event.source == source_name})
             retained.update({(event.source, event.event_id): event for event in batch.events})
             events = tuple(retained[key] for key in sorted(retained))
             if len(events) + sum(event.source != source_name for event in old_events) > 1000:
@@ -480,7 +522,8 @@ class IntelligenceService:
             source = SourceCoverage(source_name, CALENDAR_SOURCES[source_name][2],
                                     prior.checked_at if prior else None, None, None,
                                     "invalid" if error in ("invalid_calendar", "unsupported_calendar", "revision_conflict", "calendar_capacity") else "unavailable",
-                                    prior.input_hash if prior else None, prior.source_url if prior else None)
+                                    prior.input_hash if prior else None, prior.source_url if prior else None,
+                                    prior.source_urls if prior else ())
             events = tuple(event for event in old_events if event.source == source_name)
         sources = tuple(source for source in old_sources if source.source != source_name) + (source,)
         combined = tuple(event for event in old_events if event.source != source_name) + events

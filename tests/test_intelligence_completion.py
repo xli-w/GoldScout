@@ -121,7 +121,7 @@ class DurableCompletionTests(IntelligenceStoreFixture,unittest.TestCase):
         self.assertIsNone(old.analysis_usage(self.now))
         upgrade(path)
         migrated=IntelligenceStore(path)
-        self.assertEqual(migrated.schema_version,5)
+        self.assertEqual(migrated.schema_version,7)
         self.assertEqual(migrated.news_status(),status)
         self.assertEqual(migrated.analysis_usage(self.now),{"day":self.now.date().isoformat(),"calls":0,"input_bytes":0,"output_allowance":0})
 

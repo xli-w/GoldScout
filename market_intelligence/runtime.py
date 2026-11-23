@@ -222,7 +222,7 @@ class ProviderProfile:
                 connection.close()
 
     def provider(self):
-        return JSONSummaryProvider(self.name, self.model, self.complete)
+        return JSONSummaryProvider(self.name, self.model, self.complete, self.kind)
 
 
 def load_profiles(path):

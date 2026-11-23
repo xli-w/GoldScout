@@ -12,12 +12,15 @@ from market_intelligence.contracts import service_status_state
 from market_intelligence.store import IntelligenceStore, StoreError, connection, encode, initialize, upgrade
 from proxy_config import ProxyConfigurationError
 from market_intelligence.runtime import load_profiles
+from market_intelligence.briefing import FoundationService
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("initialize", "upgrade", "status", "once", "run", "check"))
-    parser.add_argument("--database", required=True, type=Path, help="Separate intelligence .sqlite3 path")
+    parser.add_argument("--database", type=Path, help="Separate intelligence .sqlite3 path (optional with --managed-config)")
+    parser.add_argument("--managed-config", type=Path,
+                        help="Dashboard settings.json; use its sibling store and exact saved source/provider selection")
     parser.add_argument("--allow-network", action="store_true", help="Permit explicitly selected public provider requests")
     parser.add_argument("--collect-news", action="store_true", help="Enable the fixed official RSS capability (requires network permission and schema 3)")
     parser.add_argument("--allow-ai", action="store_true", help="Permit registered advisory providers; requires news collection")
@@ -27,6 +30,22 @@ def main(argv=None):
     parser.add_argument("--check-source", action="append", choices=(*CALENDAR_SOURCES, "fed_monetary", "analysis"),
                         help="Select exactly one source for a supervised single-attempt check")
     args = parser.parse_args(argv)
+    if args.managed_config is not None:
+        if args.action not in ("run", "status", "once"):
+            parser.error("--managed-config is valid only with run, status or once")
+        if args.managed_config.name != "settings.json":
+            parser.error("--managed-config must select the dashboard settings.json")
+        if (args.calendar_source is not None or args.ai_profiles is not None
+                or args.collect_news or args.allow_ai or args.check_source is not None):
+            parser.error("--managed-config cannot be combined with source, profile, news, AI or check overrides")
+        sibling = args.managed_config.absolute().parent / "intelligence.sqlite3"
+        if args.database is not None and args.database.absolute() != sibling:
+            parser.error("--database must be the managed settings.json sibling intelligence.sqlite3")
+        args.database = sibling
+        if args.action == "run" and not args.allow_network:
+            parser.error("managed run requires --allow-network; saved settings control actual collection")
+    elif args.database is None:
+        parser.error("--database is required without --managed-config")
     if args.allow_network and args.action not in ("run", "check"):
         parser.error("--allow-network is valid only with run or check")
     if args.collect_news and (args.action not in ("run", "check") or not args.allow_network):
@@ -53,6 +72,14 @@ def main(argv=None):
             parser.error("--check-source is valid only with check")
         check_source = None
     try:
+        managed_config = None
+        configuration_loader = None
+        if args.managed_config is not None:
+            # This bounded shared loader reads only nonsecret configuration.
+            # It imports neither FastAPI nor a selected portfolio workspace.
+            from dashboard.intelligence_setup import load_managed_config, queue_managed_configuration
+            configuration_loader = lambda: load_managed_config(args.managed_config)
+            managed_config = configuration_loader()
         if args.action == "initialize":
             store = initialize(args.database, datetime.now(timezone.utc))
         elif args.action == "upgrade":
@@ -61,7 +88,36 @@ def main(argv=None):
             store = IntelligenceStore(args.database)
         processed = ()
         check = None
-        if args.action in ("once", "run", "check"):
+        if managed_config is not None and args.action == "run":
+            from market_intelligence.runtime import ProviderProfile
+            profile = ProviderProfile(**managed_config["profile"]) if managed_config["profile"] else None
+            providers = {profile.name: profile.provider()} if profile else {}
+            with FoundationService(
+                    store, calendar_sources=tuple(managed_config["calendar_sources"]),
+                    content_sources=tuple(managed_config["content_sources"]), providers=providers,
+                    configuration_loader=configuration_loader) as service:
+                # Settle stale commands under this sole owner without starting
+                # provider work, then atomically bind the current saved selection.
+                bootstrap = configuration_loader()
+                names = (bootstrap["profile"]["name"],) if bootstrap["profile"] else ()
+                now = datetime.now(timezone.utc)
+                store.apply_pending(now, profiles=names)
+                queue_managed_configuration(store, bootstrap, now)
+                # The shared service stays alive while disabled, processes
+                # controls without collecting, and reloads selection in-place.
+                service.run(threading.Event())
+        elif managed_config is not None and args.action == "once":
+            profile = managed_config["profile"]
+            names = (profile["name"],) if profile else ()
+            # Existing once semantics are control-only. It grants no network or
+            # provider capability, including for an enabled managed selection.
+            with IntelligenceService(
+                    store, profiles=names, allow_network=False,
+                    calendar_sources=tuple(managed_config["calendar_sources"])) as service:
+                processed = service.step()
+                queue_managed_configuration(store, configuration_loader(), datetime.now(timezone.utc))
+                processed += service.step()
+        elif args.action in ("once", "run", "check"):
             calendar_sources = (tuple(args.calendar_source) if args.calendar_source else
                                 (check_source,) if check_source in CALENDAR_SOURCES else ("bls", "bea"))
             with IntelligenceService(store, allow_network=args.allow_network,
@@ -91,6 +147,9 @@ def main(argv=None):
                           "network_permitted": args.allow_network}
         if check is not None:
             output["check"] = check
+        if managed_config is not None:
+            output["managed_configuration"] = configuration_loader()
+            output["foundation"] = store.foundation_snapshot(datetime.now(timezone.utc))
         print(json.dumps(output, sort_keys=True))
         return 0 if check is None or check["status"] == "succeeded" else 1
     except KeyboardInterrupt:
@@ -101,7 +160,7 @@ def main(argv=None):
     except ProxyConfigurationError as exc:
         print(str(exc))
         return 1
-    except (StoreError, ValueError):
+    except (StoreError, ValueError, OSError):
         if args.action in ("once", "run", "check"):
             print("Intelligence service stopped: settings or evidence may already be committed. Check recorded state.")
         else:

@@ -39,3 +39,43 @@ Provider compatibility, data rights and UK/global source coverage need separate
 evidence. Existing campaign news/LLM signals remain excluded; future structured
 features require separate prospective research approval and failure policy.
 An AI result or outage never changes policy, moves money or forces liquidation.
+
+The ONS release-search API and Bank of England upcoming MPC dates page are
+registered as opt-in calendar sources; BLS/BEA remain the default selection.
+ONS results are selected by title category, receipt-timed, and fail closed on
+partial or over-limit result sets. BoE entries represent confirmed meeting
+dates at noon London time, not decisions or minutes. Both remain unvalidated
+against live collection and their complete coverage, retention rights and
+provider compatibility are not established. Intelligence database version 6
+gates the new UK calendar payload contract; older application builds reject
+version-6 stores rather than reading unknown calendar values.
+
+## Public briefing foundation
+
+The public-topic compiler and briefing pipeline use a separate version-7
+intelligence upgrade. Original acquisition bytes, first document availability,
+input manifests, operation transitions and validated outputs are append-only.
+Scheduled events are not release outcomes. Selected events and successful
+requests do not prove a complete calendar horizon.
+
+Public semantic evidence, compiler/prompt/schema and provider/model identify
+one durable synthesis operation. Receipt-only repolls and London daily editions
+do not reset its generation time or spend allowance. Reservations share the
+historical analysis budget. Dispatch intent commits before a provider call;
+uncertain outcomes are not automatically dispatched again. Ownership changes
+fence late results, and a saved validated result can finish publication without
+calling the provider again. This is not exactly-once external delivery.
+
+Facts are exact source quotations with retained citations. Titles quote source
+titles; numerical facts cannot be restated in qualitative interpretation fields.
+Conditional interpretations and limitations remain unverified, not semantic
+truth guarantees. The foundation has no consensus, price-reaction, issuer,
+look-through or investment-recommendation capability.
+
+Dashboard enablement persists locally without repeated consent. Explicit setup
+creates/upgrades the separate store, and the dashboard supervises its service
+only while running. Requests, applied settings, worker ownership, source checks
+and briefing freshness remain distinct. Portfolio classifications and confirmed
+public exposure tags are matched locally after public synthesis; private
+records, names, notes and derived holdings queries are never model inputs.
+No accounting, policy, proposal or execution authority is added.

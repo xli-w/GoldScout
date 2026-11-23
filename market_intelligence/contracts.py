@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 SYMBOLS = ("SPY", "QQQ", "BTC/USD", "GLD", "USO")
 CATEGORIES = ("monetary_policy", "inflation", "employment", "growth", "energy")
+CALENDAR_SOURCE_NAMES = ("bls", "bea", "ons", "boe_mpc")
 NEWS_ERROR_CODES = frozenset({
     "endpoint_refused", "request_timeout", "request_in_progress", "address_refused", "http_unavailable",
     "encoding_refused", "content_refused", "response_too_large", "response_incomplete",
@@ -27,10 +28,8 @@ ANALYSIS_ERROR_CODES = frozenset({
     "analysis_expired", "output_invalid", "storage_unavailable", "storage_invalid",
     "reservation_invalid", "upgrade_required",
 })
-SERVICE_ERROR_CODES = {
-    "bls": CALENDAR_ERROR_CODES, "bea": CALENDAR_ERROR_CODES,
-    "fed_monetary": NEWS_ERROR_CODES, "analysis": ANALYSIS_ERROR_CODES,
-}
+SERVICE_ERROR_CODES = {source: CALENDAR_ERROR_CODES for source in CALENDAR_SOURCE_NAMES}
+SERVICE_ERROR_CODES.update({"fed_monetary": NEWS_ERROR_CODES, "analysis": ANALYSIS_ERROR_CODES})
 SERVICE_HEARTBEAT_SECONDS = 300
 SERVICE_OBSERVATION_MAX_AGE_SECONDS = 600
 
@@ -113,19 +112,19 @@ class ServiceObservation:
             raise ValueError("Service observations require a positive revision")
         if any(type(value) is not bool for value in (self.network_permitted, self.news_permitted, self.ai_permitted)):
             raise ValueError("Service capabilities must be booleans")
-        if (type(self.calendar_sources) is not tuple or not 1 <= len(self.calendar_sources) <= 2
-                or any(source not in ("bls", "bea") for source in self.calendar_sources)
+        if (type(self.calendar_sources) is not tuple or not 1 <= len(self.calendar_sources) <= len(CALENDAR_SOURCE_NAMES)
+                or any(source not in CALENDAR_SOURCE_NAMES for source in self.calendar_sources)
                 or len(set(self.calendar_sources)) != len(self.calendar_sources)):
             raise ValueError("Service calendars must be registered and unique")
         if self.ai_permitted and (not self.network_permitted or not self.news_permitted):
             raise ValueError("AI capability requires network and news capabilities")
-        if (type(self.failures) is not tuple or len(self.failures) > 4
+        if (type(self.failures) is not tuple or len(self.failures) > len(CALENDAR_SOURCE_NAMES) + 2
                 or any(not isinstance(failure, ServiceFailure) for failure in self.failures)
                 or len({failure.source for failure in self.failures}) != len(self.failures)):
             raise ValueError("Service failures must be bounded and unique by source")
         for failure in self.failures:
             if (failure.observed_at > self.observed_at or not self.network_permitted
-                    or failure.source in ("bls", "bea") and failure.source not in self.calendar_sources
+                    or failure.source in CALENDAR_SOURCE_NAMES and failure.source not in self.calendar_sources
                     or failure.source == "fed_monetary" and not self.news_permitted
                     or failure.source == "analysis" and not self.ai_permitted):
                 raise ValueError("Service failure does not match the observed capabilities or clock")
@@ -251,6 +250,7 @@ class CalendarEvent:
     source_timezone: str = "America/New_York"
     published_at: Optional[datetime] = None
     revision: int = 0
+    source_notes: Tuple[str, ...] = ()
 
     def __post_init__(self):
         identifier(self.event_id)
@@ -265,12 +265,19 @@ class CalendarEvent:
                 raise ValueError("Publication cannot follow event availability")
         if self.category not in CATEGORIES:
             raise ValueError("Unsupported calendar category")
-        if type(self.symbols) is not tuple or not self.symbols or len(set(self.symbols)) != len(self.symbols):
-            raise ValueError("Symbols must be a nonempty immutable unique tuple")
+        if type(self.symbols) is not tuple or len(set(self.symbols)) != len(self.symbols):
+            raise ValueError("Symbols must be an immutable unique tuple")
         if any(symbol not in SYMBOLS for symbol in self.symbols):
             raise ValueError("Unsupported instrument")
-        if self.status not in ("scheduled", "tentative", "cancelled"):
+        if not self.symbols and self.source not in ("ons", "boe_mpc"):
+            raise ValueError("Only macro calendar events may be unlinked to instruments")
+        if self.status not in ("scheduled", "tentative", "cancelled", "postponed"):
             raise ValueError("Unsupported event status")
+        if (type(self.source_notes) is not tuple or len(self.source_notes) > 10
+                or any(not isinstance(note, str) or not note.strip() or len(note) > 1000
+                       or any(ord(character) < 32 or character in "<>" for character in note)
+                       for note in self.source_notes)):
+            raise ValueError("Source notes must be bounded plain text")
         if not isinstance(self.title, str) or not self.title.strip() or len(self.title) > 500:
             raise ValueError("Event title is required and bounded")
         if not isinstance(self.source_timezone, str) or not self.source_timezone or len(self.source_timezone) > 100:
@@ -298,6 +305,7 @@ class SourceCoverage:
     status: str = "unavailable"
     input_hash: Optional[str] = None
     source_url: Optional[str] = None
+    source_urls: Tuple[str, ...] = ()
 
     def __post_init__(self):
         identifier(self.source)
@@ -305,11 +313,20 @@ class SourceCoverage:
             raise ValueError("Source input hash must be SHA256")
         if (self.input_hash is None) != (self.source_url is None):
             raise ValueError("Downloaded source provenance requires both hash and URL")
-        if self.source_url is not None:
-            if not isinstance(self.source_url, str) or len(self.source_url) > 2048 or any(character.isspace() or ord(character) < 32 for character in self.source_url):
+        if (type(self.source_urls) is not tuple or len(self.source_urls) > 2
+                or any(not isinstance(url, str) for url in self.source_urls)
+                or len(set(self.source_urls)) != len(self.source_urls)):
+            raise ValueError("Source URLs must be a bounded unique tuple")
+        urls = self.source_urls or (() if self.source_url is None else (self.source_url,))
+        if self.source_urls and (self.input_hash is None or self.source_url not in self.source_urls):
+            raise ValueError("Additional source URLs require matching downloaded provenance")
+        if self.source == "ons" and self.input_hash is not None and len(self.source_urls) != 2:
+            raise ValueError("ONS provenance must identify both result endpoints")
+        for source_url in urls:
+            if not isinstance(source_url, str) or len(source_url) > 2048 or any(character.isspace() or ord(character) < 32 for character in source_url):
                 raise ValueError("Invalid source provenance URL")
             try:
-                parsed = urlsplit(self.source_url)
+                parsed = urlsplit(source_url)
                 valid = parsed.scheme == "https" and bool(parsed.hostname) and parsed.username is None and parsed.password is None and parsed.port in (None, 443)
             except ValueError:
                 valid = False
