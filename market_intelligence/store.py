@@ -21,7 +21,7 @@ from market_intelligence.analysis import AnalysisBrief, AnalysisLimits, Evidence
 
 
 APPLICATION_ID = 0x4D494E54
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 MAX_PAYLOAD = 524288
 MAX_RAW_NEWS = 1048576
 MAX_SERVICE_PAYLOAD = 8192
@@ -29,7 +29,7 @@ _Record = TypeVar("_Record")
 
 
 def storage_schema(version=SCHEMA_VERSION):
-    if version not in (1, 2, 3, 4, 5, 6, 7):
+    if version not in (1, 2, 3, 4, 5, 6, 7, 8):
         raise StoreError("schema_unsupported")
     definitions = {
         ("table", "identity"): "CREATE TABLE identity(id INTEGER PRIMARY KEY CHECK(id=1), database_id TEXT NOT NULL CHECK(length(database_id) BETWEEN 1 AND 128))",
@@ -296,7 +296,7 @@ def connection(path, writable=False, expected_id=None):
         if handle.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID:
             raise StoreError("foreign_database")
         version = handle.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (1, 2, 3, 4, 5, 6, SCHEMA_VERSION):
+        if version not in (1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION):
             raise StoreError("schema_unsupported")
         if handle.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             raise StoreError("schema_unsupported")

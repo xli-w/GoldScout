@@ -70,7 +70,7 @@ python -m pip install -r requirements-intelligence.txt
 python -m market_intelligence initialize --database intelligence.sqlite3
 ```
 
-Existing version-1 through version-6 intelligence databases require an explicit upgrade for
+Existing version-1 through version-7 intelligence databases require an explicit upgrade for
 the latest capabilities, with the service stopped. Older supported databases
 remain readable and are never upgraded by a read. Foreign or investment stores
 must never be used as this database:
@@ -100,10 +100,17 @@ version-6 stores rather than silently reading a payload they may not understand.
 
 Version 7 adds immutable public-content acquisitions, first-availability
 documents, retained briefing manifests, event revision baselines and durable
-synthesis operations. The investment journal remains version 2. Old intelligence
-stores remain readable; reads do not upgrade them. Writes to pre-version-6
-calendars retain their historical wire shape or reject newer fields before
-mutation. Upgrade preserves historical payload bytes and existing budget use.
+synthesis operations. Version 8 adds day-precision publication dates for
+date-only source metadata and a new public compiler/briefing wire version.
+Date-only releases are eligible only when their source date is no later than
+the current UTC calendar date and remains within the topic lookback; no
+publication instant is invented and receipt time alone cannot make a dated
+release fresh. The parser can derive this date
+from the retained raw bytes of version-7 acquisitions without rewriting them.
+The investment journal remains version 2. Old intelligence stores remain
+readable; reads do not upgrade them. Writes to pre-version-6 calendars retain
+their historical wire shape or reject newer fields before mutation. Upgrade
+preserves historical payload bytes and existing budget use.
 
 ## Cross-source public briefings
 
@@ -515,7 +522,8 @@ change and transport registration, not accepting a URL from a feed, webpage,
 operator text or model. They may already be outside a downstream compiler's
 freshness window. In particular, date-only UK publication metadata remains
 unknown at instant precision; a new receipt must not be described as proof of
-a newly issued policy decision.
+a newly issued policy decision. The date is retained for conservative day-level
+freshness, not converted to a guessed publication instant.
 
 ### Parser assumptions, clocks and quoting
 
@@ -545,11 +553,16 @@ not publication or market availability before receipt. A source publication
 instant is retained only when explicitly stated: BEA RSS RFC-style dates with an
 explicit offset/EST/EDT/GMT; BEA release embargo date/time with explicit EST/EDT;
 Fed displayed release date plus explicit EST/EDT release time. Missing exact
-publication metadata stays `None`; date-only ONS/BoE labels are validated but
-not converted to guessed midnight/noon UTC. Invalid/conflicting selected dates,
-ambiguous time-zone labels and publication after receipt are rejected.
+publication metadata stays `None`; date-only ONS/BoE labels are retained as
+`published_on` calendar dates and are not converted to guessed midnight/noon
+UTC. Invalid/conflicting selected dates, ambiguous time-zone labels and
+publication after receipt are rejected. Date-only documents are excluded
+before their stated UTC calendar day and after their topic lookback window; a
+same-day receipt does not reset that window.
 `scheduled_at` remains `None`; schedules never manufacture realized outcomes.
-`document_id` hashes normalized content/source/publication, excluding receipt.
+`document_id` hashes normalized content/source and any exact publication
+instant, excluding receipt; date-only publication metadata instead participates
+in the version-2 compiler's semantic input hash.
 Publisher families are stable `ons`, `boe`, `bea`, `fed` IDs.
 
 `collect_content(name, transport, clock, cancel_event)` makes exactly one

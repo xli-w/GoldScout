@@ -1,7 +1,7 @@
 """Deterministic public evidence selection; never imports portfolio records."""
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import hashlib
 import json
 from typing import Optional, Tuple
@@ -10,7 +10,8 @@ from urllib.parse import urlsplit
 from market_intelligence.contracts import CalendarSnapshot, identifier, utc_time
 
 
-COMPILER_VERSION = "public-topics-v1"
+COMPILER_VERSION = "public-topics-v2"
+SUPPORTED_COMPILER_VERSIONS = ("public-topics-v1", COMPILER_VERSION)
 PUBLIC_TOPICS = ("inflation", "employment", "growth", "monetary_policy")
 DOCUMENT_LOOKBACK_DAYS = {"inflation": 60, "employment": 45, "growth": 100, "monetary_policy": 90}
 
@@ -45,6 +46,7 @@ class SourceDocument:
     published_at: Optional[datetime]
     received_at: datetime
     scheduled_at: Optional[datetime] = None
+    published_on: Optional[date] = None
 
     def __post_init__(self):
         for value in (self.evidence_id, self.source, self.publisher_family):
@@ -59,6 +61,9 @@ class SourceDocument:
         for value in (self.published_at, self.scheduled_at):
             if value is not None:
                 utc_time(value)
+        if (self.published_on is not None
+                and (type(self.published_on) is not date or self.published_at is not None)):
+            raise ValueError("Publication date must retain day precision without an instant")
         if self.published_at is not None and self.published_at > self.received_at:
             raise ValueError("Publication cannot follow receipt")
         if (not isinstance(self.source_url, str) or len(self.source_url) > 2048
@@ -77,6 +82,7 @@ class SourceDocument:
         value = asdict(self)
         for name in ("published_at", "received_at", "scheduled_at"):
             value[name] = timestamp(value[name]) if value[name] is not None else None
+        value["published_on"] = self.published_on.isoformat() if self.published_on is not None else None
         return value
 
     def semantic(self):
@@ -90,13 +96,22 @@ def document_id(source, url, title, text, published_at=None):
 
 
 def restore_document(value):
-    if type(value) is not dict or set(value) != set(SourceDocument.__dataclass_fields__):
+    fields = set(SourceDocument.__dataclass_fields__)
+    if type(value) is not dict or set(value) not in (fields, fields - {"published_on"}):
         raise ValueError("Invalid public evidence fields")
     from market_intelligence.store import parse_time
     result = dict(value)
+    result.setdefault("published_on", None)
     for name in ("published_at", "received_at", "scheduled_at"):
         if result[name] is not None:
             result[name] = parse_time(result[name])
+    if result["published_on"] is not None:
+        if type(result["published_on"]) is not str:
+            raise ValueError("Invalid publication date")
+        try:
+            result["published_on"] = date.fromisoformat(result["published_on"])
+        except ValueError as exc:
+            raise ValueError("Invalid publication date") from exc
     return SourceDocument(**result)
 
 
@@ -106,6 +121,7 @@ class PublicBundle:
     cutoff: datetime
     gaps: Tuple[str, ...]
     omitted: int
+    compiler_version: str = COMPILER_VERSION
 
     def __post_init__(self):
         utc_time(self.cutoff)
@@ -120,16 +136,21 @@ class PublicBundle:
             plain_text(gap, 500)
         if type(self.omitted) is not int or self.omitted < 0:
             raise ValueError("Invalid public omission count")
+        if self.compiler_version not in SUPPORTED_COMPILER_VERSIONS:
+            raise ValueError("Unsupported public compiler version")
 
     @property
     def input_hash(self):
-        value = {"compiler": COMPILER_VERSION,
-                 "evidence": [item.semantic() for item in self.documents],
+        evidence = [item.semantic() for item in self.documents]
+        if self.compiler_version == "public-topics-v1":
+            evidence = [{key: value for key, value in item.items() if key != "published_on"}
+                        for item in evidence]
+        value = {"compiler": self.compiler_version, "evidence": evidence,
                  "gaps": self.gaps, "omitted": self.omitted}
         return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
     def wire(self):
-        return {"compiler_version": COMPILER_VERSION, "input_hash": self.input_hash,
+        return {"compiler_version": self.compiler_version, "input_hash": self.input_hash,
                 "cutoff": timestamp(self.cutoff), "evidence": [item.wire() for item in self.documents],
                 "gaps": list(self.gaps), "omitted": self.omitted}
 
@@ -138,11 +159,12 @@ def restore_bundle(value):
     from market_intelligence.store import parse_time
     expected = {"compiler_version", "input_hash", "cutoff", "evidence", "gaps", "omitted"}
     if (type(value) is not dict or set(value) != expected
-            or value["compiler_version"] != COMPILER_VERSION
+            or value["compiler_version"] not in SUPPORTED_COMPILER_VERSIONS
             or type(value["evidence"]) is not list or type(value["gaps"]) is not list):
         raise ValueError("Invalid public manifest")
     bundle = PublicBundle(tuple(restore_document(item) for item in value["evidence"]),
-                          parse_time(value["cutoff"]), tuple(value["gaps"]), value["omitted"])
+                          parse_time(value["cutoff"]), tuple(value["gaps"]), value["omitted"],
+                          value["compiler_version"])
     if bundle.input_hash != value["input_hash"]:
         raise ValueError("Public manifest semantic hash mismatch")
     return bundle
@@ -164,8 +186,14 @@ def compile_bundle(documents, calendar, now, gaps=(), max_bytes=32768):
                 latest[key] = item
     candidates = []
     for item in latest.values():
-        date = item.published_at or item.received_at
-        if timedelta(0) <= now - date <= timedelta(days=DOCUMENT_LOOKBACK_DAYS[item.topic]):
+        if item.published_on is not None:
+            age_days = (now.date() - item.published_on).days
+            eligible = 0 <= age_days <= DOCUMENT_LOOKBACK_DAYS[item.topic]
+        else:
+            published = item.published_at or item.received_at
+            eligible = timedelta(0) <= now - published <= timedelta(
+                days=DOCUMENT_LOOKBACK_DAYS[item.topic])
+        if eligible:
             candidates.append(item)
     if calendar is not None:
         if not isinstance(calendar, CalendarSnapshot) or calendar.available_at > now:

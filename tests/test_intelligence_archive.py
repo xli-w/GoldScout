@@ -100,7 +100,7 @@ class IntelligenceArchiveMigrationTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())["schema_version"], 1)
         with redirect_stdout(io.StringIO()) as output:
             self.assertEqual(main(["upgrade", "--database", str(self.path)]), 0)
-        self.assertEqual(json.loads(output.getvalue())["schema_version"], 7)
+        self.assertEqual(json.loads(output.getvalue())["schema_version"], 8)
         self.assertEqual(IntelligenceStore(self.path).database_id, self.store.database_id)
 
     def test_version_five_requires_explicit_upgrade_before_uk_calendar_use(self):
@@ -125,7 +125,7 @@ class IntelligenceArchiveMigrationTests(unittest.TestCase):
             IntelligenceService(old, allow_network=True, calendar_sources=("ons",))
         self.assertEqual(result.exception.code, "upgrade_required")
         upgraded = upgrade(path)
-        self.assertEqual(upgraded.schema_version, 7)
+        self.assertEqual(upgraded.schema_version, 8)
         self.assertEqual(upgraded.calendar(), snapshot)
         service = IntelligenceService(upgraded, calendar_sources=("ons",))
         self.assertEqual(service.calendar_sources, ("ons",))
@@ -169,7 +169,7 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
             before = {table: handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
                       for table in ("news_payloads", "news_items", "news_acquisitions")}
         migrated = upgrade(path)
-        self.assertEqual(migrated.schema_version, 7)
+        self.assertEqual(migrated.schema_version, 8)
         self.assertEqual(migrated.news_acquisition("fetch-1"), record)
         self.assertEqual(migrated.news_body("fetch-1"), self.raw)
         self.assertIsNone(migrated.news_status())
@@ -198,7 +198,7 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
             before={table:handle.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
                     for table in ("news_payloads","news_acquisitions","news_items","news_observations")}
         upgraded=upgrade(path)
-        self.assertEqual(upgraded.schema_version,7)
+        self.assertEqual(upgraded.schema_version,8)
         self.assertEqual(upgraded.news_status(),status)
         self.assertEqual(upgraded.news_body("attempt-1"),self.raw)
         with closing(sqlite3.connect(path)) as handle:
@@ -234,7 +234,7 @@ class IntelligenceNewsArchiveTests(IntelligenceStoreFixture, unittest.TestCase):
         self.assertEqual(path.read_bytes(), before)
 
         upgraded = upgrade(path)
-        self.assertEqual(upgraded.schema_version, 7)
+        self.assertEqual(upgraded.schema_version, 8)
         self.assertEqual(upgraded.database_id, old.database_id)
         self.assertEqual(upgraded.news_status(), status)
         self.assertEqual(upgraded.news_body(status.acquisition_id), self.raw)

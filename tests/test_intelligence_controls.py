@@ -15,7 +15,9 @@ from market_intelligence.contracts import (
     CalendarSnapshot, ControlReceipt, ControlRequest, IntelligenceSettings, ServiceFailure,
     SourceCoverage, service_status_state,
 )
-from market_intelligence.store import IntelligenceStore, StoreError, digest, encode, initialize, storage_schema
+from market_intelligence.store import (
+    SCHEMA_VERSION, IntelligenceStore, StoreError, digest, encode, initialize, storage_schema,
+)
 from market_intelligence.service import IntelligenceService
 from market_intelligence.__main__ import main
 
@@ -173,7 +175,7 @@ class IntelligenceStoreTests(IntelligenceStoreFixture, unittest.TestCase):
 
     def test_future_schema_is_refused_without_resetting_settings(self):
         with closing(sqlite3.connect(self.path)) as handle:
-            handle.execute("PRAGMA user_version=8")
+            handle.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
         with self.assertRaises(StoreError) as result:
             IntelligenceStore(self.path)
         self.assertEqual(result.exception.code, "schema_unsupported")

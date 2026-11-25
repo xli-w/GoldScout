@@ -1,6 +1,7 @@
 """Append-only public acquisitions and fenced, durable synthesis operations."""
 
 from datetime import timedelta
+from dataclasses import replace
 import hashlib
 import json
 import uuid
@@ -57,9 +58,13 @@ def public_storage_schema():
     return definitions
 
 
-def require_schema(handle):
-    if handle.execute("PRAGMA user_version").fetchone()[0] < 7:
+def require_schema(handle, minimum=7):
+    if handle.execute("PRAGMA user_version").fetchone()[0] < minimum:
         raise storage.StoreError("upgrade_required")
+
+
+def _semantic_without_publication_day(document):
+    return {key: value for key, value in document.semantic().items() if key != "published_on"}
 
 
 def read_payload(row):
@@ -104,6 +109,7 @@ def operation_record(handle, operation_id):
         if (set(metadata) != {*identity, "manifest", "acquisition_ids", "settings_revision"}
                 or metadata["settings_revision"] != row["settings_revision"]
                 or bundle.input_hash != metadata["input_hash"]
+                or metadata["schema_version"] != ("1" if bundle.compiler_version == "public-topics-v1" else "2")
                 or operation_id != "synthesis-" + storage.digest(canonical(identity))):
             raise ValueError("Invalid synthesis provenance")
     except (ValueError, KeyError, TypeError) as exc:
@@ -221,7 +227,7 @@ class PublicStoreMethods:
         if len(payload.encode("utf-8")) > 16384:
             raise ValueError("Public configuration exceeds bound")
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             require_owner(handle, owner_id)
             settings, at = self._settings(handle)
             if settings.revision != settings_revision:
@@ -309,7 +315,7 @@ class PublicStoreMethods:
         identifier(owner_id)
         utc_time(now)
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             last = handle.execute("SELECT observed_at FROM public_owners ORDER BY sequence DESC LIMIT 1").fetchone()
             if last is not None and storage.parse_time(last[0]) > now:
                 raise storage.StoreError("clock_invalid")
@@ -340,10 +346,10 @@ class PublicStoreMethods:
             raise ValueError("Public acquisition source or clock mismatch")
         raw_hash = hashlib.sha256(body).hexdigest()
         acquisition_id = "public-acquisition-" + uuid.uuid4().hex
-        payload, checksum = write_payload({"parser_version": "official-content-v1",
+        payload, checksum = write_payload({"parser_version": "official-content-v2",
                                           "documents": [item.wire() for item in documents]})
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             require_owner(handle, owner_id)
             _, settings_at = require_settings(self, handle, settings_revision)
             if received_at < settings_at:
@@ -364,7 +370,8 @@ class PublicStoreMethods:
                                      (document.evidence_id,)).fetchone()
                 if row is not None:
                     prior = restore_document(read_payload(row))
-                    if prior.semantic() != document.semantic():
+                    if (_semantic_without_publication_day(prior)
+                            != _semantic_without_publication_day(document)):
                         raise storage.StoreError("evidence_conflict")
                 else:
                     document_payload, document_hash = write_payload(document.wire())
@@ -379,7 +386,7 @@ class PublicStoreMethods:
         identifier(error_code)
         utc_time(now)
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             require_owner(handle, owner_id)
             _, at = require_settings(self, handle, settings_revision)
             last = handle.execute("SELECT observed_at FROM public_attempts ORDER BY sequence DESC LIMIT 1").fetchone()
@@ -387,6 +394,28 @@ class PublicStoreMethods:
                 raise storage.StoreError("clock_invalid")
             handle.execute("INSERT INTO public_attempts VALUES(NULL,?,?,?,NULL,?)",
                            (source, timestamp(now), settings_revision, error_code))
+
+    def _replay_acquisition(self, handle, row):
+        payload = read_payload(row)
+        if (set(payload) != {"parser_version", "documents"}
+                or payload["parser_version"] not in ("official-content-v1", "official-content-v2")
+                or type(payload["documents"]) is not list or len(payload["documents"]) > 200):
+            raise ValueError("Invalid public archive")
+        received_at = storage.parse_time(row["received_at"])
+        raw = handle.execute("SELECT body FROM public_payloads WHERE input_hash=?",
+                             (row["input_hash"],)).fetchone()
+        if (raw is None or type(raw[0]) is not bytes or not 1 <= len(raw[0]) <= 1048576
+                or hashlib.sha256(raw[0]).hexdigest() != row["input_hash"]):
+            raise ValueError("Invalid public acquisition hash")
+        from market_intelligence.content import parse_content
+        reparsed = parse_content(row["source"], raw[0], received_at)
+        replayed = [item.wire() for item in reparsed]
+        if payload["parser_version"] == "official-content-v1":
+            replayed = [{key: value for key, value in item.items() if key != "published_on"}
+                        for item in replayed]
+        if replayed != payload["documents"]:
+            raise ValueError("Public acquisition does not replay")
+        return tuple(reparsed)
 
     def _public_documents(self, handle, sources=None):
         rows = handle.execute(f"SELECT acquisition_id,source,received_at,input_hash,{payload_columns()} "
@@ -397,38 +426,32 @@ class PublicStoreMethods:
         for row in rows:
             if sources is not None and row["source"] not in sources:
                 continue
-            payload = read_payload(row)
             try:
-                records = payload["documents"]
-                if (set(payload) != {"parser_version", "documents"} or payload["parser_version"] != "official-content-v1"
-                        or type(records) is not list or len(records) > 200):
-                    raise ValueError("Invalid public archive")
-                received_at = storage.parse_time(row["received_at"])
-                raw = handle.execute("SELECT body FROM public_payloads WHERE input_hash=?",
-                                     (row["input_hash"],)).fetchone()
-                if (raw is None or type(raw[0]) is not bytes or not 1 <= len(raw[0]) <= 1048576
-                        or hashlib.sha256(raw[0]).hexdigest() != row["input_hash"]):
-                    raise ValueError("Invalid public acquisition hash")
-                from market_intelligence.content import parse_content
-                reparsed = parse_content(row["source"], raw[0], received_at)
-                if [item.wire() for item in reparsed] != records:
-                    raise ValueError("Public acquisition does not replay")
-                for item in records:
+                reparsed = self._replay_acquisition(handle, row)
+                reparsed_by_id = {item.evidence_id: item for item in reparsed}
+                payload = read_payload(row)
+                for item in payload["documents"]:
                     document = restore_document(item)
-                    if document.source != row["source"] or document.received_at != received_at:
+                    if (document.source != row["source"]
+                            or document.received_at != storage.parse_time(row["received_at"])):
                         raise ValueError("Public archive binding mismatch")
+                    current_parse = reparsed_by_id.get(document.evidence_id)
+                    if current_parse is None:
+                        raise ValueError("Public archive evidence identity mismatch")
                     original = handle.execute(f"SELECT {payload_columns()} FROM public_documents WHERE evidence_id=?",
                                               (document.evidence_id,)).fetchone()
                     first = restore_document(read_payload(original))
-                    if first.semantic() != document.semantic() or first.received_at > document.received_at:
+                    if (_semantic_without_publication_day(first)
+                            != _semantic_without_publication_day(document)
+                            or first.received_at > document.received_at):
                         raise ValueError("Conflicting public evidence identity")
-                    documents.append(first)
+                    documents.append(replace(first, published_on=current_parse.published_on))
                 acquisition_ids.append(row["acquisition_id"])
             except (ValueError, KeyError, TypeError) as exc:
                 raise storage.StoreError("storage_invalid") from exc
         return tuple(documents[-1000:]), tuple(acquisition_ids)
 
-    def _validate_public_manifest(self, handle, bundle):
+    def _validate_public_manifest(self, handle, bundle, acquisition_ids=()):
         for item in bundle.documents:
             if item.kind == "schedule":
                 calendar = self._calendar(handle)
@@ -436,9 +459,32 @@ class PublicStoreMethods:
                 if compiled is None or item not in compiled.documents:
                     raise storage.StoreError("evidence_unavailable")
             else:
-                row = handle.execute(f"SELECT {payload_columns()} FROM public_documents WHERE evidence_id=?",
+                row = handle.execute(f"SELECT first_acquisition_id,{payload_columns()} "
+                                     "FROM public_documents WHERE evidence_id=?",
                                      (item.evidence_id,)).fetchone()
-                if row is None or restore_document(read_payload(row)) != item:
+                if row is None:
+                    raise storage.StoreError("evidence_unavailable")
+                first = restore_document(read_payload(row))
+                if first == item:
+                    continue
+                if _semantic_without_publication_day(first) != _semantic_without_publication_day(item):
+                    raise storage.StoreError("evidence_unavailable")
+                replayed_match = False
+                for acquisition_id in acquisition_ids:
+                    acquisition = handle.execute(
+                        f"SELECT acquisition_id,source,received_at,input_hash,{payload_columns()} "
+                        "FROM public_acquisitions WHERE acquisition_id=?", (acquisition_id,)).fetchone()
+                    if acquisition is None:
+                        raise storage.StoreError("evidence_unavailable")
+                    if acquisition["source"] != item.source:
+                        continue
+                    try:
+                        replayed_match = item in self._replay_acquisition(handle, acquisition)
+                    except (ValueError, KeyError, TypeError) as exc:
+                        raise storage.StoreError("storage_invalid") from exc
+                    if replayed_match:
+                        break
+                if not replayed_match:
                     raise storage.StoreError("evidence_unavailable")
 
     def public_compilation_inputs(self, now, sources=None):
@@ -446,7 +492,7 @@ class PublicStoreMethods:
         if sources is not None and (type(sources) is not tuple or len(sources) > 10):
             raise ValueError("Public selection must be a bounded source tuple")
         with storage.connection(self.path, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             documents, acquisitions = self._public_documents(handle, sources)
             return {"documents": documents, "acquisition_ids": acquisitions,
                     "calendar": self._calendar(handle), "settings": self._settings(handle)[0],
@@ -479,11 +525,11 @@ class PublicStoreMethods:
         if provider_kind not in ("custom", "local", "openai", "anthropic", "gemini"):
             raise ValueError("Unsupported summary provider kind")
         identity = {"input_hash": bundle.input_hash, "provider": provider, "provider_kind": provider_kind, "model": model,
-                    "prompt_version": prompt_version, "schema_version": "1"}
+                    "prompt_version": prompt_version, "schema_version": "2"}
         operation_id = "synthesis-" + storage.digest(canonical(identity))
         metadata = {**identity, "manifest": bundle.wire(), "acquisition_ids": list(acquisition_ids)}
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             require_owner(handle, owner_id)
             settings, at = self._settings(handle)
             require_settings(self, handle, settings.revision, provider)
@@ -492,15 +538,17 @@ class PublicStoreMethods:
             existing = operation_record(handle, operation_id)
             if existing is not None:
                 return existing
-            self._validate_public_manifest(handle, bundle)
             lineage = set(acquisition_ids)
             for item in bundle.documents:
                 if item.kind != "schedule":
                     row = handle.execute("SELECT first_acquisition_id FROM public_documents WHERE evidence_id=?",
                                          (item.evidence_id,)).fetchone()
+                    if row is None:
+                        raise storage.StoreError("evidence_unavailable")
                     lineage.add(row[0])
             if len(lineage) > 100:
                 raise ValueError("Public acquisition lineage exceeds bound")
+            self._validate_public_manifest(handle, bundle, tuple(lineage))
             for acquisition_id in lineage:
                 identifier(acquisition_id)
                 row = handle.execute("SELECT received_at FROM public_acquisitions WHERE acquisition_id=?",
@@ -520,7 +568,7 @@ class PublicStoreMethods:
         utc_time(now)
         exhausted = False
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             require_owner(handle, owner_id)
             record = operation_record(handle, operation_id)
             if record is None:
@@ -568,7 +616,7 @@ class PublicStoreMethods:
         if error_code is not None:
             identifier(error_code)
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             require_owner(handle, owner_id)
             record = operation_record(handle, operation_id)
             if record is None or record["state"] != expected_state:
@@ -586,7 +634,8 @@ class PublicStoreMethods:
                 from market_intelligence.briefing import validate_output
                 result = {"briefing_id": operation_id, "generated_at": timestamp(now),
                           "provider": metadata["provider"], "model": metadata["model"],
-                          "prompt_version": metadata["prompt_version"], "schema_version": "1",
+                          "prompt_version": metadata["prompt_version"],
+                          "schema_version": metadata["schema_version"],
                           "manifest": metadata["manifest"], "verification": "unverified",
                           "output": validate_output(record["output"], metadata["manifest"])}
                 payload, checksum = write_payload(result)
@@ -600,7 +649,7 @@ class PublicStoreMethods:
     def activate_public_briefing(self, operation_id, owner_id, now):
         utc_time(now)
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             require_owner(handle, owner_id)
             record = operation_record(handle, operation_id)
             if record is None or record["state"] != "committed":
@@ -628,7 +677,7 @@ class PublicStoreMethods:
         if action not in ("sources", "briefing"):
             raise ValueError("Unsupported intelligence refresh")
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
             existing = handle.execute("SELECT action FROM public_requests WHERE request_id=?", (request_id,)).fetchone()
             if existing is not None:
                 if existing[0] != action:
@@ -651,7 +700,17 @@ class PublicStoreMethods:
         payload, checksum = write_payload({"request_id": request_id, "observed_at": timestamp(now),
                                           "state": state, "operation_id": operation_id, "error_code": error_code})
         with storage.connection(self.path, writable=True, expected_id=self.database_id) as handle:
-            require_schema(handle)
+            require_schema(handle, 8)
+            request = handle.execute("SELECT requested_at FROM public_requests WHERE request_id=?",
+                                     (request_id,)).fetchone()
+            if request is None:
+                raise storage.StoreError("request_missing")
+            try:
+                requested_at = storage.parse_time(request["requested_at"])
+            except ValueError as exc:
+                raise storage.StoreError("storage_invalid") from exc
+            if now < requested_at:
+                raise storage.StoreError("clock_invalid")
             if handle.execute("SELECT 1 FROM public_receipts WHERE request_id=?", (request_id,)).fetchone() is None:
                 handle.execute("INSERT INTO public_receipts VALUES(NULL,?,?,?)", (request_id, payload, checksum))
 
@@ -689,6 +748,19 @@ class PublicStoreMethods:
             for row in requests:
                 receipt = handle.execute(f"SELECT {payload_columns()} FROM public_receipts WHERE request_id=?",
                                          (row["request_id"],)).fetchone()
-                refreshes.append({**dict(row), **(read_payload(receipt) if receipt else {"state": "queued"})})
+                record = read_payload(receipt) if receipt else {"state": "queued"}
+                if receipt is not None:
+                    try:
+                        if set(record) != {"request_id", "observed_at", "state", "operation_id", "error_code"}:
+                            raise ValueError("Invalid refresh receipt fields")
+                        requested_at = storage.parse_time(row["requested_at"])
+                        observed_at = storage.parse_time(record["observed_at"])
+                        if record["request_id"] != row["request_id"] or observed_at < requested_at:
+                            raise ValueError("Invalid refresh receipt chronology")
+                    except (ValueError, KeyError, TypeError) as exc:
+                        raise storage.StoreError("storage_invalid") from exc
+                    if observed_at > now:
+                        raise storage.StoreError("clock_invalid")
+                refreshes.append({**dict(row), **record})
             return {"schema_capable": True, "briefing": briefing, "source_health": self._public_health(handle, now),
                     "operation": operation, "refreshes": refreshes}

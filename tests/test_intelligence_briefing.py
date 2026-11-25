@@ -67,6 +67,19 @@ class PublicCompilationTests(unittest.TestCase):
         self.assertEqual({item.geography for item in bundle.documents}, {"UK", "US"})
         self.assertEqual(len(bundle.documents), 2)
 
+    def test_date_only_publications_use_the_source_day_not_receipt_time(self):
+        on_day = replace(document(), published_at=None, published_on=NOW.date())
+        before_day = replace(document("future-day"), published_at=None,
+                             published_on=NOW.date() + timedelta(days=1))
+        stale = replace(document("old-day"), published_at=None,
+                        published_on=NOW.date() - timedelta(days=61))
+        self.assertEqual(compile_bundle((on_day,), None, NOW).documents, (on_day,))
+        self.assertIsNone(compile_bundle((before_day,), None, NOW))
+        self.assertIsNone(compile_bundle((stale,), None, NOW))
+        later = replace(on_day, published_on=NOW.date() - timedelta(days=1))
+        self.assertNotEqual(compile_bundle((on_day,), None, NOW).input_hash,
+                            compile_bundle((later,), None, NOW).input_hash)
+
     def test_quotes_wrong_units_geography_and_uncited_factual_fields_fail(self):
         bundle = compile_bundle((document(), document("bls_cpi", "US")), None, NOW)
         correct = output_for(bundle)
@@ -149,6 +162,131 @@ class PublicSynthesisTests(unittest.TestCase):
         return size, {"acquisition_id": status.acquisition_id, "source_attempt_id": status.attempt_id,
                       "settings_revision": 1, "profile": "test", "model": "synthetic-model",
                       "cluster_id": cluster, "input_hash": input_hash, "prompt_version": "news-extractive-v1"}
+
+    def test_schema_eight_explicitly_upgrades_v7_and_keeps_v1_briefing_replay(self):
+        from market_intelligence.briefing import PUBLIC_PROMPT_VERSION
+        from market_intelligence.public_store import canonical, write_payload
+        from market_intelligence.store import digest
+
+        old_path = self.path.with_name("schema-seven.sqlite3")
+        old = initialize(old_path, NOW, schema_version=7)
+        old.enqueue(ControlRequest(
+            "enable-v7", old.database_id, 0, NOW, NOW + timedelta(minutes=5),
+            IntelligenceSettings(enabled=True, calendar_enabled=False, news_enabled=True, revision=1)), NOW)
+        old.apply_pending(NOW)
+        legacy_bundle = compile_bundle((document(),), None, NOW)
+        legacy_bundle = replace(legacy_bundle, compiler_version="public-topics-v1")
+        manifest = legacy_bundle.wire()
+        manifest["evidence"] = [
+            {key: value for key, value in item.items() if key != "published_on"}
+            for item in manifest["evidence"]
+        ]
+        identity = {"input_hash": legacy_bundle.input_hash, "provider": "test",
+                    "provider_kind": "custom", "model": "synthetic-model",
+                    "prompt_version": PUBLIC_PROMPT_VERSION, "schema_version": "1"}
+        operation_id = "synthesis-" + digest(canonical(identity))
+        metadata = {**identity, "manifest": manifest, "acquisition_ids": [],
+                    "settings_revision": 1}
+        payload, checksum = write_payload(metadata)
+        wire_now = NOW.isoformat().replace("+00:00", "Z")
+        with closing(sqlite3.connect(old_path)) as handle:
+            handle.execute("INSERT INTO public_owners VALUES(NULL,?,?)", ("legacy-owner", wire_now))
+            handle.execute("INSERT INTO public_operations VALUES(NULL,?,?,?,?)",
+                           (operation_id, 1, payload, checksum))
+            queued, queued_hash = write_payload({"error_code": None})
+            handle.execute("INSERT INTO public_operation_events VALUES(NULL,?,?,?,?,?,?)",
+                           (operation_id, "legacy-owner", "queued", wire_now, queued, queued_hash))
+            handle.commit()
+        upgraded = upgrade(old_path)
+        self.assertEqual(upgraded.schema_version, 8)
+        record = upgraded.public_operation(operation_id)
+        self.assertEqual(record["state"], "queued")
+        self.assertEqual(record["metadata"]["manifest"]["compiler_version"], "public-topics-v1")
+        self.assertEqual(upgrade(old_path).schema_version, 8)
+
+    def test_v1_public_acquisition_replays_and_derives_its_date_after_upgrade(self):
+        from market_intelligence.content import parse_content
+        from market_intelligence.public_store import write_payload
+        from test_intelligence_content import ons
+        import hashlib
+
+        old_path = self.path.with_name("archive-v7.sqlite3")
+        old = initialize(old_path, NOW, schema_version=7)
+        old.enqueue(ControlRequest(
+            "enable-v7-archive", old.database_id, 0, NOW, NOW + timedelta(minutes=5),
+            IntelligenceSettings(enabled=True, calendar_enabled=False, news_enabled=True,
+                                 ai_enabled=True, ai_profile="test", revision=1)), NOW)
+        old.apply_pending(NOW, profiles=("test",))
+        raw = ons()
+        item, = parse_content("ons_cpi", raw, NOW)
+        legacy_wire = item.wire()
+        legacy_wire.pop("published_on")
+        body_hash = hashlib.sha256(raw).hexdigest()
+        acquisition_id = "legacy-acquisition"
+        acquisition, acquisition_hash = write_payload({
+            "parser_version": "official-content-v1", "documents": [legacy_wire]})
+        document_payload, document_hash = write_payload(legacy_wire)
+        with closing(sqlite3.connect(old_path)) as handle:
+            handle.execute("INSERT INTO public_payloads VALUES(?,?)", (body_hash, raw))
+            handle.execute("INSERT INTO public_acquisitions VALUES(NULL,?,?,?,?,?,?,?)",
+                           (acquisition_id, "ons_cpi", 1, NOW.isoformat().replace("+00:00", "Z"),
+                            body_hash, acquisition, acquisition_hash))
+            handle.execute("INSERT INTO public_documents VALUES(?,?,?,?)",
+                           (item.evidence_id, acquisition_id, document_payload, document_hash))
+            handle.execute("INSERT INTO public_attempts VALUES(NULL,?,?,?,?,NULL)",
+                           ("ons_cpi", NOW.isoformat().replace("+00:00", "Z"), 1, acquisition_id))
+            handle.commit()
+        upgraded = upgrade(old_path)
+        records = upgraded.public_compilation_inputs(NOW, sources=("ons_cpi",))["documents"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].published_on.isoformat(), "2026-11-18")
+        self.assertEqual(records[0].received_at, NOW)
+        with closing(sqlite3.connect(old_path)) as handle:
+            stored = json.loads(handle.execute(
+                "SELECT payload FROM public_documents WHERE evidence_id=?", (item.evidence_id,)).fetchone()[0])
+        self.assertNotIn("published_on", stored)
+        inputs = upgraded.public_compilation_inputs(NOW, sources=("ons_cpi",))
+        eligible_at = NOW + timedelta(days=5)
+        self.assertIsNone(compile_bundle(inputs["documents"], None, NOW))
+        bundle = compile_bundle(inputs["documents"], None, eligible_at)
+        upgraded.claim_public_owner("legacy-owner", eligible_at)
+        from market_intelligence.briefing import PUBLIC_PROMPT_VERSION
+        operation = upgraded.ensure_public_operation(
+            bundle, "test", "synthetic-model", PUBLIC_PROMPT_VERSION, eligible_at, "legacy-owner",
+            inputs["acquisition_ids"])
+        self.assertEqual(operation["state"], "queued")
+
+    def test_refresh_receipt_cannot_precede_its_request(self):
+        request_at = NOW + timedelta(minutes=1)
+        self.store.request_public_refresh("briefing", "future-request", request_at)
+        with self.assertRaises(StoreError) as result:
+            self.store.complete_public_request(
+                "future-request", NOW, "failed", error_code="evidence_unavailable")
+        self.assertEqual(result.exception.code, "clock_invalid")
+        self.assertEqual(self.store.pending_public_requests()[0]["request_id"], "future-request")
+
+        self.store.complete_public_request(
+            "future-request", request_at + timedelta(minutes=1), "failed",
+            error_code="evidence_unavailable")
+        self.assertEqual(self.store.pending_public_requests(), ())
+
+    def test_refresh_snapshot_rejects_receipt_before_its_request(self):
+        from market_intelligence.public_store import write_payload
+
+        request_at = NOW + timedelta(minutes=1)
+        request_id = "corrupt-chronology"
+        self.store.request_public_refresh("briefing", request_id, request_at)
+        payload, checksum = write_payload({
+            "request_id": request_id, "observed_at": NOW.isoformat().replace("+00:00", "Z"),
+            "state": "failed", "operation_id": None, "error_code": "evidence_unavailable",
+        })
+        with closing(sqlite3.connect(self.path)) as handle:
+            handle.execute("INSERT INTO public_receipts VALUES(NULL,?,?,?)",
+                           (request_id, payload, checksum))
+            handle.commit()
+        with self.assertRaises(StoreError) as result:
+            self.store.foundation_snapshot(request_at + timedelta(minutes=1))
+        self.assertEqual(result.exception.code, "storage_invalid")
 
     def test_committed_cross_source_brief_reuses_next_day_and_keeps_citations(self):
         result = self.synthesizer.synthesize(self.bundle)
@@ -340,9 +478,9 @@ class PublicSynthesisTests(unittest.TestCase):
         with self.assertRaises(StoreError):
             old.claim_public_owner("owner", NOW)
         upgraded = upgrade(old_path)
-        self.assertEqual(upgraded.schema_version, 7)
+        self.assertEqual(upgraded.schema_version, 8)
         self.assertEqual(upgraded.database_id, old.database_id)
-        self.assertEqual(upgrade(old_path).schema_version, 7)
+        self.assertEqual(upgrade(old_path).schema_version, 8)
         with closing(sqlite3.connect(self.path)) as handle:
             with self.assertRaises(sqlite3.IntegrityError):
                 handle.execute("INSERT OR REPLACE INTO public_owners SELECT * FROM public_owners")
@@ -402,7 +540,7 @@ class PublicSynthesisTests(unittest.TestCase):
         self.assertEqual(reopened.schema_version, 6)
         self.assertEqual(reopened.database_id, old.database_id)
         self.assertEqual(old_path.read_bytes(), original)
-        self.assertEqual(upgrade(old_path).schema_version, 7)
+        self.assertEqual(upgrade(old_path).schema_version, 8)
 
     def test_legacy_reservation_consumes_the_same_synthesis_budget(self):
         limits = AnalysisLimits(daily_calls=1)
@@ -500,10 +638,10 @@ class FoundationOrchestrationTests(unittest.TestCase):
         self.transport = Mock()
         self.transport.fetch.return_value = b"<rss><channel><title>Federal Reserve</title></channel></rss>"
 
-    def enable(self, ai=False):
+    def enable(self, ai=False, calendar=False):
         self.store.enqueue(ControlRequest(
             "enable", self.store.database_id, 0, NOW, NOW + timedelta(minutes=5),
-            IntelligenceSettings(enabled=True, calendar_enabled=False, ai_enabled=ai,
+            IntelligenceSettings(enabled=True, calendar_enabled=calendar, ai_enabled=ai,
                                  ai_profile="test" if ai else None, revision=1)), NOW)
 
     @staticmethod
@@ -528,6 +666,35 @@ class FoundationOrchestrationTests(unittest.TestCase):
                 self.assertEqual(state["source_health"][0]["error_code"], "invalid_content")
                 self.assertEqual(state["refreshes"][0]["state"], "failed")
                 service.step()
+
+    def test_source_refresh_receipt_fails_when_a_selected_calendar_fails(self):
+        from market_intelligence.providers import ProviderError
+        self.enable(calendar=True)
+        self.transport.fetch.side_effect = ProviderError("http_unavailable")
+        with FoundationService(self.store, calendar_sources=("bls",), clock=lambda: NOW,
+                               transport=self.transport) as service:
+            service.request("sources", "calendar-fails")
+            self.drain(service)
+            receipt = self.store.foundation_snapshot(NOW)["refreshes"][0]
+            self.assertEqual((receipt["state"], receipt["error_code"]),
+                             ("failed", "http_unavailable"))
+
+    def test_briefing_refresh_fails_when_no_eligible_evidence_exists(self):
+        from market_intelligence.briefing import AnalysisError
+        from market_intelligence.analysis import JSONSummaryProvider
+        self.enable(ai=True)
+        provider = JSONSummaryProvider(
+            "test", "synthetic-model",
+            lambda *_: self.fail("Provider must not be called without evidence"), "local")
+        with FoundationService(self.store, calendar_sources=("bls",), content_sources=(),
+                               providers={"test": provider}, clock=lambda: NOW,
+                               transport=self.transport) as service:
+            service.request("briefing", "no-public-evidence")
+            self.drain(service)
+            receipt = self.store.foundation_snapshot(NOW)["refreshes"][0]
+            self.assertEqual((receipt["state"], receipt["error_code"]),
+                             ("failed", "evidence_unavailable"))
+            self.assertIsNone(self.store.foundation_snapshot(NOW)["briefing"])
 
     def test_collection_compilation_reservation_and_publication_are_integrated(self):
         self.enable(ai=True)

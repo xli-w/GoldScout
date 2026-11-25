@@ -196,12 +196,11 @@ def _page(payload):
 
 
 def _date_only(value):
-    """Validate an explicit date without manufacturing its UTC release time."""
+    """Preserve an explicit calendar date without manufacturing an instant."""
     try:
-        datetime.strptime(value, "%d %B %Y")
+        return datetime.strptime(value, "%d %B %Y").date()
     except ValueError as error:
         raise ContentError("invalid source date") from error
-    return None
 
 
 def _us_time(date, clock):
@@ -238,8 +237,10 @@ def _ons(root):
         raise ContentError("ambiguous ONS release date")
     if labels:
         value = _bounded(labels[0].text(), 200)
-        _date_only(value.removeprefix("Release date:").strip())
-    return title, text, None
+        published_on = _date_only(value.removeprefix("Release date:").strip())
+    else:
+        published_on = None
+    return title, text, None, published_on
 
 
 def _boe(root):
@@ -261,8 +262,10 @@ def _boe(root):
     if len(dates) > 1:
         raise ContentError("ambiguous BoE publication date")
     if dates:
-        _date_only(_bounded(dates[0].text(), 200).removeprefix("Published on").strip())
-    return title, text, None
+        published_on = _date_only(_bounded(dates[0].text(), 200).removeprefix("Published on").strip())
+    else:
+        published_on = None
+    return title, text, None, published_on
 
 
 def _fed(root):
@@ -411,12 +414,14 @@ def parse_content(source_name: str, payload: bytes,
     url = source.url
     if source_name == "bea_gdp":
         title, text, published, url = _bea_gdp(payload)
+        published_on = None
     else:
         root = _page(payload)
-        title, text, published = {
-            "ons_cpi": _ons, "boe_policy": _boe, "fed_statement": _fed,
-            "bea_pce": _bea_pce,
-        }[source_name](root)
+        if source_name in ("ons_cpi", "boe_policy"):
+            title, text, published, published_on = {"ons_cpi": _ons, "boe_policy": _boe}[source_name](root)
+        else:
+            title, text, published = {"fed_statement": _fed, "bea_pce": _bea_pce}[source_name](root)
+            published_on = None
     title = _bounded(title, 500)
     text = _bounded(text, 12000)
     if published is not None and published > received_at:
@@ -429,6 +434,7 @@ def parse_content(source_name: str, payload: bytes,
         publisher_family=family, source_url=url, title=title,
         text=text, topic=source.topic, geography=source.geography,
         kind=source.kind, published_at=published, received_at=received_at,
+        published_on=published_on,
     ),)
 
 

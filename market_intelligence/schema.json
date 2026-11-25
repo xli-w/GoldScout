@@ -38,14 +38,15 @@
         "kind": {"enum": ["schedule", "release", "policy"]},
         "published_at": {"$ref": "#/$defs/nullable_timestamp"},
         "received_at": {"$ref": "#/$defs/timestamp"},
-        "scheduled_at": {"$ref": "#/$defs/nullable_timestamp"}
+        "scheduled_at": {"$ref": "#/$defs/nullable_timestamp"},
+        "published_on": {"type": ["string", "null"], "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}
       }
     },
     "public_manifest": {
       "type": "object", "additionalProperties": false,
       "required": ["compiler_version", "input_hash", "cutoff", "evidence", "gaps", "omitted"],
       "properties": {
-        "compiler_version": {"const": "public-topics-v1"},
+        "compiler_version": {"enum": ["public-topics-v1", "public-topics-v2"]},
         "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$", "maxLength": 64},
         "cutoff": {"$ref": "#/$defs/timestamp"},
         "evidence": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"$ref": "#/$defs/public_document"}},
@@ -86,7 +87,7 @@
       "properties": {
         "briefing_id": {"$ref": "#/$defs/id"}, "generated_at": {"$ref": "#/$defs/timestamp"},
         "provider": {"$ref": "#/$defs/id"}, "model": {"type": "string", "minLength": 1, "maxLength": 128},
-        "prompt_version": {"const": "public-briefing-v1"}, "schema_version": {"const": "1"},
+        "prompt_version": {"const": "public-briefing-v1"}, "schema_version": {"enum": ["1", "2"]},
         "manifest": {"$ref": "#/$defs/public_manifest"}, "verification": {"const": "unverified"},
         "output": {"$ref": "#/$defs/public_output"}
       }

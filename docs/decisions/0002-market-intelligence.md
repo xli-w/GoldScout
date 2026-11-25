@@ -15,7 +15,9 @@ exists. See [operations](../intelligence.md).
 
 - Source observation/publication, receipt and validated committed AI completion
   have distinct causal meanings. Preserve revisions, archive hashes, parser and
-  provider/model/prompt/input provenance. Empty healthy coverage is not unknown.
+  provider/model/prompt/input provenance. Date-only ONS/BoE publication labels
+  remain dates, not guessed instants, and govern conservative compiler freshness.
+  Empty healthy coverage is not unknown.
 - Requests, service-applied receipts and active collection capabilities differ.
   Settings require exact revision/expiry/identity, append-only evidence and
   transactional application. Missing/foreign stores are never repaired by reads.
@@ -52,9 +54,13 @@ version-6 stores rather than reading unknown calendar values.
 
 ## Public briefing foundation
 
-The public-topic compiler and briefing pipeline use a separate version-7
+The public-topic compiler and briefing pipeline use a separate version-8
 intelligence upgrade. Original acquisition bytes, first document availability,
 input manifests, operation transitions and validated outputs are append-only.
+Version 8 retains date-only publication labels and advances the compiler and
+briefing wire versions; replay derives dates from existing immutable acquisition
+bytes without rewriting them. Source refreshes fail terminally when a selected
+source fails, and briefing refreshes fail when no eligible evidence is available.
 Scheduled events are not release outcomes. Selected events and successful
 requests do not prove a complete calendar horizon.
 

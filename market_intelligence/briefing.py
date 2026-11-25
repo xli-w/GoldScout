@@ -259,7 +259,7 @@ class FoundationService:
     def __init__(self, store, calendar_sources=("bls", "bea"), content_sources=(), providers=None,
                  clock=None, transport=None, configuration_loader=None):
         from market_intelligence.content import CONTENT_SOURCES
-        if store.schema_version < 7:
+        if store.schema_version < 8:
             raise StoreError("upgrade_required")
         if (type(content_sources) is not tuple or len(content_sources) > 10
                 or len(set(content_sources)) != len(content_sources)
@@ -423,6 +423,8 @@ class FoundationService:
         if any(request["action"] == "sources" for request in new_requests):
             self.next_content = {name: 0.0 for name in self.content_sources}
             self.legacy.next_fetch_at = {name: 0.0 for name in self.legacy.fetch_sources}
+            for name in self.legacy.calendar_sources:
+                self.legacy.provider_errors[name] = None
             self.last_error = None
         if any(request["action"] == "briefing" for request in new_requests):
             self.next_synthesis = 0.0
@@ -453,23 +455,39 @@ class FoundationService:
             if bundle is not None:
                 operation = self.synthesizer.synthesize(bundle, acquisitions, self.cancelled)
             self.next_synthesis = time.monotonic() + 30.0
+        calendar_errors = [
+            self.legacy.provider_errors[name]
+            for name in self.legacy.calendar_sources
+            if settings.calendar_enabled and self.legacy.provider_errors.get(name) is not None
+        ]
+        refresh_errors = ([self.last_error] if self.last_error is not None else []) + calendar_errors
+        refresh_error = (refresh_errors[0] if len(refresh_errors) == 1 else
+                         "source_unavailable" if refresh_errors else None)
         for request in requests:
             active_legacy = self.legacy.calendar_sources if settings.calendar_enabled else ()
             if request["action"] == "sources" and (self.legacy.worker is not None
                     or any(self.legacy.monotonic() >= self.legacy.next_fetch_at[name] for name in active_legacy)):
                 continue
-            if request["action"] == "briefing" and settings.ai_enabled and operation is None:
+            if (request["action"] == "briefing" and settings.ai_enabled
+                    and operation is None and self.legacy.worker is not None):
                 continue
-            failed = (request["action"] == "sources" and self.last_error is not None
-                      or request["action"] == "briefing"
-                      and (not settings.ai_enabled or operation is not None
-                           and operation["state"] not in ("committed",)))
+            failed = (
+                request["action"] == "sources" and refresh_error is not None
+                or request["action"] == "briefing" and (
+                    not settings.ai_enabled or operation is None
+                    or operation["state"] != "committed")
+            )
+            if not settings.ai_enabled:
+                briefing_error = "analysis_disabled"
+            elif operation is None:
+                briefing_error = "evidence_unavailable"
+            else:
+                briefing_error = operation.get("error_code") or "analysis_unavailable"
             self.store.complete_public_request(
                 request["request_id"], self.clock(), "failed" if failed else "completed",
                 operation_id=operation["operation_id"] if operation is not None else None,
-                error_code=self.last_error if request["action"] == "sources" else
-                (operation.get("error_code") or "analysis_unavailable") if failed and operation
-                else "analysis_disabled" if failed else None)
+                error_code=refresh_error if request["action"] == "sources" else
+                briefing_error if failed else None)
 
     def run(self, stop_event):
         finished = threading.Event()

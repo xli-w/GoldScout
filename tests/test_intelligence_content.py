@@ -117,7 +117,8 @@ class OfficialContentTests(unittest.TestCase):
         self.assertNotIn("Back to contents", doc.text)
         self.assertNotIn("Unselected", doc.text)
         self.assertNotIn("<", doc.text)
-        self.assertIsNone(doc.published_at)  # Date-only is not UTC midnight.
+        self.assertIsNone(doc.published_at)
+        self.assertEqual(doc.published_on.isoformat(), "2026-11-18")
         self.assertIsNone(doc.scheduled_at)
         self.assertEqual(doc.received_at, NOW)
 
@@ -129,6 +130,7 @@ class OfficialContentTests(unittest.TestCase):
         self.assertNotIn("Not selected", doc.text)
         self.assertNotIn("Next meeting", doc.text)
         self.assertIsNone(doc.published_at)
+        self.assertEqual(doc.published_on.isoformat(), "2026-11-05")
         self.assertIsNone(doc.scheduled_at)
 
     def test_fed_statement_not_rss_headline_or_implementation_note(self):
