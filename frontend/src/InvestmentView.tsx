@@ -167,8 +167,6 @@ function InvestmentNextSteps({ data }: { data: OpeningSnapshot }) {
     && !(hasDifferences && cashWarnings.includes(warning)));
   const needsAttention = !data.complete || hasDifferences ||
     correctionReplayWarnings.length > 0 || otherWarnings.length > 0;
-  const hasPerformanceLimit = data.recorded_corrections.length > 0 ||
-    data.baseline_as_of === null || data.twr_pct === null || data.max_drawdown_pct === null;
   const priceAction = (holding: OpeningSnapshot["holdings"][number]) => data.source_mode === "recorded"
     ? <NavLink aria-label={`Add a checked price for ${holding.name} in ${accountDisplay(data, holding.account_id)}`}
       to={`/investment/record?record=missing-price&account_id=${encodeURIComponent(holding.account_id)}&product_id=${encodeURIComponent(holding.product_id)}`}>
@@ -176,8 +174,8 @@ function InvestmentNextSteps({ data }: { data: OpeningSnapshot }) {
     </NavLink>
     : <NavLink to="/investment-guide#recording-prices">how to add a checked price</NavLink>;
   return <>
-  <section className="history-group investment-next-steps" aria-label="What needs attention">
-    <h2>What needs attention</h2>
+  <section className="history-group investment-next-steps" aria-label="Portfolio evidence to review">
+    <h2>Portfolio evidence to review</h2>
     {!needsAttention && <p>No missing total or recorded cash differences are flagged. This does not verify your accounts.</p>}
     {needsAttention && <ul>
       {!data.complete && <li>
@@ -211,7 +209,34 @@ function InvestmentNextSteps({ data }: { data: OpeningSnapshot }) {
       {otherWarnings.map(warning => <li key={warning}>{warning}</li>)}
     </ul>}
   </section>
-  {hasPerformanceLimit && <section className="history-group" aria-label="Historical performance limitations">
+  </>;
+}
+
+function PerformanceLimitations({ data, compact = false }: {
+  data: OpeningSnapshot; compact?: boolean;
+}) {
+  const limited = data.recorded_corrections.length > 0 ||
+    data.baseline_as_of === null || data.twr_pct === null || data.max_drawdown_pct === null;
+  if (!limited) return null;
+  if (compact) return <section className="history-group performance-limit-note"
+    aria-label="Historical performance note">
+    <p className="position-note">{data.recorded_corrections.length > 0
+      ? <>A correction made historical performance unavailable; no new starting point was created.
+        {" "}<NavLink to="/investment?view=history#investment-corrections">Review correction history</NavLink>.
+        {" "}<NavLink to="/investment?view=history#investment-performance">
+          Why performance history may be incomplete
+        </NavLink>.</>
+      : <>{data.baseline_as_of === null
+        ? "Performance needs a complete starting value. Later information cannot fill past gaps."
+        : "Some historical performance figures are unavailable."}
+        {" "}<NavLink to="/investment?view=history#investment-performance">
+          Why performance history may be incomplete
+        </NavLink>.</>}
+    </p>
+  </section>;
+  const correctionWarnings = data.warnings.filter(warning =>
+    warning.startsWith("Historical corrections preserve original evidence"));
+  return <section className="history-group" aria-label="Historical performance limitations">
     <h2>About past performance</h2>
     {data.recorded_corrections.length > 0
       ? <><p>A correction made past performance unavailable; no new starting point was created.
@@ -226,8 +251,7 @@ function InvestmentNextSteps({ data }: { data: OpeningSnapshot }) {
       : <p>Some performance figures are unavailable; complete totals do not restore past history.
         {" "}<NavLink to="/investment?view=history#investment-performance">View performance history</NavLink>.</p>}
     <p>You can continue to record and review your portfolio without those historical figures.</p>
-  </section>}
-  </>;
+  </section>;
 }
 
 function AccountAndHoldingsSummary({ data, now }: { data: OpeningSnapshot; now: number }) {
@@ -2211,8 +2235,11 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
   ] : [];
   return <article className="investment-view">
     <div className="record-toolbar">
-      {data?.source_mode === "recorded" && <NavLink className="record-action" to="/investment/record">Add a record</NavLink>}
-      <button className="icon-button refresh" aria-label="Refresh investment" disabled={query.isFetching} onClick={() => void query.refetch()}>
+      {data?.source_mode === "recorded" && <NavLink className="record-action secondary-record-action" to="/investment/record">Add a record</NavLink>}
+      <span className="refresh-note">Refresh reloads the selected portfolio snapshot; it does not fetch provider balances.</span>
+      <button className="icon-button refresh" aria-label="Refresh investment"
+        title="Reload the selected portfolio snapshot; no provider balances are fetched"
+        disabled={query.isFetching} onClick={() => void query.refetch()}>
         <RefreshCw size={19} className={query.isFetching ? "spin" : ""} />
       </button>
     </div>
@@ -2223,7 +2250,9 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
     </nav>
     {query.isPending ? <p role="status">Loading investment records</p>
       : !data ? <div className="error-state" role="alert"><ShieldAlert size={30} /><h2>Investment data unavailable</h2>
-        <p>{query.error instanceof Error ? query.error.message : "The investment source could not be reached."}</p></div>
+        <p>{query.error instanceof Error ? query.error.message : "The investment source could not be reached."}</p>
+        <button type="button" className="error-retry" disabled={query.isFetching}
+          onClick={() => void query.refetch()}>{query.isFetching ? "Retrying..." : "Retry loading records"}</button></div>
         : <>
           <div className="demo-band"><span>{data.source_mode === "demo" ? "SYNTHETIC DEMO" : "MANUAL RECORDS"}</span>
             <span>{data.source_mode === "demo"
@@ -2244,6 +2273,7 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
               <div><span>Portfolio value</span><strong className={metricValues[0].length <= 12 ? "metric-amount-nowrap" : undefined}>{metricValues[0]}</strong><small>GBP · recorded value</small></div>
             </section>
             <InvestmentNextSteps data={data} />
+            <PerformanceLimitations data={data} compact />
             {data.source_mode === "recorded" ? <AccountMaintenance data={data} now={now} mode="overview"
               defaults={reviewDefaults} defaultsStatus={reviewDefaultsStatus}
               onFinishReview={markReviewed}
@@ -2313,6 +2343,7 @@ export function InvestmentView({ now, valueChangeSelection, setValueChangeSelect
               <div><dt>Return since tracking began</dt><dd>{percent(data.twr_pct)}</dd></div>
               <div><dt>Largest recorded fall</dt><dd>{percent(data.max_drawdown_pct)}</dd></div>
             </dl>
+            <PerformanceLimitations data={data} />
             <details className="help-disclosure"><summary>About these figures</summary>
               <p>Returns adjust for recorded deposits and withdrawals and need complete values at key dates. Missing is not zero; later prices cannot fill past gaps.</p>
               <p>Past results do not predict future results.</p>

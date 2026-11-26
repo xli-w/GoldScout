@@ -34,6 +34,32 @@ test("current account differences take priority over review settings", async ({ 
   await expect(card).toContainText("a later match does not resolve them");
 });
 
+test("portfolio-wide missing prices do not label unrelated accounts as needing action", async ({ page }) => {
+  const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  report.source_mode = "recorded";
+  report.complete = false;
+  report.as_of = null;
+  report.equity_gbp = null;
+  const affectedHolding = report.holdings[0];
+  const unaffectedAccount = report.accounts.find(account =>
+    account.status === "active" && account.id !== affectedHolding.account_id);
+  expect(unaffectedAccount).toBeDefined();
+  affectedHolding.mark_at = null;
+  affectedHolding.mark_available_at = null;
+  affectedHolding.value_gbp = null;
+  await page.route("**/api/v1/settings", route => route.fulfill({
+    json: { mode: "recorded", workspace: "investment" },
+  }));
+  await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
+  await page.goto("/investment");
+
+  await expect(page.getByRole("region", { name: "Portfolio evidence to review" }))
+    .toContainText("no recorded price");
+  const card = page.locator(".account-overview-row").filter({ hasText: unaffectedAccount.name }).first();
+  await expect(card).not.toContainText("Action needed");
+  await expect(card).not.toContainText("Review the portfolio evidence; the full portfolio value is unavailable");
+});
+
 test("workspace review defaults are explicit and unavailable defaults fail closed", async ({ page }) => {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
   report.source_mode = "recorded";
@@ -212,7 +238,7 @@ test("duplicate account names include their journal IDs in review cards", async 
     await expect(page.getByRole("heading", { name: `${account.name} (${account.id})` })).toBeVisible();
 });
 
-test("historical performance limitations remain distinct from current actions", async ({ page }) => {
+test("historical performance detail stays in History, separate from current actions", async ({ page }) => {
   const report = await (await page.request.get("/api/investment/v1/snapshot")).json();
   report.source_mode = "recorded";
   report.twr_pct = null;
@@ -227,8 +253,11 @@ test("historical performance limitations remain distinct from current actions", 
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
 
-  const actions = page.getByRole("region", { name: "What needs attention" });
+  const actions = page.getByRole("region", { name: "Portfolio evidence to review" });
   await expect(actions).not.toContainText("Some performance figures are unavailable");
+  const overviewNote = page.getByRole("region", { name: "Historical performance note" });
+  await expect(overviewNote).toContainText("Some historical performance figures are unavailable");
+  await overviewNote.getByRole("link", { name: "Why performance history may be incomplete" }).click();
   const history = page.getByRole("region", { name: "Historical performance limitations" });
   await expect(history).toContainText("Some performance figures are unavailable");
   await expect(history).toContainText("You can continue to record and review your portfolio");

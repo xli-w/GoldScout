@@ -116,8 +116,8 @@ function unresolvedReviewItems(data: InvestmentSnapshot, activeIds: string[],
     const marks = data.holdings.filter(item => item.account_id === accountId);
     const markAges = marks.map(item => item.mark_at === null ? null : now - Date.parse(item.mark_at));
     const stale = preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
-      (asOfAge === null || asOfAge < 0 ||
-        asOfAge > preference.intervalDays * 86400000 ||
+      ((data.complete && (asOfAge === null || asOfAge < 0 ||
+        asOfAge > preference.intervalDays * 86400000)) ||
         markAges.some(age => age === null || age < 0 ||
           age > preference.intervalDays! * 86400000));
     const cashObservation = account.cash_observation;
@@ -403,7 +403,8 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
             {unresolved.length > 0 && <ul aria-label="Unresolved review items">
               {unresolved.map(item => <li key={item}>{item}</li>)}
             </ul>}
-            {!cycle.finishedAt ? <button type="button" disabled={preferencesUnavailable} onClick={() => void finishReview()}>
+            {!cycle.finishedAt ? <button type="button" className="review-primary-action"
+              disabled={preferencesUnavailable} onClick={() => void finishReview()}>
               {data.complete && data.as_of ? "Finish review and save this value for next time" : "Finish review"}</button>
               : <p role="status">Review complete. Finished {timestamp(cycle.finishedAt)}. A comparison value is saved separately when available.
                 {" "}Outstanding items remain visible below. This does not verify your accounts.</p>}
@@ -412,11 +413,12 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
           : <p>Review each active account in turn. Progress is saved in this browser and is not an accounting record.</p>}
         {currentCycle && nextAccount
           ? <div className="recording-actions">
-            <NavLink className="record-action"
+            <NavLink className="record-action review-primary-action"
               to={`/investment/update?account_id=${encodeURIComponent(nextAccount)}`}>Continue review</NavLink>
             <button type="button" disabled={preferencesUnavailable} onClick={() => void startReview()}>Restart review</button>
           </div>
-          : <button type="button" disabled={preferencesUnavailable} onClick={() => void startReview()}>
+          : <button type="button" className={cycle ? undefined : "review-primary-action"}
+            disabled={preferencesUnavailable} onClick={() => void startReview()}>
             {cycle ? "Start a new review" : "Start account review"}
           </button>}
       </>}
@@ -453,10 +455,10 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
       const oldestMarkAge = markAge.length === 0 || markAge.some(age => age === null)
         ? null : Math.max(...markAge.map(age => age ?? 0));
       const stale = preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
-        (asOfAge === null ||
-        asOfAge < 0 || asOfAge > preference.intervalDays * 86400000 ||
-        oldestMarkAge !== null && (oldestMarkAge < 0 ||
-          oldestMarkAge > preference.intervalDays * 86400000));
+        (((data.complete || mode === "account") && (asOfAge === null ||
+          asOfAge < 0 || asOfAge > preference.intervalDays * 86400000)) ||
+          (oldestMarkAge !== null && (oldestMarkAge < 0 ||
+            oldestMarkAge > preference.intervalDays * 86400000)));
       const cashCheckStale = preference?.intervalDays !== null && preference?.intervalDays !== undefined &&
         (cashCheckAge === null ||
         cashCheckAge < 0 || cashCheckAge > preference.intervalDays * 86400000);
@@ -465,8 +467,8 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
       const maturityNeedsCheck = account.kind === "deposit" &&
         maturityDays !== null && maturityDays <= 90;
       const reviewDue = isReviewDue(preference, reviewNow);
-      const needsAction = !data.complete || missingPrice || cashDifference || earlierCashDifference ||
-        correctionCouldChangeChecks;
+      const needsAction = (mode === "account" && !data.complete) || missingPrice ||
+        cashDifference || earlierCashDifference || correctionCouldChangeChecks;
       const reviewNeeded = stale || savingsTermsStale || maturityNeedsCheck || cashCheckStale || reviewDue;
       let action: string;
       if (cashDifference) action = "Review the recorded cash difference.";
@@ -474,7 +476,8 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
       else if (correctionCouldChangeChecks)
         action = "Compare prior reports with the original cash checks and correction evidence; replay may have changed past differences.";
       else if (missingPrice) action = "Update the missing investment price; the full portfolio value is unavailable.";
-      else if (!data.complete) action = "Review the portfolio evidence; the full portfolio value is unavailable.";
+      else if (mode === "account" && !data.complete)
+        action = "Review the portfolio evidence; the full portfolio value is unavailable.";
       else if (preferencesUnavailable) action = "Saved review settings could not be read; resolve the error before relying on reminders.";
       else if (preference?.intervalDays == null && maturityNeedsCheck)
         action = "Confirm the recorded maturity date and access or notice options using current provider information.";
@@ -495,7 +498,8 @@ function AccountMaintenance({ data, now, mode, accountId, onFinishReview, refres
       else action = "No review is due under your chosen interval.";
 
       const status = needsAction ? "Action needed" : preferencesUnavailable ? "Review settings unavailable"
-        : reviewNeeded ? "Check due" : preference?.intervalDays == null ? "Freshness unknown"
+        : preference?.intervalDays == null ? "Freshness unknown"
+          : reviewNeeded ? "Check due" : mode === "overview" && !data.complete ? "Portfolio total incomplete"
           : hasAccountReviewInterval ? "Within account interval" : "Within workspace default";
       if (mode === "overview") return <article className="account-maintenance-card account-overview-row" key={account.id}>
         <div className="account-maintenance-heading">

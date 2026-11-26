@@ -1371,13 +1371,23 @@ test("the overview separates account review, history and optional tools", async 
   await expect(page.locator(".record-toolbar").getByRole("link", { name: "Help" })).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "Settings and help navigation" })
     .getByRole("link", { name: "Help" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "What needs attention" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Portfolio evidence to review" })).toBeVisible();
   const views = page.getByRole("navigation", { name: "Portfolio views" });
   await expect(views.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("region", { name: "Account freshness and next actions" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Changes between recorded values" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "eToro portfolio" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Add a record", exact: true })).toBeVisible();
+  await expect(page.locator(".refresh-note")).toContainText("does not fetch provider balances");
+  await expect(page.getByRole("button", { name: "Refresh investment" }))
+    .toHaveAttribute("title", /selected portfolio snapshot; no provider balances are fetched/);
+  await expect(page.getByRole("link", { name: "Add a record", exact: true }))
+    .toHaveClass(/secondary-record-action/);
+  const review = page.getByRole("region", { name: "Guided portfolio review" });
+  await expect(review.getByRole("button", { name: "Start account review" }))
+    .toHaveClass(/review-primary-action/);
+  await expect(review.getByRole("button", { name: "Start account review" }))
+    .toHaveCSS("background-color", "rgb(76, 219, 155)");
   expect(recoverySessionRequests).toBe(0);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
@@ -1422,6 +1432,21 @@ test("the overview separates account review, history and optional tools", async 
       range.selectNodeContents(element);
       return range.getClientRects().length === 1;
     }))).toBe(true);
+});
+
+test("unavailable portfolio data offers an explicit retry", async ({ page }) => {
+  const snapshot = await (await page.request.get("/api/investment/v1/snapshot")).json();
+  let available = false;
+  await page.route("**/api/investment/v1/snapshot", route => available
+    ? route.fulfill({ json: snapshot })
+    : route.fulfill({ status: 503, json: { error: "unavailable" } }));
+  await page.goto("/investment");
+  await expect(page.getByRole("heading", { name: "Investment data unavailable" })).toBeVisible();
+  const retry = page.getByRole("button", { name: "Retry loading records" });
+  await expect(retry).toBeVisible();
+  available = true;
+  await retry.click();
+  await expect(page.getByRole("region", { name: "Investment totals" })).toBeVisible();
 });
 
 test("mobile navigation keeps every destination visible without sideways scrolling", async ({ page }) => {
@@ -1657,7 +1682,7 @@ test("next steps reflect incomplete evidence and historical differences without 
   await page.route("**/api/investment/v1/recording/session", route =>
     route.fulfill({ json: recordingSession }));
   await page.goto("/investment");
-  const steps = page.getByRole("region", { name: "What needs attention" });
+  const steps = page.getByRole("region", { name: "Portfolio evidence to review" });
   await expect(steps).toContainText("holdings have no recorded price");
   await expect(steps).toContainText(originalHolding.name);
   await expect(steps.getByRole("link", { name: "Review holdings" }))
@@ -1667,8 +1692,8 @@ test("next steps reflect incomplete evidence and historical differences without 
     `record=missing-price.*account_id=${encodeURIComponent(originalHolding.account_id)}.*product_id=${encodeURIComponent(originalHolding.product_id)}`,
   ));
   await expect(steps).toContainText("Later information cannot fill an earlier valuation.");
-  await expect(page.getByRole("region", { name: "Historical performance limitations" }))
-    .toContainText("Performance has no complete starting value.");
+  const performanceNote = page.getByRole("region", { name: "Historical performance note" });
+  await expect(performanceNote).toContainText("Performance needs a complete starting value.");
   const moreMissingPrices = steps.locator("details");
   await expect(moreMissingPrices.locator("summary")).toHaveText("Show 4 more missing prices");
   await moreMissingPrices.locator("summary").click();
@@ -1728,11 +1753,12 @@ test("next steps reflect incomplete evidence and historical differences without 
   await page.getByRole("link", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Refresh investment" }).click();
   await expect(steps).not.toContainText("A complete total is unavailable");
-  const performanceLimits = page.getByRole("region", { name: "Historical performance limitations" });
-  await expect(performanceLimits).toContainText("Some performance figures are unavailable");
-  await expect(performanceLimits).not.toContainText("Performance has no complete starting value.");
+  const performanceNote = page.getByRole("region", { name: "Historical performance note" });
+  await expect(performanceNote).toContainText("Some historical performance figures are unavailable");
+  await expect(page.getByRole("region", { name: "Historical performance limitations" }))
+    .toHaveCount(0);
   await expect(steps).not.toContainText("Backup verified");
-  await performanceLimits.getByRole("link", { name: "View performance history", exact: true }).click();
+  await performanceNote.getByRole("link", { name: "Why performance history may be incomplete" }).click();
   await expect(page.locator("#investment-performance")).toHaveAttribute("open", "");
   expect(mutations).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
@@ -1768,7 +1794,7 @@ test("cash evidence overview labels replay history and surfaces correction limit
   }
   await page.route("**/api/investment/v1/snapshot", route => route.fulfill({ json: report }));
   await page.goto("/investment");
-  await expect(page.getByRole("region", { name: "What needs attention" }))
+  await expect(page.getByRole("region", { name: "Portfolio evidence to review" }))
     .toContainText("A correction may have changed earlier reported cash differences");
   await page.getByRole("link", { name: "Review correction history" }).click();
   await expect(page.locator("#investment-records")).toHaveAttribute("open", "");
@@ -1781,7 +1807,7 @@ test("cash evidence overview labels replay history and surfaces correction limit
 
 test("demo attention panel stays focused while optional details remain accessible", async ({ page }) => {
   await page.goto("/investment");
-  const steps = page.getByRole("region", { name: "What needs attention" });
+  const steps = page.getByRole("region", { name: "Portfolio evidence to review" });
   await expect(page.locator(".demo-band")).toContainText("SYNTHETIC DEMO");
   await expect(steps).toBeVisible();
   await expect(steps).not.toContainText("Backup status is unknown");

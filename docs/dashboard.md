@@ -104,18 +104,22 @@ unvalidated external compatibility remain explicit in the
 [intelligence guide](intelligence.md); this is a partial foundation, not complete
 live coverage.
 
-The portfolio **Overview** shows the recorded value and its date, current
-attention, compact account actions and up to three recent activity entries.
-Saved goals appear only when configured. **History and insights** contains the
-value comparison, money-added and gain figures, holdings, performance, cash
-evidence and journal records. **Tools** contains optional checks, public
-context, backup and the separate eToro view. Existing portfolio section bookmarks
-open their corresponding view. Opening Tools does not collect provider data or
-start a backup. Backup controls load only when opened; closing them or switching
-between these portfolio views retains their selected file and result. A failed
-snapshot refresh hides the controls until the same recorded portfolio is
-available again; leaving or reloading the page, or changing portfolio, clears
-them. Recording previews show a human-readable summary with
+The portfolio **Overview** shows the recorded value and its date, portfolio-wide
+evidence needing review, prominent guided account review, account-specific next
+actions and up to three recent activity entries. Missing portfolio valuation is
+kept separate from an account's own action. Refresh reloads the locally recorded
+portfolio and does not fetch provider balances; if the snapshot is unavailable,
+the page offers a retry. Historical performance limitations are summarized
+with their details in **History and insights**, alongside the value comparison,
+money-added and gain figures, holdings, performance, cash evidence and journal
+records. Saved goals appear only when configured. **Tools** contains optional
+checks, public context, backup and the separate eToro view. Existing portfolio
+section bookmarks open their corresponding view. Opening Tools does not collect
+provider data or start a backup. Backup controls load only when opened; closing
+them or switching between these portfolio views retains their selected file and
+result. A failed snapshot refresh hides the controls until the same recorded
+portfolio is available again; leaving or reloading the page, or changing
+portfolio, clears them. Recording previews show a human-readable summary with
 the exact event retained in expandable details. Monitoring observation entry
 uses separate holding and explicit mapping fields; comparison results are
 displayed separately from append-only review-inbox actions. Neither workflow
